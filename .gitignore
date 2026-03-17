@@ -6,3 +6,13 @@
 *.a
 *.so
 *.dylib
+*.pbm
+
+# Build outputs
+/spinel
+/mandelbrot
+/mandelbrot_aot.c
+/mandelbrot_dbg
+
+# Dependencies (fetched by `make deps`)
+/lib/prism/
