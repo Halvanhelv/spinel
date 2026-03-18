@@ -288,29 +288,206 @@ spinel/
 | 6 | **LumiTraceプロファイル統合** | **保留** — 静的型推論が23例で十分機能。動的プロファイルは型が静的に決定できないプログラムで有用。 |
 | 7 | **複数ファイルコンパイル** | **保留** — require/loadのファイル解決、定義のマージが必要な大規模変更。単一ファイルで全例に対応。 |
 
-## 今後の方向性
+## 「全Rubyプログラムのコンパイル」に向けて
 
-### 短期 (現実装の改善)
-- 多値Hash (String→any) — タグ付きユニオンvalue
-- `Array#sort_by { |x| expr }` — カスタムソート
-- `Proc.new` / `proc {}` — lambda以外のProc
-- 多段継承チェーンのテスト
-- `freeze` / `frozen?`
+### 現状の限界
 
-### 中期 (新機能)
-- `extend` — クラスレベルmixin
-- `Comparable` / `Enumerable` モジュール
-- `String#[]` / `String#[]=` — 文字列インデックス
-- Exception クラス定義
-- `require` — ファイル間コンパイル
+現在のSpinelは**静的単相型**(各変数に1つの型)を前提とする。実際のRubyは動的型で、
+任意の変数が任意の型の値を持てる。この差が「コンパイルできないプログラム」の主因。
 
-### 長期 (研究的)
-- LumiTrace統合 — 動的型プロファイル
-- Prism型注釈 (RBS/Steep連携)
-- JIT的最適化 (型ガード付きspeculative codegen)
-- WebAssembly出力
+```ruby
+# 現在コンパイルできないパターン:
+x = 1; x = "hello"            # 変数の型が変わる
+arr = [1, "two", 3.0]         # 異種配列
+def parse(s)                   # 戻り値の型が条件で変わる
+  s =~ /^\d+$/ ? s.to_i : s
+end
+def make_noise(obj)            # ダックタイピング
+  obj.speak                    # objの型が不定
+end
+```
+
+### 未対応機能の分類
+
+| レイヤー | 未対応項目 | ポリモーフィズムとの関連 |
+|---------|-----------|---------------------|
+| **型システム** | 多相変数、異種配列/Hash、Union型 | **核心問題** |
+| **ディスパッチ** | ダックタイピング、send、method_missing | 型に依存 |
+| **Proc/Block** | Proc.new、&block、block_given? | 部分的に型問題 |
+| **組込クラス** | IO, File, Time, Encoding, Range-as-object | 型とは独立 |
+| **メタ** | eval, define_method, open class | 静的解析の限界 |
+| **構成** | require/load, gem | アーキテクチャ問題 |
+
+---
+
+## ポリモーフィズム設計
+
+### 方針: ハイブリッド型システム (Crystal方式)
+
+現在の**単相最適化を維持**しつつ、必要な箇所にのみ**ボックス化**を導入する。
+
+```
+型推論の結果:
+  変数が常に1つの型 → 現在通り: mrb_int, mrb_float, sp_Vec, etc. (アンボックス)
+  変数が複数の型    → sp_RbValue (ボックス化タグ付きユニオン)
+```
+
+### sp_RbValue: 汎用ボックス型
+
+```c
+// Phase 1: 16バイトタグ付きユニオン (シンプル、デバッグ容易)
+enum sp_tag {
+    SP_T_INT, SP_T_FLOAT, SP_T_BOOL, SP_T_NIL,
+    SP_T_STRING, SP_T_SYMBOL, SP_T_ARRAY, SP_T_HASH,
+    SP_T_OBJECT, SP_T_PROC, SP_T_REGEXP
+};
+
+typedef struct {
+    enum sp_tag tag;
+    union {
+        int64_t i;       // SP_T_INT
+        double f;        // SP_T_FLOAT
+        const char *s;   // SP_T_STRING, SP_T_SYMBOL
+        void *p;         // SP_T_OBJECT, SP_T_ARRAY, SP_T_HASH, SP_T_PROC
+    };
+} sp_RbValue;  // 16 bytes
+
+// Phase 2 (将来): NaN-boxing (8バイト、高速)
+// IEEE 754 NaN空間にInteger/ポインタをエンコード
+```
+
+### 型推論の拡張: Union型
+
+```
+現在: x: Integer | x: Float | x: VALUE (フォールバック)
+拡張: x: Integer | Float   → sp_RbValue (Union型)
+      x: Duck | Person     → sp_RbValue (ダックタイピング)
+      x: Integer            → mrb_int (アンボックス維持)
+```
+
+型推論で変数に**複数の型が代入される**ことを検出したら、`SPINEL_TYPE_POLY`に昇格:
+```c
+// var_declare()でのwidening:
+// 現在: Integer + Float → Float (暗黙変換)
+// 拡張: Integer + String → POLY (ボックス化が必要)
+```
+
+### メソッドディスパッチ
+
+**単相 (現在通り)**: 型が確定 → 直接C関数呼び出し
+```c
+sp_Duck_speak(lv_obj);  // objがDuckと確定
+```
+
+**多相 (新規)**: Union型 → コンパイル時に既知の型リストでswitch
+```c
+// objがDuck | Personの場合 (Crystal方式のinline dispatch)
+switch (lv_obj.tag) {
+    case SP_T_DUCK:   sp_Duck_speak((sp_Duck *)lv_obj.p); break;
+    case SP_T_PERSON: sp_Person_speak((sp_Person *)lv_obj.p); break;
+    default:          sp_raise("NoMethodError: speak"); break;
+}
+```
+
+**メガモーフィック** (3型以上 or 型不定): vtable dispatch
+```c
+// objの型がコンパイル時に確定できない場合
+sp_vtable_call(lv_obj, "speak", 0);  // ハッシュテーブルベース
+```
+
+### ボックス化/アンボックス化の境界
+
+```ruby
+def add(a, b)   # a: Integer (確定), b: Integer (確定)
+  a + b         # → アンボックス: lv_a + lv_b
+end
+
+def show(x)     # x: Integer | String (多相)
+  puts x        # → sp_RbValue_puts(lv_x)
+end
+
+n = add(1, 2)   # n: Integer → アンボックス
+show(n)          # Integer → sp_RbValue への boxing が発生
+show("hello")   # String → sp_RbValue への boxing
+```
+
+Boxing/Unboxingコード生成:
+```c
+// Boxing: mrb_int → sp_RbValue
+sp_RbValue sp_box_int(mrb_int n) { return (sp_RbValue){SP_T_INT, .i = n}; }
+
+// Unboxing: sp_RbValue → mrb_int (型チェック付き)
+mrb_int sp_unbox_int(sp_RbValue v) {
+    if (v.tag != SP_T_INT) sp_raise("TypeError");
+    return v.i;
+}
+```
+
+### 実装ロードマップ
+
+#### Phase 1: sp_RbValue基盤 + 基本操作
+- `sp_RbValue` 16バイトタグ付きユニオンの定義
+- Boxing/Unboxing関数群
+- sp_RbValue上の基本演算 (+, -, *, /, ==, <, puts等)
+- `SPINEL_TYPE_POLY` の追加
+- 型推論のwidening: Integer + String → POLY
+
+#### Phase 2: 多相メソッドディスパッチ
+- Union型の追跡 (変数が持ちうる型の集合)
+- 2-3型のUnion → switch-based inline dispatch
+- 多相メソッドのコード生成
+
+#### Phase 3: 異種コレクション
+- `Array<sp_RbValue>` — 任意型の要素を持つ配列
+- `Hash<sp_RbValue, sp_RbValue>` — 任意型のキー/値
+
+#### Phase 4: ダックタイピング
+- メソッド名ベースのディスパッチ (vtable or hash)
+- `respond_to?` の動的版
+- `send` / `public_send`
+
+#### Phase 5: 最適化
+- NaN-boxing (8バイト化)
+- Escape analysis (ボックス化の回避)
+- Inline cache (ディスパッチの高速化)
+- LumiTraceプロファイル統合 (speculative optimization)
+
+### 設計原則
+
+1. **段階的導入**: 既存の単相コンパイルを壊さない。POLYは必要な変数にのみ適用。
+2. **性能優先**: 単相パスは現在の速度を維持。多相はCrystal程度の速度を目標。
+3. **互換性**: 最終的に全てのvalid Rubyプログラムをコンパイル可能に。
+4. **NaN-boxing準備**: Phase 1のsp_RbValueをPhase 5でNaN-boxingに置き換え可能な設計。
+
+---
+
+## その他の未対応機能
+
+### 組込クラス (ポリモーフィズムとは独立)
+- IO, File, Dir — ファイルI/O (Cの stdio/fopen でラップ可能)
+- Time, Date — 時刻 (time.h)
+- Encoding — 文字列エンコーディング
+- Range as object — Rangeインスタンス (for..in以外の使用)
+- Thread, Fiber — 並行性
+
+### メタプログラミング (静的解析の限界)
+- `eval`, `instance_eval`, `class_eval`
+- `define_method`
+- `method_missing`, `const_missing`
+- open class / monkey patching
+→ これらは**インタプリタフォールバック**で対応する方針。
+  静的に解析可能な部分はAOT、不可能な部分はmrubyにフォールバック。
+
+### 構成管理
+- `require` / `load` — Phase 2以降でファイル間コンパイルをサポート
+- gem — bundlerとの統合は長期課題
 
 ## 参考情報
 
 - 詳細設計: `ruby_aot_compiler_design.md`
 - プロトタイプツール: `prototype/`
+- 参考実装:
+  - **Crystal**: Union型 + コンパイル時switch dispatch
+  - **TruffleRuby**: Speculative optimization + deoptimization
+  - **Sorbet**: 漸進的型付け (T.untyped fallback)
+  - **mruby**: NaN-boxing mrb_value + vtable dispatch
