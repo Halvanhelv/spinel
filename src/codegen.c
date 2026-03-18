@@ -767,6 +767,20 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                 if (strcmp(method, "include?") == 0) { free(method); return vt_prim(SPINEL_TYPE_BOOLEAN); }
                 if (strcmp(method, "+") == 0) { free(method); return vt_prim(SPINEL_TYPE_STRING); }
             }
+            /* Numeric methods */
+            if (recv_t.kind == SPINEL_TYPE_INTEGER) {
+                if (strcmp(method, "abs") == 0) { free(method); return vt_prim(SPINEL_TYPE_INTEGER); }
+                if (strcmp(method, "even?") == 0 || strcmp(method, "odd?") == 0 ||
+                    strcmp(method, "zero?") == 0) { free(method); return vt_prim(SPINEL_TYPE_BOOLEAN); }
+                if (strcmp(method, "**") == 0) { free(method); return vt_prim(SPINEL_TYPE_INTEGER); }
+            }
+            if (recv_t.kind == SPINEL_TYPE_FLOAT) {
+                if (strcmp(method, "abs") == 0) { free(method); return vt_prim(SPINEL_TYPE_FLOAT); }
+                if (strcmp(method, "ceil") == 0 || strcmp(method, "floor") == 0 ||
+                    strcmp(method, "round") == 0 || strcmp(method, "to_i") == 0) {
+                    free(method); return vt_prim(SPINEL_TYPE_INTEGER);
+                }
+            }
         }
 
         /* Range#to_a → ARRAY */
@@ -2579,6 +2593,42 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(recv);
             }
 
+            /* Numeric method calls */
+            if (recv_t.kind == SPINEL_TYPE_INTEGER) {
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *r = NULL;
+                if (strcmp(method, "abs") == 0)
+                    r = sfmt("((%s) < 0 ? -(%s) : (%s))", recv, recv, recv);
+                else if (strcmp(method, "even?") == 0)
+                    r = sfmt("((%s) %% 2 == 0)", recv);
+                else if (strcmp(method, "odd?") == 0)
+                    r = sfmt("((%s) %% 2 != 0)", recv);
+                else if (strcmp(method, "zero?") == 0)
+                    r = sfmt("((%s) == 0)", recv);
+                else if (strcmp(method, "**") == 0 && call->arguments &&
+                         call->arguments->arguments.size == 1) {
+                    char *exp = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    r = sfmt("((mrb_int)pow((double)%s, (double)%s))", recv, exp);
+                    free(exp);
+                }
+                if (r) { free(recv); free(method); return r; }
+                free(recv);
+            }
+            if (recv_t.kind == SPINEL_TYPE_FLOAT) {
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *r = NULL;
+                if (strcmp(method, "abs") == 0)
+                    r = sfmt("fabs(%s)", recv);
+                else if (strcmp(method, "ceil") == 0)
+                    r = sfmt("((mrb_int)ceil(%s))", recv);
+                else if (strcmp(method, "floor") == 0)
+                    r = sfmt("((mrb_int)floor(%s))", recv);
+                else if (strcmp(method, "round") == 0)
+                    r = sfmt("((mrb_int)round(%s))", recv);
+                if (r) { free(recv); free(method); return r; }
+                free(recv);
+            }
+
             if (recv_t.kind == SPINEL_TYPE_OBJECT) {
                 class_info_t *cls = find_class(ctx, recv_t.klass);
                 if (cls) {
@@ -3432,6 +3482,10 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
                 } else if (at.kind == SPINEL_TYPE_BOOLEAN) {
                     char *ae = codegen_expr(ctx, arg);
                     emit(ctx, "puts(%s ? \"true\" : \"false\");\n", ae);
+                    free(ae);
+                } else if (at.kind == SPINEL_TYPE_FLOAT) {
+                    char *ae = codegen_expr(ctx, arg);
+                    emit(ctx, "printf(\"%%g\\n\", (double)%s);\n", ae);
                     free(ae);
                 } else {
                     char *ae = codegen_expr(ctx, arg);
