@@ -18,7 +18,12 @@ make
 # 3. Compile a Ruby program to C, then to a native binary
 ./spinel --source=app.rb --output=app.c
 cc -O2 app.c -lm -o app
+
+# For programs using Regexp, link with oniguruma:
+cc -O2 app.c -lonig -lm -o app
 ```
+
+The generated C file includes a comment with the exact compile command needed.
 
 ## Benchmarks
 
@@ -181,7 +186,8 @@ spinel/
 ## Dependencies
 
 - **Build time**: [Prism](https://github.com/ruby/prism) (fetched automatically by `make deps`)
-- **Run time**: None. Generated binaries are standalone (libc + libm only).
+- **Run time**: None for most programs. Generated binaries are standalone (libc + libm only).
+- **Regexp**: Programs using regular expressions require [oniguruma](https://github.com/kkos/oniguruma) (`-lonig`). Install: `apt install libonig-dev` or equivalent.
 
 ## License
 
