@@ -10,7 +10,7 @@ Regexp対応プログラムのみ libonig をリンク。
 
 ## 現状 (Status)
 
-### コンパイラアーキテクチャ (~7700行のC)
+### コンパイラアーキテクチャ (~9400行のC)
 
 - Prism (libprism) によるRubyパース
 - 多パスコード生成:
@@ -94,7 +94,7 @@ Regexp対応プログラムのみ libonig をリンク。
 | | シャドウスタックルート管理, ファイナライザ |
 | | GC不要なプログラムではGCコード省略 |
 
-### テストプログラム (30例)
+### テストプログラム (39例)
 
 | プログラム | テスト対象 |
 |-----------|-----------|
@@ -127,7 +127,16 @@ Regexp対応プログラムのみ libonig をリンク。
 | bm_fileio | File.read/write/exist?/delete |
 | bm_catch | catch/throw (タグ付き非局所脱出) |
 | bm_features | __method__, freeze/frozen? |
-| bm_comparable | alias メソッド別名 |
+| bm_comparable | Comparable演算子メソッド、alias |
+| bm_range | Range as object (first, last, each, include?, to_a) |
+| bm_time | Time.now, Time.at, to_i, 差分 |
+| bm_enumerable | Enumerable, yield付きeachメソッド |
+| bm_method | method(:name) → sp_Proc |
+| bm_strindex | String#[] (文字インデックス) |
+| bm_stdlib | ARGV, $stderr, srand/rand, exit |
+| bm_proc | &block, proc {}, Proc.new, Proc#call |
+| bm_poly | 多相変数 (sp_RbValue Phase 1) |
+| bm_poly2 | 異種配列, bimorphicダックタイピング (Phase 2) |
 
 ### ベンチマーク結果
 
@@ -149,27 +158,29 @@ Regexp使用時のみ libonig をリンク。
 
 | # | カテゴリ | 状態 | 次のアクション |
 |---|---------|------|-------------|
-| 1 | **動的型付け / ポリモーフィズム** | 設計完了 | sp_RbValue Phase 1 実装 |
+| 1 | **動的型付け / ポリモーフィズム** | **Phase 2完了** ✅ | Phase 3: パターンマッチ |
 | 2 | **require / load / gem** | 未着手 | ファイル解決 + AST統合 |
-| 3 | **Block/Proc完全性** | 一部完了 | `&block`, `Proc.new`, proc vs lambda意味論 |
-| 4 | **組込クラス** | 一部完了 | Time, Range-as-object, Enumerator |
+| 3 | **Block/Proc完全性** | **完了** ✅ | yield, &block, Proc.new, proc {}, method(:name) |
+| 4 | **組込クラス** | **ほぼ完了** ✅ | File, Time, Range, Enumerable 対応済み |
 | 5 | **完全なString** | 未着手 | sp_String構造体 (ミュータブル + encoding) |
-| 6 | **オブジェクトシステム完全性** | 未着手 | method_missing等はインタプリタフォールバック |
-| 7 | **制御フロー完全性** | ほぼ完了 ✅ | 残: BEGIN/END のみ |
-| 8 | **パターンマッチ** | 未着手 | sp_RbValue (ポリモーフィズム) が前提 |
-| 9 | **例外階層** | 完了 ✅ | raise ClassName, rescue ClassName, 継承チェック |
+| 6 | **オブジェクトシステム完全性** | 一部完了 | Comparable完了。method_missing等はフォールバック |
+| 7 | **制御フロー完全性** | **完了** ✅ | catch/throw含む全制御フロー |
+| 8 | **パターンマッチ** | **着手可能** | sp_RbValue完了、case/in実装可 |
+| 9 | **例外階層** | **完了** ✅ | raise ClassName, rescue ClassName, 継承チェック |
 | 10 | **GC完全性** | 一部完了 | 文字列GC (sp_String), 世代別GC |
 
 ### 完了した項目
-- ✅ `__LINE__`, `__FILE__`, `defined?`, `__method__`
-- ✅ `catch`/`throw` (タグ付き非局所脱出、ネスト対応)
-- ✅ `freeze`/`frozen?` (AOTではno-op / 常にTRUE)
-- ✅ `alias` (メソッド別名)
-- ✅ `block_given?`, ブロック変数のwrite-capture修正
-- ✅ `raise ClassName, "msg"`, `rescue ClassName => e`, 例外クラス継承チェック
+- ✅ **sp_RbValue Phase 1**: 多相変数、boxing/unboxing、sp_poly_puts、nil?
+- ✅ **sp_RbValue Phase 2**: 異種配列(sp_RbArray)、bimorphicダックタイピング、クラスタグ
+- ✅ **Block/Proc**: yield, block_given?, &block, proc {}, Proc.new, Proc#call, method(:name)
+- ✅ **Comparable**: 演算子メソッドC名サニタイズ (<=> → _cmp等)、self参照
+- ✅ **Range as object**: first, last, each, include?, to_a, sum
+- ✅ **Time**: Time.now, Time.at, to_i, 差分
+- ✅ **Enumerable**: yield付きeachメソッドのブロック対応
+- ✅ `catch`/`throw`, `alias`, `freeze`/`frozen?`, `__method__`, `sleep`
+- ✅ `ARGV`, `$stderr.puts`, `exit`, `srand`/`rand`, `String#[]`
 - ✅ `File.read/write/exist?/delete`
-- ✅ `Array#sort/sort!/min/max/sum/reduce/inject`
-- ✅ `puts` の末尾改行Ruby互換
+- ✅ `Array#sort/sort!/min/max/sum/reduce/inject/join/uniq`
 
 ---
 
@@ -338,18 +349,19 @@ sp_RbValue sp_dispatch_puts(sp_RbValue v) {
 
 ### 実装ロードマップ
 
-| Phase | 内容 | 前提 |
+| Phase | 内容 | 状態 |
 |-------|------|------|
-| **1a** | sp_RbValue型定義 + boxing/unboxing関数 | — |
-| **1b** | sp_RbValue上の基本演算 (+, puts等) | 1a |
-| **1c** | SPINEL_TYPE_POLY + Union型追跡 | 1a |
-| **1d** | bimorphic call-site switch生成 | 1a, 1c |
-| **2a** | megamorphic dispatch関数生成 | 1a, 1c |
-| **2b** | 異種配列 `[1, "two", 3.0]` → Array<sp_RbValue> | 1a |
-| **2c** | 異種Hash `{a: 1, b: "str"}` → Hash<sp_RbValue> | 1a |
-| **3** | パターンマッチ `case/in` (型チェック分岐) | 1a, 1c |
-| **4** | sp_String (ミュータブル文字列 + GC) | 1a |
-| **5** | NaN-boxing (8バイト化) | 1a-2a |
+| **1a** | sp_RbValue型定義 + boxing/unboxing関数 | ✅ 完了 |
+| **1b** | sp_RbValue上の基本演算 (puts, nil?等) | ✅ 完了 |
+| **1c** | SPINEL_TYPE_POLY + Union型追跡 | ✅ 完了 |
+| **1d** | bimorphic call-site switch生成 | ✅ 完了 |
+| **2a** | 異種配列 `[1, "two", 3.0]` → sp_RbArray | ✅ 完了 |
+| **2b** | bimorphicダックタイピング (クラスタグ) | ✅ 完了 |
+| **2c** | 異種Hash `{a: 1, b: "str"}` | 未着手 |
+| **3** | パターンマッチ `case/in` (型チェック分岐) | **次** |
+| **4** | megamorphic dispatch関数生成 (3型以上) | 未着手 |
+| **5** | sp_String (ミュータブル文字列 + GC) | 未着手 |
+| **6** | NaN-boxing (8バイト化) | 未着手 |
 
 ### 設計原則
 
@@ -359,11 +371,17 @@ sp_RbValue sp_dispatch_puts(sp_RbValue v) {
 4. **互換性**: 最終的に全valid Rubyをコンパイル可能に
 5. **NaN-boxing準備**: Phase 1のsp_RbValueをPhase 5で8バイト化可能な設計
 
-### sp_RbValue待ちの機能
-- パターンマッチ `case/in` (型チェック分岐)
-- 異種配列/Hash
-- ダックタイピング (3型以上)
-- 条件で型が変わる変数・戻り値
+### sp_RbValue完了により解放された機能
+- ✅ 多相変数 (x = 1; x = "hello")
+- ✅ 異種配列 [1, "two", 3.0]
+- ✅ bimorphicダックタイピング (2クラス)
+- ✅ nilable変数
+
+### 次に解放される機能 (Phase 3以降)
+- パターンマッチ `case/in` (型チェック分岐) — **次のステップ**
+- 異種Hash `{a: 1, b: "str"}`
+- megamorphicダックタイピング (3クラス以上)
+- 条件で型が変わるメソッド戻り値
 
 ---
 
@@ -374,8 +392,8 @@ spinel/
 ├── src/
 │   ├── main.c          # CLI、ファイル読み込み、Prismパース
 │   ├── codegen.h       # 型システム、クラス/メソッド/モジュール情報構造体
-│   └── codegen.c       # 多パスコード生成器 (~7700行)
-├── examples/           # 30テストプログラム
+│   └── codegen.c       # 多パスコード生成器 (~9400行)
+├── examples/           # 39テストプログラム
 ├── prototype/
 │   └── tools/          # Step 0プロトタイプ (RBS抽出、LumiTrace等)
 ├── Makefile
