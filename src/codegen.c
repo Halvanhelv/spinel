@@ -710,7 +710,13 @@ static bool has_yield_nodes(pm_node_t *node) {
             for (size_t i = 0; i < c->arguments->arguments.size; i++)
                 if (has_yield_nodes(c->arguments->arguments.nodes[i])) return true;
         }
+        /* Check block body for yield (e.g., @data.each { |x| yield x }) */
+        if (c->block && has_yield_nodes(c->block)) return true;
         return false;
+    }
+    case PM_BLOCK_NODE: {
+        pm_block_node_t *b = (pm_block_node_t *)node;
+        return b->body ? has_yield_nodes((pm_node_t *)b->body) : false;
     }
     default:
         return false;
@@ -5659,7 +5665,12 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
                     emit(ctx, "mrb_int %s = sp_IntArray_get(%s, _ei_%d);\n", cn, recv, tmp);
                     free(cn);
                 }
-                if (blk->body) codegen_stmts(ctx, (pm_node_t *)blk->body);
+                if (blk->body) {
+                    bool saved_ir2 = ctx->implicit_return;
+                    ctx->implicit_return = false;
+                    codegen_stmts(ctx, (pm_node_t *)blk->body);
+                    ctx->implicit_return = saved_ir2;
+                }
                 ctx->indent--;
                 emit(ctx, "}\n");
                 free(recv); free(bpname); free(method);
@@ -5697,6 +5708,112 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
                 emit(ctx, "}\n");
                 free(recv); free(bpname); free(method);
                 break;
+            }
+
+            /* Object method with block → generate block callback and pass to method */
+            if (recv_t.kind == SPINEL_TYPE_OBJECT) {
+                class_info_t *rcls = find_class(ctx, recv_t.klass);
+                if (rcls) {
+                    class_info_t *owner = NULL;
+                    method_info_t *target = find_method_inherited(ctx, rcls, method, &owner);
+                    if (target && target->body_node && has_yield_nodes(target->body_node)) {
+                        pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                        char *recv = codegen_expr(ctx, call->receiver);
+
+                        /* Extract block parameter name */
+                        char *bpname = NULL;
+                        if (blk->parameters && PM_NODE_TYPE(blk->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                            pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)blk->parameters;
+                            if (bp->parameters && bp->parameters->requireds.size > 0) {
+                                pm_node_t *p = bp->parameters->requireds.nodes[0];
+                                if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                                    bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                            }
+                        }
+
+                        /* Scan captures: variables used in block body (excluding block param) */
+                        capture_list_t local_defs = {.count = 0};
+                        capture_list_t captures = {.count = 0};
+                        scan_captures(ctx, (pm_node_t *)blk->body,
+                                      bpname ? bpname : "", &local_defs, &captures);
+
+                        /* Generate block callback (written to block_out) */
+                        int blk_id = ctx->block_counter++;
+                        FILE *saved_out = ctx->out;
+                        if (ctx->block_out) ctx->out = ctx->block_out;
+
+                        /* Env struct: captured scalars by pointer */
+                        emit_raw(ctx, "typedef struct { ");
+                        for (int ci = 0; ci < captures.count; ci++) {
+                            var_entry_t *v = var_lookup(ctx, captures.names[ci]);
+                            if (!v) continue;
+                            char *cn = make_cname(v->name, false);
+                            emit_raw(ctx, "mrb_int *%s; ", cn);
+                            free(cn);
+                        }
+                        if (captures.count == 0) emit_raw(ctx, "int _dummy; ");
+                        emit_raw(ctx, "} _blk_env_%d_t;\n", blk_id);
+
+                        emit_raw(ctx, "static mrb_int _blk_%d(void *_e, mrb_int _arg) {\n", blk_id);
+                        emit_raw(ctx, "    _blk_env_%d_t *_env = (_blk_env_%d_t *)_e;\n", blk_id, blk_id);
+
+                        /* Block parameter from _arg */
+                        if (bpname) {
+                            char *cn = make_cname(bpname, false);
+                            emit_raw(ctx, "    mrb_int %s = _arg;\n", cn);
+                            free(cn);
+                        }
+
+                        /* Alias captured variables: #define lv_total (*_env->lv_total) */
+                        for (int ci = 0; ci < captures.count; ci++) {
+                            var_entry_t *v = var_lookup(ctx, captures.names[ci]);
+                            if (!v) continue;
+                            char *cn = make_cname(v->name, false);
+                            emit_raw(ctx, "    #define %s (*_env->%s)\n", cn, cn);
+                            free(cn);
+                        }
+
+                        /* Generate block body */
+                        int saved_indent = ctx->indent;
+                        ctx->indent = 1;
+                        if (blk->body) codegen_stmts(ctx, (pm_node_t *)blk->body);
+                        ctx->indent = saved_indent;
+
+                        /* Undefine aliases */
+                        for (int ci = 0; ci < captures.count; ci++) {
+                            var_entry_t *v = var_lookup(ctx, captures.names[ci]);
+                            if (!v) continue;
+                            char *cn = make_cname(v->name, false);
+                            emit_raw(ctx, "    #undef %s\n", cn);
+                            free(cn);
+                        }
+
+                        emit_raw(ctx, "    return 0;\n");
+                        emit_raw(ctx, "}\n");
+
+                        ctx->out = saved_out;
+
+                        /* Set up the environment struct */
+                        emit(ctx, "{ _blk_env_%d_t _env_%d;\n", blk_id, blk_id);
+                        for (int ci = 0; ci < captures.count; ci++) {
+                            var_entry_t *v = var_lookup(ctx, captures.names[ci]);
+                            if (!v) continue;
+                            char *cn = make_cname(v->name, false);
+                            emit(ctx, "_env_%d.%s = &%s;\n", blk_id, cn, cn);
+                            free(cn);
+                        }
+
+                        /* Call the method with block */
+                        const char *c_mname = sanitize_method(method);
+                        class_info_t *def_cls = owner ? owner : rcls;
+                        emit(ctx, "sp_%s_%s(%s, (sp_block_fn)_blk_%d, &_env_%d);\n",
+                             def_cls->name, c_mname, recv, blk_id, blk_id);
+                        emit(ctx, "}\n");
+
+                        free(recv); free(bpname); free(method);
+                        break;
+                    }
+                }
             }
 
             /* Hash#each with block |k, v| → inline loop over insertion-order list */
@@ -6327,6 +6444,10 @@ static void emit_method(codegen_ctx_t *ctx, class_info_t *cls, method_info_t *m)
             emit_raw(ctx, "%s lv_%s", pct, m->params[i].name);
             free(pct);
         }
+        /* Add block callback params if method uses yield */
+        if (m->body_node && has_yield_nodes(m->body_node)) {
+            emit_raw(ctx, ", sp_block_fn _block, void *_block_env");
+        }
     }
     emit_raw(ctx, ") {\n");
 
@@ -6426,7 +6547,11 @@ static void emit_method(codegen_ctx_t *ctx, class_info_t *cls, method_info_t *m)
         /* Last statement: return if non-void */
         if (stmts->body.size > 0) {
             pm_node_t *last = stmts->body.nodes[stmts->body.size - 1];
-            if (!ret_void &&
+            /* Detect call-with-block (e.g., @data.each { |x| yield x }) which
+               must be codegen'd as a statement, not an expression */
+            bool last_is_block_call = (PM_NODE_TYPE(last) == PM_CALL_NODE &&
+                                       ((pm_call_node_t *)last)->block != NULL);
+            if (!ret_void && !last_is_block_call &&
                 PM_NODE_TYPE(last) != PM_IF_NODE &&
                 PM_NODE_TYPE(last) != PM_WHILE_NODE &&
                 PM_NODE_TYPE(last) != PM_RETURN_NODE) {
@@ -8474,6 +8599,15 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
             if (ctx->funcs[i].has_yield) any_yield = true;
             if (ctx->funcs[i].has_block_param) any_block_param = true;
         }
+        /* Also check class methods for yield */
+        for (int i = 0; i < ctx->class_count && !any_yield; i++) {
+            class_info_t *cls = &ctx->classes[i];
+            for (int j = 0; j < cls->method_count && !any_yield; j++) {
+                method_info_t *m = &cls->methods[j];
+                if (m->body_node && has_yield_nodes(m->body_node))
+                    any_yield = true;
+            }
+        }
         if (any_yield || any_block_param || ctx->needs_proc)
             emit_raw(ctx, "typedef mrb_int (*sp_block_fn)(void *env, mrb_int arg);\n\n");
     }
@@ -8561,6 +8695,10 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
                     char *pct = vt_ctype(ctx, m->params[k].type, !cls->is_value_type);
                     emit_raw(ctx, "%s", pct);
                     free(pct);
+                }
+                /* Add block callback params if method uses yield */
+                if (m->body_node && has_yield_nodes(m->body_node)) {
+                    emit_raw(ctx, ", sp_block_fn, void *");
                 }
             }
             emit_raw(ctx, ");\n");
