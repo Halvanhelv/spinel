@@ -90,6 +90,7 @@ typedef struct {
     char includes[MAX_INCLUDES][64]; /* included module names */
     int include_count;
     int class_tag;             /* unique tag for POLY dispatch (SP_T_CLASS_BASE + N) */
+    pm_parser_t *origin_parser; /* parser that owns this class's AST (for require_relative) */
 } class_info_t;
 
 /* Module constant info */
@@ -254,9 +255,22 @@ typedef struct {
         int depth;
     } lambda_scope[MAX_LAMBDA_DEPTH];
     int lambda_scope_depth;
+
+    /* Source file path (for resolving require_relative) */
+    const char *source_path;
+
+    /* Required files (kept alive for AST references in method_info_t) */
+    #define MAX_REQUIRED_FILES 16
+    struct {
+        pm_parser_t parser;
+        pm_node_t *root;
+        char *source;
+    } required_files[MAX_REQUIRED_FILES];
+    int required_file_count;
 } codegen_ctx_t;
 
-void codegen_init(codegen_ctx_t *ctx, pm_parser_t *parser, FILE *out);
+void codegen_init(codegen_ctx_t *ctx, pm_parser_t *parser, FILE *out,
+                  const char *source_path);
 void codegen_program(codegen_ctx_t *ctx, pm_node_t *root);
 const char *spinel_type_cname(spinel_type_t type);
 

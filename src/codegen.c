@@ -14,6 +14,8 @@
 #include <string.h>
 #include <stdarg.h>
 #include <assert.h>
+#include <limits.h>
+#include <libgen.h>
 #include <prism.h>
 #include "codegen.h"
 
@@ -430,6 +432,7 @@ static void infer_pass(codegen_ctx_t *ctx, pm_node_t *node);
 static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node);
 static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node);
 static void codegen_stmts(codegen_ctx_t *ctx, pm_node_t *node);
+static bool is_require_relative(codegen_ctx_t *ctx, pm_node_t *node);
 static void codegen_pattern_cond(codegen_ctx_t *ctx, pm_node_t *pattern, int case_id);
 static char *codegen_lambda(codegen_ctx_t *ctx, pm_lambda_node_t *lam);
 
@@ -561,6 +564,7 @@ static void analyze_class(codegen_ctx_t *ctx, pm_class_node_t *node) {
     class_info_t *cls = &ctx->classes[ctx->class_count++];
     memset(cls, 0, sizeof(*cls));
     cls->class_node = (pm_node_t *)node;
+    cls->origin_parser = ctx->parser;
 
     /* Get class name from constant_path */
     if (PM_NODE_TYPE(node->constant_path) == PM_CONSTANT_READ_NODE) {
@@ -2040,12 +2044,16 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
     for (int pass = 0; pass < 3; pass++) {
         for (int ci = 0; ci < ctx->class_count; ci++) {
             class_info_t *cls = &ctx->classes[ci];
+            /* Swap to the parser that owns this class's AST */
+            pm_parser_t *saved_parser = ctx->parser;
+            if (cls->origin_parser)
+                ctx->parser = cls->origin_parser;
             method_info_t *init = find_method(cls, "initialize");
-            if (!init || !init->body_node) continue;
+            if (!init || !init->body_node) { ctx->parser = saved_parser; continue; }
 
             /* Walk init body looking for @ivar = param patterns */
             pm_node_t *body = init->body_node;
-            if (PM_NODE_TYPE(body) != PM_STATEMENTS_NODE) continue;
+            if (PM_NODE_TYPE(body) != PM_STATEMENTS_NODE) { ctx->parser = saved_parser; continue; }
             pm_statements_node_t *stmts = (pm_statements_node_t *)body;
 
             for (size_t i = 0; i < stmts->body.size; i++) {
@@ -2090,11 +2098,14 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                     all_simple = false;
             }
             cls->is_value_type = all_simple && cls->ivar_count <= 4 && cls->ivar_count > 0;
+            ctx->parser = saved_parser;
         }
 
         /* Resolve method return types for ALL classes (separate loop) */
         for (int ci = 0; ci < ctx->class_count; ci++) {
             class_info_t *cls = &ctx->classes[ci];
+            pm_parser_t *saved_p2 = ctx->parser;
+            if (cls->origin_parser) ctx->parser = cls->origin_parser;
             for (int mi = 0; mi < cls->method_count; mi++) {
                 method_info_t *m = &cls->methods[mi];
                 if (m->is_getter) {
@@ -2132,6 +2143,7 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                         m->return_type = rt;
                 }
             }
+            ctx->parser = saved_p2;
         }
 
         /* Infer method param types from body: if param.foo() where foo is a method
@@ -2139,6 +2151,8 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
          * Uses a stack-based recursive scan of all call nodes in the body. */
         for (int ci = 0; ci < ctx->class_count; ci++) {
             class_info_t *cls = &ctx->classes[ci];
+            pm_parser_t *saved_p3 = ctx->parser;
+            if (cls->origin_parser) ctx->parser = cls->origin_parser;
             for (int mi = 0; mi < cls->method_count; mi++) {
                 method_info_t *m = &cls->methods[mi];
                 if (m->is_getter || m->is_setter || !m->body_node) continue;
@@ -2184,6 +2198,7 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                     }
                 }
             }
+            ctx->parser = saved_p3;
         }
 
         /* Propagate constructor arg types to initialize params */
@@ -3271,6 +3286,11 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
 
     case PM_CALL_NODE: {
         pm_call_node_t *call = (pm_call_node_t *)node;
+
+        /* require_relative is a compile-time directive — skip */
+        if (is_require_relative(ctx, node))
+            return xstrdup("0");
+
         char *method = cstr(ctx, call->name);
 
         /* Proc#call: receiver.call(arg) → sp_Proc_call(receiver, arg) */
@@ -6208,6 +6228,10 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
     case PM_CALL_NODE: {
         pm_call_node_t *call = (pm_call_node_t *)node;
 
+        /* require_relative is a compile-time directive — skip at codegen */
+        if (is_require_relative(ctx, node))
+            break;
+
         /* print int.chr → putchar */
         if (!call->receiver && try_print_chr(ctx, call))
             break;
@@ -9032,11 +9056,121 @@ static void emit_header(codegen_ctx_t *ctx) {
     }
 }
 
-void codegen_init(codegen_ctx_t *ctx, pm_parser_t *parser, FILE *out) {
+/* ------------------------------------------------------------------ */
+/* File reading helper (for require_relative)                         */
+/* ------------------------------------------------------------------ */
+
+static char *read_source_file(const char *path, size_t *length) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = malloc(len + 1);
+    if (!buf) { fclose(f); return NULL; }
+    fread(buf, 1, len, f);
+    buf[len] = '\0';
+    fclose(f);
+    if (length) *length = (size_t)len;
+    return buf;
+}
+
+/* Check if a call node is require_relative("...") */
+static bool is_require_relative(codegen_ctx_t *ctx, pm_node_t *node) {
+    if (PM_NODE_TYPE(node) != PM_CALL_NODE) return false;
+    pm_call_node_t *call = (pm_call_node_t *)node;
+    if (call->receiver) return false;
+    if (!ceq(ctx, call->name, "require_relative")) return false;
+    if (!call->arguments || call->arguments->arguments.size != 1) return false;
+    if (PM_NODE_TYPE(call->arguments->arguments.nodes[0]) != PM_STRING_NODE) return false;
+    return true;
+}
+
+/* Process require_relative calls: parse required files and run analysis passes */
+static void process_require_relative(codegen_ctx_t *ctx, pm_node_t *root) {
+    assert(PM_NODE_TYPE(root) == PM_PROGRAM_NODE);
+    pm_program_node_t *prog = (pm_program_node_t *)root;
+    if (!prog->statements) return;
+    pm_statements_node_t *stmts = prog->statements;
+
+    for (size_t i = 0; i < stmts->body.size; i++) {
+        pm_node_t *s = stmts->body.nodes[i];
+        if (!is_require_relative(ctx, s)) continue;
+
+        pm_call_node_t *call = (pm_call_node_t *)s;
+        pm_string_node_t *path_node =
+            (pm_string_node_t *)call->arguments->arguments.nodes[0];
+        const uint8_t *rel_src = pm_string_source(&path_node->unescaped);
+        size_t rel_len = pm_string_length(&path_node->unescaped);
+
+        /* Build relative path string */
+        char rel_path[PATH_MAX];
+        snprintf(rel_path, sizeof(rel_path), "%.*s", (int)rel_len, rel_src);
+
+        /* Resolve full path relative to source file directory */
+        char dir_buf[PATH_MAX];
+        snprintf(dir_buf, sizeof(dir_buf), "%s", ctx->source_path);
+        char *dir = dirname(dir_buf);
+
+        char full_path[PATH_MAX];
+        /* Append .rb if not already present */
+        size_t rpl = strlen(rel_path);
+        if (rpl >= 3 && strcmp(rel_path + rpl - 3, ".rb") == 0)
+            snprintf(full_path, sizeof(full_path), "%s/%s", dir, rel_path);
+        else
+            snprintf(full_path, sizeof(full_path), "%s/%s.rb", dir, rel_path);
+
+        /* Read and parse the required file */
+        size_t req_len;
+        char *req_source = read_source_file(full_path, &req_len);
+        if (!req_source) {
+            fprintf(stderr, "Warning: cannot open require_relative '%s' (%s)\n",
+                    rel_path, full_path);
+            continue;
+        }
+
+        if (ctx->required_file_count >= MAX_REQUIRED_FILES) {
+            fprintf(stderr, "Warning: too many require_relative files (max %d)\n",
+                    MAX_REQUIRED_FILES);
+            free(req_source);
+            continue;
+        }
+
+        int idx = ctx->required_file_count++;
+        ctx->required_files[idx].source = req_source;
+        pm_parser_init(&ctx->required_files[idx].parser,
+                       (const uint8_t *)req_source, req_len, NULL);
+        ctx->required_files[idx].root =
+            pm_parse(&ctx->required_files[idx].parser);
+
+        /* Check for parse errors */
+        if (ctx->required_files[idx].parser.error_list.size > 0) {
+            fprintf(stderr, "Parse errors in '%s'\n", full_path);
+            ctx->required_file_count--;
+            pm_node_destroy(&ctx->required_files[idx].parser,
+                            ctx->required_files[idx].root);
+            pm_parser_free(&ctx->required_files[idx].parser);
+            free(req_source);
+            continue;
+        }
+
+        /* Run class analysis on the required file (registers classes/modules/funcs).
+         * We temporarily swap the parser so cstr/ceq use the required file's
+         * constant pool. */
+        pm_parser_t *saved_parser = ctx->parser;
+        ctx->parser = &ctx->required_files[idx].parser;
+        class_analysis_pass(ctx, ctx->required_files[idx].root);
+        ctx->parser = saved_parser;
+    }
+}
+
+void codegen_init(codegen_ctx_t *ctx, pm_parser_t *parser, FILE *out,
+                  const char *source_path) {
     memset(ctx, 0, sizeof(*ctx));
     ctx->parser = parser;
     ctx->out = out;
     ctx->indent = 1;
+    ctx->source_path = source_path;
 }
 
 /* Check if AST contains any lambda nodes (recursive scan) */
@@ -9703,6 +9837,10 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     assert(PM_NODE_TYPE(root) == PM_PROGRAM_NODE);
     pm_program_node_t *prog = (pm_program_node_t *)root;
 
+    /* Pass 0: Process require_relative — parse required files and register
+     * their classes/modules/functions before main analysis passes */
+    process_require_relative(ctx, root);
+
     /* Detect lambda mode */
     ctx->lambda_mode = has_lambda_nodes(root);
 
@@ -9879,6 +10017,8 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     /* Also check class method bodies for array/hash usage */
     for (int i = 0; i < ctx->class_count && !ctx->needs_gc; i++) {
         class_info_t *cls = &ctx->classes[i];
+        pm_parser_t *saved_gc = ctx->parser;
+        if (cls->origin_parser) ctx->parser = cls->origin_parser;
         for (int mi = 0; mi < cls->method_count && !ctx->needs_gc; mi++) {
             method_info_t *m = &cls->methods[mi];
             if (m->return_type.kind == SPINEL_TYPE_ARRAY ||
@@ -9898,6 +10038,7 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
                 ctx->var_count = saved_vc;
             }
         }
+        ctx->parser = saved_gc;
     }
 
     /* Set up lambda output buffer if needed */
@@ -10042,12 +10183,22 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     }
 
     /* Initialize functions for superclasses (called via super) */
-    for (int i = 0; i < ctx->class_count; i++)
+    for (int i = 0; i < ctx->class_count; i++) {
+        pm_parser_t *saved = ctx->parser;
+        if (ctx->classes[i].origin_parser)
+            ctx->parser = ctx->classes[i].origin_parser;
         emit_initialize_func(ctx, &ctx->classes[i]);
+        ctx->parser = saved;
+    }
 
     /* Constructors */
-    for (int i = 0; i < ctx->class_count; i++)
+    for (int i = 0; i < ctx->class_count; i++) {
+        pm_parser_t *saved = ctx->parser;
+        if (ctx->classes[i].origin_parser)
+            ctx->parser = ctx->classes[i].origin_parser;
         emit_constructor(ctx, &ctx->classes[i]);
+        ctx->parser = saved;
+    }
 
     /* Forward declarations for class methods (sanitize operator names) */
     for (int i = 0; i < ctx->class_count; i++) {
@@ -10094,8 +10245,12 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     /* Class methods */
     for (int i = 0; i < ctx->class_count; i++) {
         class_info_t *cls = &ctx->classes[i];
+        pm_parser_t *saved = ctx->parser;
+        if (cls->origin_parser)
+            ctx->parser = cls->origin_parser;
         for (int j = 0; j < cls->method_count; j++)
             emit_method(ctx, cls, &cls->methods[j]);
+        ctx->parser = saved;
     }
 
     if (ctx->lambda_mode) {

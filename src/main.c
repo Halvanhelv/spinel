@@ -106,8 +106,15 @@ int main(int argc, char **argv) {
 
     /* Generate C code */
     codegen_ctx_t *ctx = (codegen_ctx_t *)calloc(1, sizeof(codegen_ctx_t));
-    codegen_init(ctx, &parser, out);
+    codegen_init(ctx, &parser, out, source_path);
     codegen_program(ctx, root);
+
+    /* Cleanup required files */
+    for (int i = 0; i < ctx->required_file_count; i++) {
+        pm_node_destroy(&ctx->required_files[i].parser, ctx->required_files[i].root);
+        pm_parser_free(&ctx->required_files[i].parser);
+        free(ctx->required_files[i].source);
+    }
     free(ctx);
 
     /* Cleanup */
