@@ -40,6 +40,21 @@ static char *sfmt(const char *fmt, ...) {
     return buf;
 }
 
+/* Sanitize a Ruby identifier for use in C code: ? → _p, ! → _b, = → _eq */
+static char *c_safe_name(const char *name) {
+    size_t len = strlen(name);
+    char *buf = malloc(len * 3 + 1);
+    size_t j = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (name[i] == '?') { buf[j++] = '_'; buf[j++] = 'p'; }
+        else if (name[i] == '!') { buf[j++] = '_'; buf[j++] = 'b'; }
+        else if (name[i] == '=') { buf[j++] = '_'; buf[j++] = 'e'; buf[j++] = 'q'; }
+        else buf[j++] = name[i];
+    }
+    buf[j] = '\0';
+    return buf;
+}
+
 /* ------------------------------------------------------------------ */
 /* Constant pool helpers                                              */
 /* ------------------------------------------------------------------ */
@@ -218,8 +233,11 @@ static module_info_t *find_module(codegen_ctx_t *ctx, const char *name) {
 }
 
 static func_info_t *find_func(codegen_ctx_t *ctx, const char *name) {
-    for (int i = 0; i < ctx->func_count; i++)
-        if (strcmp(ctx->funcs[i].name, name) == 0) return &ctx->funcs[i];
+    char *safe = c_safe_name(name);
+    for (int i = 0; i < ctx->func_count; i++) {
+        if (strcmp(ctx->funcs[i].name, safe) == 0) { free(safe); return &ctx->funcs[i]; }
+    }
+    free(safe);
     return NULL;
 }
 
@@ -818,8 +836,9 @@ static void analyze_top_func(codegen_ctx_t *ctx, pm_def_node_t *def) {
     func_info_t *f = &ctx->funcs[ctx->func_count++];
     memset(f, 0, sizeof(*f));
     char *name = cstr(ctx, def->name);
-    snprintf(f->name, sizeof(f->name), "%s", name);
-    free(name);
+    char *safe = c_safe_name(name);
+    snprintf(f->name, sizeof(f->name), "%s", safe);
+    free(safe); free(name);
     f->body_node = def->body ? (pm_node_t *)def->body : NULL;
     f->params_node = def->parameters ? (pm_node_t *)def->parameters : NULL;
     f->return_type = vt_prim(SPINEL_TYPE_VALUE);
@@ -1189,6 +1208,17 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                  strcmp(method, "<=") == 0 || strcmp(method, ">=") == 0)) {
                 free(method);
                 return vt_prim(SPINEL_TYPE_BOOLEAN);
+            }
+            /* POLY binary ops: comparisons → BOOLEAN, arithmetic → POLY */
+            if (lt.kind == SPINEL_TYPE_POLY || rt.kind == SPINEL_TYPE_POLY) {
+                if (strcmp(method, ">") == 0 || strcmp(method, "<") == 0 ||
+                    strcmp(method, ">=") == 0 || strcmp(method, "<=") == 0 ||
+                    strcmp(method, "==") == 0 || strcmp(method, "!=") == 0) {
+                    free(method);
+                    return vt_prim(SPINEL_TYPE_BOOLEAN);
+                }
+                free(method);
+                return vt_prim(SPINEL_TYPE_POLY);
             }
             if (vt_is_numeric(lt) || vt_is_numeric(rt) ||
                 lt.kind == SPINEL_TYPE_BOOLEAN || rt.kind == SPINEL_TYPE_BOOLEAN) {
@@ -2334,9 +2364,7 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                                                    at.kind != target->params[pi].type.kind &&
                                                    target->params[pi].type.kind != SPINEL_TYPE_POLY) {
                                             /* Widen: called with incompatible types → POLY */
-                                            if (vt_is_numeric(target->params[pi].type) && vt_is_numeric(at))
-                                                target->params[pi].type = vt_prim(SPINEL_TYPE_FLOAT);
-                                            else if (vt_is_poly_eligible(target->params[pi].type) && vt_is_poly_eligible(at))
+                                            if (vt_is_poly_eligible(target->params[pi].type) && vt_is_poly_eligible(at))
                                                 target->params[pi].type = vt_prim(SPINEL_TYPE_POLY);
                                             /* else: leave as-is (complex types like ARRAY shouldn't become POLY) */
                                         }
@@ -2373,9 +2401,7 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                                                 } else if (at.kind != SPINEL_TYPE_VALUE &&
                                                            at.kind != target2->params[pi].type.kind &&
                                                            target2->params[pi].type.kind != SPINEL_TYPE_POLY) {
-                                                    if (vt_is_numeric(target2->params[pi].type) && vt_is_numeric(at))
-                                                        target2->params[pi].type = vt_prim(SPINEL_TYPE_FLOAT);
-                                                    else if (vt_is_poly_eligible(target2->params[pi].type) && vt_is_poly_eligible(at))
+                                                    if (vt_is_poly_eligible(target2->params[pi].type) && vt_is_poly_eligible(at))
                                                         target2->params[pi].type = vt_prim(SPINEL_TYPE_POLY);
                                                 }
                                             }
@@ -2476,9 +2502,7 @@ static void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                                 } else if (at.kind != SPINEL_TYPE_VALUE &&
                                            at.kind != target->params[pi].type.kind &&
                                            target->params[pi].type.kind != SPINEL_TYPE_POLY) {
-                                    if (vt_is_numeric(target->params[pi].type) && vt_is_numeric(at))
-                                        target->params[pi].type = vt_prim(SPINEL_TYPE_FLOAT);
-                                    else if (vt_is_poly_eligible(target->params[pi].type) && vt_is_poly_eligible(at))
+                                    if (vt_is_poly_eligible(target->params[pi].type) && vt_is_poly_eligible(at))
                                         target->params[pi].type = vt_prim(SPINEL_TYPE_POLY);
                                 }
                             }
@@ -3560,6 +3584,33 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(left); free(right); free(method);
                 return r;
             }
+
+            /* POLY binary operators → sp_poly_<op> dispatch */
+            if (c_op && (lt.kind == SPINEL_TYPE_POLY || rt.kind == SPINEL_TYPE_POLY)) {
+                const char *poly_fn = NULL;
+                if (strcmp(method, "+") == 0)  poly_fn = "sp_poly_add";
+                else if (strcmp(method, "-") == 0)  poly_fn = "sp_poly_sub";
+                else if (strcmp(method, "*") == 0)  poly_fn = "sp_poly_mul";
+                else if (strcmp(method, "/") == 0)  poly_fn = "sp_poly_div";
+                else if (strcmp(method, ">") == 0)  poly_fn = "sp_poly_gt";
+                else if (strcmp(method, "<") == 0)  poly_fn = "sp_poly_lt";
+                else if (strcmp(method, ">=") == 0) poly_fn = "sp_poly_ge";
+                else if (strcmp(method, "<=") == 0) poly_fn = "sp_poly_le";
+                else if (strcmp(method, "==") == 0) poly_fn = "sp_poly_eq";
+                else if (strcmp(method, "!=") == 0) poly_fn = "sp_poly_neq";
+                if (poly_fn) {
+                    char *left = codegen_expr(ctx, call->receiver);
+                    char *right = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    /* Box non-POLY operands */
+                    char *bl = lt.kind == SPINEL_TYPE_POLY ? xstrdup(left)
+                             : poly_box_expr_vt(ctx, lt, left);
+                    char *br = rt.kind == SPINEL_TYPE_POLY ? xstrdup(right)
+                             : poly_box_expr_vt(ctx, rt, right);
+                    char *r = sfmt("%s(%s, %s)", poly_fn, bl, br);
+                    free(left); free(right); free(bl); free(br); free(method);
+                    return r;
+                }
+            }
         }
 
         /* ARGV.length → sp_argv.len */
@@ -4631,6 +4682,12 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(recv); free(method);
                 return r;
             }
+            if (strcmp(method, "to_s") == 0 && recv_t.kind == SPINEL_TYPE_POLY) {
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *r = sfmt("sp_poly_to_s(%s)", recv);
+                free(recv); free(method);
+                return r;
+            }
             if (strcmp(method, "to_i") == 0 && recv_t.kind == SPINEL_TYPE_FLOAT) {
                 char *recv = codegen_expr(ctx, call->receiver);
                 char *r = sfmt("((mrb_int)%s)", recv);
@@ -4803,7 +4860,7 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             fname[copy_len] = '\0';
             ctx->needs_proc = true;
             free(method);
-            return sfmt("sp_Proc_new((sp_block_fn)sp_%s, NULL)", fname);
+            { char *sf = c_safe_name(fname); char *r = sfmt("sp_Proc_new((sp_block_fn)sp_%s, NULL)", sf); free(sf); return r; }
         }
 
         /* rand(n) → rand() % n */
@@ -4891,7 +4948,7 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                             free(param_args[i]);
                         }
                     }
-                    char *r = sfmt("sp_%s(%s)", method, args);
+                    char *r = sfmt("sp_%s(%s)", fn->name, args);
                     free(args); free(method);
                     return r;
                 }
@@ -4932,7 +4989,7 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                             free(args); args = na2;
                         }
                     }
-                    char *r = sfmt("sp_%s(%s)", method, args);
+                    char *r = sfmt("sp_%s(%s)", fn->name, args);
                     free(args); free(method);
                     return r;
                 }
@@ -5105,7 +5162,7 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                         free(args); args = na;
                     }
                 }
-                char *r = sfmt("sp_%s(%s)", method, args);
+                char *r = sfmt("sp_%s(%s)", fn->name, args);
                 free(args); free(method);
                 return r;
             }
@@ -6801,7 +6858,7 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
                     args = na;
                 }
                 emit(ctx, "sp_%s(%s%s(sp_block_fn)_blk_%d, &_env_%d);\n",
-                     method, args, argc > 0 ? ", " : "", blk_id, blk_id);
+                     fn->name, args, argc > 0 ? ", " : "", blk_id, blk_id);
                 free(args); free(bpname); free(method);
                 break;
             }
@@ -7968,6 +8025,109 @@ static void emit_header(codegen_ctx_t *ctx) {
         emit_raw(ctx, "        case SP_T_NIL: return \"\";\n");
         emit_raw(ctx, "        default: return \"(object)\";\n");
         emit_raw(ctx, "    }\n}\n\n");
+
+        /* ---- Polymorphic arithmetic/comparison helpers ---- */
+        emit_raw(ctx, "static void sp_raise(const char *msg) { fprintf(stderr, \"%%s\\n\", msg); exit(1); }\n\n");
+
+        emit_raw(ctx, "static sp_RbValue sp_poly_add(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_INT && b.tag == SP_T_INT) return sp_box_int(a.i + b.i);\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_FLOAT || b.tag == SP_T_FLOAT) {\n");
+        emit_raw(ctx, "        double fa = a.tag == SP_T_FLOAT ? a.f : (double)a.i;\n");
+        emit_raw(ctx, "        double fb = b.tag == SP_T_FLOAT ? b.f : (double)b.i;\n");
+        emit_raw(ctx, "        return sp_box_float(fa + fb);\n");
+        emit_raw(ctx, "    }\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_STRING && b.tag == SP_T_STRING)\n");
+        emit_raw(ctx, "        return sp_box_str(sp_str_concat(a.s, b.s));\n");
+        emit_raw(ctx, "    sp_raise(\"TypeError: + not defined\"); return sp_box_nil();\n");
+        emit_raw(ctx, "}\n\n");
+
+        emit_raw(ctx, "static sp_RbValue sp_poly_sub(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_INT && b.tag == SP_T_INT) return sp_box_int(a.i - b.i);\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_FLOAT || b.tag == SP_T_FLOAT) {\n");
+        emit_raw(ctx, "        double fa = a.tag == SP_T_FLOAT ? a.f : (double)a.i;\n");
+        emit_raw(ctx, "        double fb = b.tag == SP_T_FLOAT ? b.f : (double)b.i;\n");
+        emit_raw(ctx, "        return sp_box_float(fa - fb);\n");
+        emit_raw(ctx, "    }\n");
+        emit_raw(ctx, "    sp_raise(\"TypeError: - not defined\"); return sp_box_nil();\n");
+        emit_raw(ctx, "}\n\n");
+
+        emit_raw(ctx, "static sp_RbValue sp_poly_mul(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_INT && b.tag == SP_T_INT) return sp_box_int(a.i * b.i);\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_FLOAT || b.tag == SP_T_FLOAT) {\n");
+        emit_raw(ctx, "        double fa = a.tag == SP_T_FLOAT ? a.f : (double)a.i;\n");
+        emit_raw(ctx, "        double fb = b.tag == SP_T_FLOAT ? b.f : (double)b.i;\n");
+        emit_raw(ctx, "        return sp_box_float(fa * fb);\n");
+        emit_raw(ctx, "    }\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_STRING && b.tag == SP_T_INT)\n");
+        emit_raw(ctx, "        return sp_box_str(sp_str_repeat(a.s, b.i));\n");
+        emit_raw(ctx, "    sp_raise(\"TypeError: * not defined\"); return sp_box_nil();\n");
+        emit_raw(ctx, "}\n\n");
+
+        emit_raw(ctx, "static sp_RbValue sp_poly_div(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_INT && b.tag == SP_T_INT) return sp_box_int(a.i / b.i);\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_FLOAT || b.tag == SP_T_FLOAT) {\n");
+        emit_raw(ctx, "        double fa = a.tag == SP_T_FLOAT ? a.f : (double)a.i;\n");
+        emit_raw(ctx, "        double fb = b.tag == SP_T_FLOAT ? b.f : (double)b.i;\n");
+        emit_raw(ctx, "        return sp_box_float(fa / fb);\n");
+        emit_raw(ctx, "    }\n");
+        emit_raw(ctx, "    sp_raise(\"TypeError: / not defined\"); return sp_box_nil();\n");
+        emit_raw(ctx, "}\n\n");
+
+        emit_raw(ctx, "static mrb_bool sp_poly_gt(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_INT && b.tag == SP_T_INT) return a.i > b.i;\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_FLOAT || b.tag == SP_T_FLOAT) {\n");
+        emit_raw(ctx, "        double fa = a.tag == SP_T_FLOAT ? a.f : (double)a.i;\n");
+        emit_raw(ctx, "        double fb = b.tag == SP_T_FLOAT ? b.f : (double)b.i;\n");
+        emit_raw(ctx, "        return fa > fb;\n");
+        emit_raw(ctx, "    }\n");
+        emit_raw(ctx, "    sp_raise(\"TypeError: > not defined\"); return 0;\n");
+        emit_raw(ctx, "}\n\n");
+
+        emit_raw(ctx, "static mrb_bool sp_poly_lt(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_INT && b.tag == SP_T_INT) return a.i < b.i;\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_FLOAT || b.tag == SP_T_FLOAT) {\n");
+        emit_raw(ctx, "        double fa = a.tag == SP_T_FLOAT ? a.f : (double)a.i;\n");
+        emit_raw(ctx, "        double fb = b.tag == SP_T_FLOAT ? b.f : (double)b.i;\n");
+        emit_raw(ctx, "        return fa < fb;\n");
+        emit_raw(ctx, "    }\n");
+        emit_raw(ctx, "    sp_raise(\"TypeError: < not defined\"); return 0;\n");
+        emit_raw(ctx, "}\n\n");
+
+        emit_raw(ctx, "static mrb_bool sp_poly_ge(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_INT && b.tag == SP_T_INT) return a.i >= b.i;\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_FLOAT || b.tag == SP_T_FLOAT) {\n");
+        emit_raw(ctx, "        double fa = a.tag == SP_T_FLOAT ? a.f : (double)a.i;\n");
+        emit_raw(ctx, "        double fb = b.tag == SP_T_FLOAT ? b.f : (double)b.i;\n");
+        emit_raw(ctx, "        return fa >= fb;\n");
+        emit_raw(ctx, "    }\n");
+        emit_raw(ctx, "    sp_raise(\"TypeError: >= not defined\"); return 0;\n");
+        emit_raw(ctx, "}\n\n");
+
+        emit_raw(ctx, "static mrb_bool sp_poly_le(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_INT && b.tag == SP_T_INT) return a.i <= b.i;\n");
+        emit_raw(ctx, "    if (a.tag == SP_T_FLOAT || b.tag == SP_T_FLOAT) {\n");
+        emit_raw(ctx, "        double fa = a.tag == SP_T_FLOAT ? a.f : (double)a.i;\n");
+        emit_raw(ctx, "        double fb = b.tag == SP_T_FLOAT ? b.f : (double)b.i;\n");
+        emit_raw(ctx, "        return fa <= fb;\n");
+        emit_raw(ctx, "    }\n");
+        emit_raw(ctx, "    sp_raise(\"TypeError: <= not defined\"); return 0;\n");
+        emit_raw(ctx, "}\n\n");
+
+        emit_raw(ctx, "static mrb_bool sp_poly_eq(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    if (a.tag != b.tag) return 0;\n");
+        emit_raw(ctx, "    switch (a.tag) {\n");
+        emit_raw(ctx, "        case SP_T_INT: return a.i == b.i;\n");
+        emit_raw(ctx, "        case SP_T_FLOAT: return a.f == b.f;\n");
+        emit_raw(ctx, "        case SP_T_STRING: return strcmp(a.s, b.s) == 0;\n");
+        emit_raw(ctx, "        case SP_T_BOOL: return a.i == b.i;\n");
+        emit_raw(ctx, "        case SP_T_NIL: return 1;\n");
+        emit_raw(ctx, "        default: return a.p == b.p;\n");
+        emit_raw(ctx, "    }\n");
+        emit_raw(ctx, "}\n\n");
+
+        emit_raw(ctx, "static mrb_bool sp_poly_neq(sp_RbValue a, sp_RbValue b) {\n");
+        emit_raw(ctx, "    return !sp_poly_eq(a, b);\n");
+        emit_raw(ctx, "}\n\n");
     }
 
     /* ---- Regexp runtime (only when needed) ---- */
@@ -9764,8 +9924,10 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
                             size_t len = pm_string_length(&sym->unescaped);
                             char fname[64];
                             snprintf(fname, sizeof(fname), "%.*s", (int)len, src);
+                            char *safe_fname = c_safe_name(fname);
                             emit_raw(ctx, "static mrb_int _meth_adapt_%s(void *_e, mrb_int _a) { (void)_e; return sp_%s(_a); }\n",
-                                     fname, fname);
+                                     safe_fname, safe_fname);
+                            free(safe_fname);
                         }
                         if (c->receiver && msp < 255) mstack[msp++] = c->receiver;
                         if (c->arguments) {
