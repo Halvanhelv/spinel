@@ -115,6 +115,7 @@ const char *spinel_type_cname(spinel_type_t k) {
     case SPINEL_TYPE_HASH:    return "sp_StrIntHash *";
     case SPINEL_TYPE_PROC:    return "sp_Val *";
     case SPINEL_TYPE_STR_ARRAY: return "sp_StrArray *";
+    case SPINEL_TYPE_RANGE:   return "sp_Range";
     default:                  return "mrb_int"; /* fallback for standalone mode */
     }
 }
@@ -1051,10 +1052,20 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
             free(cls_name);
         }
 
-        /* Binary operators */
+        /* Binary operators — only for recognized operator method names */
         if (call->receiver && call->arguments &&
             call->arguments->arguments.size == 1 &&
-            strcmp(method, "[]") != 0) {
+            strcmp(method, "[]") != 0 &&
+            (strcmp(method, "+") == 0 || strcmp(method, "-") == 0 ||
+             strcmp(method, "*") == 0 || strcmp(method, "/") == 0 ||
+             strcmp(method, "%") == 0 || strcmp(method, "**") == 0 ||
+             strcmp(method, "<") == 0 || strcmp(method, ">") == 0 ||
+             strcmp(method, "<=") == 0 || strcmp(method, ">=") == 0 ||
+             strcmp(method, "==") == 0 || strcmp(method, "!=") == 0 ||
+             strcmp(method, "<=>") == 0 ||
+             strcmp(method, "<<") == 0 || strcmp(method, ">>") == 0 ||
+             strcmp(method, "|") == 0 || strcmp(method, "&") == 0 ||
+             strcmp(method, "^") == 0 || strcmp(method, "=~") == 0)) {
             vtype_t lt = infer_type(ctx, call->receiver);
             vtype_t rt = infer_type(ctx, call->arguments->arguments.nodes[0]);
             /* String * Integer → STRING (repetition) */
@@ -1141,6 +1152,15 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                     strcmp(method, ">") == 0 || strcmp(method, "<=") == 0 || strcmp(method, ">=") == 0) { free(method); return vt_prim(SPINEL_TYPE_BOOLEAN); }
                 if (strcmp(method, "*") == 0) { free(method); return vt_prim(SPINEL_TYPE_STRING); }
                 if (strcmp(method, "split") == 0) { free(method); return vt_prim(SPINEL_TYPE_STR_ARRAY); }
+            }
+            /* Range methods on RANGE-typed receiver */
+            if (recv_t.kind == SPINEL_TYPE_RANGE) {
+                if (strcmp(method, "first") == 0 || strcmp(method, "last") == 0) { free(method); return vt_prim(SPINEL_TYPE_INTEGER); }
+                if (strcmp(method, "include?") == 0) { free(method); return vt_prim(SPINEL_TYPE_BOOLEAN); }
+                if (strcmp(method, "to_a") == 0) { free(method); return vt_prim(SPINEL_TYPE_ARRAY); }
+                if (strcmp(method, "each") == 0) { free(method); return vt_prim(SPINEL_TYPE_RANGE); }
+                if (strcmp(method, "sum") == 0 || strcmp(method, "length") == 0 ||
+                    strcmp(method, "size") == 0) { free(method); return vt_prim(SPINEL_TYPE_INTEGER); }
             }
             /* String array methods */
             if (recv_t.kind == SPINEL_TYPE_STR_ARRAY) {
@@ -1410,6 +1430,9 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
         if (ctx->current_class)
             return vt_obj(ctx->current_class->name);
         return vt_prim(SPINEL_TYPE_VALUE);
+
+    case PM_RANGE_NODE:
+        return vt_prim(SPINEL_TYPE_RANGE);
 
     default:
         return vt_prim(SPINEL_TYPE_VALUE);
@@ -3797,6 +3820,39 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(recv);
             }
 
+            /* sp_Range method calls */
+            if (recv_t.kind == SPINEL_TYPE_RANGE) {
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *r = NULL;
+                if (strcmp(method, "first") == 0)
+                    r = sfmt("(%s).first", recv);
+                else if (strcmp(method, "last") == 0)
+                    r = sfmt("(%s).last", recv);
+                else if (strcmp(method, "include?") == 0 && call->arguments &&
+                         call->arguments->arguments.size == 1) {
+                    char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    r = sfmt("sp_Range_include_p(%s, %s)", recv, arg);
+                    free(arg);
+                }
+                else if (strcmp(method, "to_a") == 0)
+                    r = sfmt("sp_Range_to_a(%s)", recv);
+                else if (strcmp(method, "sum") == 0) {
+                    int tmp = ctx->temp_counter++;
+                    emit(ctx, "mrb_int _rsum_%d = 0; { mrb_int _ri_%d;\n", tmp, tmp);
+                    emit(ctx, "  for (_ri_%d = (%s).first; _ri_%d <= (%s).last; _ri_%d++)\n", tmp, recv, tmp, recv, tmp);
+                    emit(ctx, "    _rsum_%d += _ri_%d;\n", tmp, tmp);
+                    emit(ctx, "}\n");
+                    r = sfmt("_rsum_%d", tmp);
+                }
+                else if (strcmp(method, "length") == 0 || strcmp(method, "size") == 0)
+                    r = sfmt("((%s).last - (%s).first + 1)", recv, recv);
+                if (r) {
+                    free(recv); free(method);
+                    return r;
+                }
+                free(recv);
+            }
+
             /* String method calls */
             if (recv_t.kind == SPINEL_TYPE_STRING) {
                 char *recv = codegen_expr(ctx, call->receiver);
@@ -4917,6 +4973,15 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
     case PM_SELF_NODE:
         return xstrdup("self");
 
+    case PM_RANGE_NODE: {
+        pm_range_node_t *rng = (pm_range_node_t *)node;
+        char *left = codegen_expr(ctx, rng->left);
+        char *right = codegen_expr(ctx, rng->right);
+        char *r = sfmt("sp_Range_new(%s, %s)", left, right);
+        free(left); free(right);
+        return r;
+    }
+
     default:
         return sfmt("0 /* TODO: expr %d */", PM_NODE_TYPE(node));
     }
@@ -5547,6 +5612,39 @@ static void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
                 }
                 if (blk->body) codegen_stmts(ctx, (pm_node_t *)blk->body);
                 ctx->indent--;
+                emit(ctx, "}\n");
+                free(recv); free(bpname); free(method);
+                break;
+            }
+
+            /* Range#each with block |i| → inline for loop */
+            if (recv_t.kind == SPINEL_TYPE_RANGE) {
+                pm_block_node_t *blk = (pm_block_node_t *)call->block;
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *bpname = NULL;
+                if (blk->parameters && PM_NODE_TYPE(blk->parameters) == PM_BLOCK_PARAMETERS_NODE) {
+                    pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)blk->parameters;
+                    if (bp->parameters && bp->parameters->requireds.size > 0) {
+                        pm_node_t *p = bp->parameters->requireds.nodes[0];
+                        if (PM_NODE_TYPE(p) == PM_REQUIRED_PARAMETER_NODE)
+                            bpname = cstr(ctx, ((pm_required_parameter_node_t *)p)->name);
+                    }
+                }
+                int tmp = ctx->temp_counter++;
+                emit(ctx, "{ sp_Range _rng_%d = %s;\n", tmp, recv);
+                if (bpname) {
+                    char *cn = make_cname(bpname, false);
+                    emit(ctx, "for (mrb_int %s = _rng_%d.first; %s <= _rng_%d.last; %s++) {\n",
+                         cn, tmp, cn, tmp, cn);
+                    free(cn);
+                } else {
+                    emit(ctx, "for (mrb_int _ri_%d = _rng_%d.first; _ri_%d <= _rng_%d.last; _ri_%d++) {\n",
+                         tmp, tmp, tmp, tmp, tmp);
+                }
+                ctx->indent++;
+                if (blk->body) codegen_stmts(ctx, (pm_node_t *)blk->body);
+                ctx->indent--;
+                emit(ctx, "}\n");
                 emit(ctx, "}\n");
                 free(recv); free(bpname); free(method);
                 break;
@@ -7068,6 +7166,19 @@ static void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "/* ---- Built-in integer array ---- */\n");
     /* sp_IntArray: deque-like array with O(1) shift via start offset */
     emit_raw(ctx, "typedef struct { mrb_int *data; mrb_int start; mrb_int len; mrb_int cap; } sp_IntArray;\n\n");
+
+    /* Built-in sp_Range for Range support */
+    emit_raw(ctx, "/* ---- Built-in integer range ---- */\n");
+    emit_raw(ctx, "typedef struct { mrb_int first; mrb_int last; } sp_Range;\n");
+    emit_raw(ctx, "static sp_Range sp_Range_new(mrb_int first, mrb_int last) {\n");
+    emit_raw(ctx, "    sp_Range r; r.first = first; r.last = last; return r;\n}\n");
+    emit_raw(ctx, "static mrb_bool sp_Range_include_p(sp_Range r, mrb_int v) {\n");
+    emit_raw(ctx, "    return v >= r.first && v <= r.last;\n}\n");
+    /* sp_Range_to_a needs sp_IntArray_from_range which is defined later;
+     * forward declare it and define to_a after IntArray is available */
+    emit_raw(ctx, "static sp_IntArray *sp_IntArray_from_range(mrb_int, mrb_int);\n");
+    emit_raw(ctx, "static sp_IntArray *sp_Range_to_a(sp_Range r) {\n");
+    emit_raw(ctx, "    return sp_IntArray_from_range(r.first, r.last);\n}\n\n");
 
     if (ctx->needs_gc) {
         /* GC-managed IntArray: finalizer frees internal data pointer */

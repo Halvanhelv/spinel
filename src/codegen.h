@@ -28,6 +28,7 @@ typedef enum {
     SPINEL_TYPE_VALUE,   /* boxed mrb_value (fallback) */
     SPINEL_TYPE_STR_ARRAY, /* sp_StrArray * (string array from split) */
     SPINEL_TYPE_REGEXP,    /* compiled regex pattern (regex_t *) */
+    SPINEL_TYPE_RANGE,     /* sp_Range (integer range: first..last) */
 } spinel_type_t;
 
 /* Extended type: kind + optional class name for OBJECT types */
