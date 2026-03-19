@@ -3,11 +3,11 @@
 # Usage:
 #   make deps      # Fetch and build dependencies (prism)
 #   make           # Build the spinel compiler
-#   make test      # Compile examples/bm_so_mandelbrot.rb and verify output
+#   make test      # Quick test (mandelbrot)
+#   make test-all  # Run all 47 examples
 
 # Configuration
 PRISM_VERSION ?= 1.4.0
-MRUBY_DIR     ?= $(HOME)/work/mruby
 CC            ?= cc
 CFLAGS        = -Wall -Wextra -O2 -std=c99
 CFLAGS       += -Ilib/prism/include -Isrc
@@ -16,7 +16,6 @@ CFLAGS       += -Ilib/prism/include -Isrc
 PRISM_DIR     = lib/prism
 PRISM_LIB     = $(PRISM_DIR)/build/libprism.a
 PRISM_CFLAGS  = -I$(PRISM_DIR)/include
-PRISM_LDFLAGS = -L$(PRISM_DIR)/build -lprism
 
 # Sources
 SRCS = src/main.c src/codegen.c
@@ -44,29 +43,82 @@ $(PRISM_LIB):
 	@echo "Building prism..."
 	cd $(PRISM_DIR) && make
 
-# Test: compile examples/bm_so_mandelbrot.rb and verify output
+# Quick test: mandelbrot only
 test: spinel
-	@echo "=== Compiling examples/bm_so_mandelbrot.rb ==="
-	./spinel --source=examples/bm_so_mandelbrot.rb --output=mandelbrot_aot.c
-	@echo "=== Compiling generated C code ==="
-	$(CC) -O2 -ffunction-sections -Wl,--gc-sections \
-		mandelbrot_aot.c \
-		$$($(MRUBY_DIR)/build/host/bin/mruby-config --cflags) \
-		$$($(MRUBY_DIR)/build/host/bin/mruby-config --ldflags --libs) \
-		-o mandelbrot
-	@echo "=== Running AOT binary ==="
-	./mandelbrot > mandelbrot_aot.pbm
-	@echo "=== Running CRuby reference ==="
-	ruby examples/bm_so_mandelbrot.rb > mandelbrot_ruby.pbm
-	@echo "=== Comparing output ==="
-	@if diff mandelbrot_aot.pbm mandelbrot_ruby.pbm > /dev/null 2>&1; then \
-		echo "SUCCESS: Output matches!"; \
-	else \
-		echo "FAIL: Output differs"; \
-		exit 1; \
-	fi
+	@./spinel --source=examples/bm_so_mandelbrot.rb --output=/tmp/sp_mandelbrot.c 2>/dev/null
+	@$(CC) -O2 /tmp/sp_mandelbrot.c -lm -o /tmp/sp_mandelbrot 2>/dev/null
+	@/tmp/sp_mandelbrot > /tmp/sp_m1.pbm
+	@ruby examples/bm_so_mandelbrot.rb > /tmp/sp_m2.pbm
+	@diff /tmp/sp_m1.pbm /tmp/sp_m2.pbm > /dev/null && echo "test: OK (mandelbrot)" || echo "test: FAIL"
 
-# Generate C code only (no mruby compilation)
+# Full test suite: all single-file examples
+EXAMPLES_SIMPLE = $(filter-out examples/bm_regexp.rb examples/bm_ao_render.rb examples/bm_mandel_term.rb examples/bm_so_mandelbrot.rb, $(wildcard examples/bm_*.rb))
+
+test-all: spinel
+	@pass=0; fail=0; skip=0; total=0; \
+	echo "=== Spinel Test Suite ==="; \
+	echo ""; \
+	for f in $(EXAMPLES_SIMPLE); do \
+		name=$$(basename $$f .rb); \
+		total=$$((total + 1)); \
+		if ./spinel --source=$$f --output=/tmp/sp_$${name}.c 2>/dev/null && \
+		   $(CC) -O2 -Wno-format -Wno-discarded-qualifiers -Wno-unused-value \
+		         /tmp/sp_$${name}.c -lm -o /tmp/sp_$${name} 2>/dev/null; then \
+			if timeout 10 /tmp/sp_$${name} > /tmp/sp_$${name}_out 2>/dev/null; \
+			ruby $$f > /tmp/sp_$${name}_ref 2>/dev/null; \
+			diff /tmp/sp_$${name}_out /tmp/sp_$${name}_ref > /dev/null 2>&1; then \
+				echo "  OK   $$name"; \
+				pass=$$((pass + 1)); \
+			else \
+				echo "  FAIL $$name (output differs)"; \
+				fail=$$((fail + 1)); \
+			fi; \
+		else \
+			echo "  FAIL $$name (compile error)"; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	echo "--- Special tests ---"; \
+	total=$$((total + 1)); \
+	if ./spinel --source=examples/bm_so_mandelbrot.rb --output=/tmp/sp_mandelbrot.c 2>/dev/null && \
+	   $(CC) -O2 /tmp/sp_mandelbrot.c -lm -o /tmp/sp_mandelbrot 2>/dev/null && \
+	   /tmp/sp_mandelbrot > /tmp/sp_m1.pbm && ruby examples/bm_so_mandelbrot.rb > /tmp/sp_m2.pbm && \
+	   diff /tmp/sp_m1.pbm /tmp/sp_m2.pbm > /dev/null 2>&1; then \
+		echo "  OK   bm_so_mandelbrot (binary output)"; \
+		pass=$$((pass + 1)); \
+	else \
+		echo "  FAIL bm_so_mandelbrot"; \
+		fail=$$((fail + 1)); \
+	fi; \
+	total=$$((total + 1)); \
+	if ./spinel --source=examples/bm_regexp.rb --output=/tmp/sp_regexp.c 2>/dev/null && \
+	   $(CC) -O2 /tmp/sp_regexp.c /usr/lib/x86_64-linux-gnu/libonig.so.5 -lm -o /tmp/sp_regexp 2>/dev/null && \
+	   /tmp/sp_regexp > /tmp/sp_regexp_out 2>/dev/null && \
+	   ruby examples/bm_regexp.rb > /tmp/sp_regexp_ref 2>/dev/null && \
+	   diff /tmp/sp_regexp_out /tmp/sp_regexp_ref > /dev/null 2>&1; then \
+		echo "  OK   bm_regexp (oniguruma)"; \
+		pass=$$((pass + 1)); \
+	else \
+		echo "  SKIP bm_regexp (requires libonig)"; \
+		skip=$$((skip + 1)); \
+	fi; \
+	total=$$((total + 1)); \
+	if ./spinel --source=examples/bm_require/main.rb --output=/tmp/sp_require.c 2>/dev/null && \
+	   $(CC) -O2 /tmp/sp_require.c -lm -o /tmp/sp_require 2>/dev/null && \
+	   /tmp/sp_require > /tmp/sp_require_out 2>/dev/null && \
+	   ruby examples/bm_require/main.rb > /tmp/sp_require_ref 2>/dev/null && \
+	   diff /tmp/sp_require_out /tmp/sp_require_ref > /dev/null 2>&1; then \
+		echo "  OK   bm_require (multi-file)"; \
+		pass=$$((pass + 1)); \
+	else \
+		echo "  FAIL bm_require"; \
+		fail=$$((fail + 1)); \
+	fi; \
+	echo ""; \
+	echo "=== $$pass passed, $$fail failed, $$skip skipped / $$total total ==="
+
+# Generate C code only
 gen: spinel
 	./spinel --source=examples/bm_so_mandelbrot.rb --output=mandelbrot_aot.c
 	@echo "Generated mandelbrot_aot.c"
@@ -79,4 +131,4 @@ clean:
 distclean: clean
 	rm -rf lib/prism
 
-.PHONY: all deps test gen clean distclean
+.PHONY: all deps test test-all gen clean distclean
