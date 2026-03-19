@@ -32,6 +32,7 @@ typedef enum {
     SPINEL_TYPE_RANGE,     /* sp_Range (integer range: first..last) */
     SPINEL_TYPE_TIME,      /* sp_Time (wraps time_t) */
     SPINEL_TYPE_RB_ARRAY,  /* sp_RbArray * (heterogeneous array of sp_RbValue) */
+    SPINEL_TYPE_RB_HASH,   /* sp_RbHash * (heterogeneous hash: string key → sp_RbValue) */
 } spinel_type_t;
 
 /* Extended type: kind + optional class name for OBJECT types */
@@ -200,6 +201,9 @@ typedef struct {
 
     /* RbArray: true when sp_RbArray (heterogeneous array) is used */
     bool needs_rb_array;
+
+    /* RbHash: true when sp_RbHash (heterogeneous hash) is used */
+    bool needs_rb_hash;
 
     /* Poly class set: track which classes a POLY func param can hold */
     #define MAX_POLY_CLASSES 8
