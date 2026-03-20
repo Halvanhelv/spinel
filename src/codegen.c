@@ -1419,6 +1419,21 @@ static vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
                 if (strcmp(method, "gsub") == 0 || strcmp(method, "sub") == 0) { free(method); return vt_prim(SPINEL_TYPE_STRING); }
                 if (strcmp(method, "split") == 0) { free(method); return vt_prim(SPINEL_TYPE_STR_ARRAY); }
                 if (strcmp(method, "+") == 0) { free(method); return vt_prim(SPINEL_TYPE_STRING); }
+                if (strcmp(method, "downcase") == 0 || strcmp(method, "strip") == 0 ||
+                    strcmp(method, "chomp") == 0 || strcmp(method, "capitalize") == 0 ||
+                    strcmp(method, "lstrip") == 0 || strcmp(method, "rstrip") == 0 ||
+                    strcmp(method, "ljust") == 0 || strcmp(method, "rjust") == 0 ||
+                    strcmp(method, "center") == 0 || strcmp(method, "tr") == 0 ||
+                    strcmp(method, "delete") == 0 || strcmp(method, "squeeze") == 0 ||
+                    strcmp(method, "freeze") == 0) { free(method); return vt_prim(SPINEL_TYPE_STRING); }
+                if (strcmp(method, "start_with?") == 0 || strcmp(method, "end_with?") == 0 ||
+                    strcmp(method, "empty?") == 0 || strcmp(method, "frozen?") == 0 ||
+                    strcmp(method, "match?") == 0) { free(method); return vt_prim(SPINEL_TYPE_BOOLEAN); }
+                if (strcmp(method, "to_i") == 0 || strcmp(method, "count") == 0 ||
+                    strcmp(method, "ord") == 0) { free(method); return vt_prim(SPINEL_TYPE_INTEGER); }
+                if (strcmp(method, "to_f") == 0) { free(method); return vt_prim(SPINEL_TYPE_FLOAT); }
+                if (strcmp(method, "each_line") == 0 || strcmp(method, "chars") == 0) { free(method); return vt_prim(SPINEL_TYPE_STR_ARRAY); }
+                if (strcmp(method, "bytes") == 0) { free(method); return vt_prim(SPINEL_TYPE_ARRAY); }
             }
             /* File instance methods on FILE-typed receiver */
             if (recv_t.kind == SPINEL_TYPE_FILE) {
@@ -5320,6 +5335,120 @@ static char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 }
                 else if (strcmp(method, "clear") == 0)
                     r = sfmt("(sp_String_clear(%s), %s)", recv, recv);
+                /* Delegate to const char * helpers via sp_String_cstr */
+                else if (strcmp(method, "downcase") == 0)
+                    r = sfmt("sp_str_downcase(sp_String_cstr(%s))", recv);
+                else if (strcmp(method, "strip") == 0)
+                    r = sfmt("sp_str_strip(sp_String_cstr(%s))", recv);
+                else if (strcmp(method, "chomp") == 0)
+                    r = sfmt("sp_str_chomp(sp_String_cstr(%s))", recv);
+                else if (strcmp(method, "capitalize") == 0)
+                    r = sfmt("sp_str_capitalize(sp_String_cstr(%s))", recv);
+                else if (strcmp(method, "start_with?") == 0 && call->arguments &&
+                         call->arguments->arguments.size == 1) {
+                    char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    r = sfmt("sp_str_starts_with(sp_String_cstr(%s), %s)", recv, arg);
+                    free(arg);
+                }
+                else if (strcmp(method, "end_with?") == 0 && call->arguments &&
+                         call->arguments->arguments.size == 1) {
+                    char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    r = sfmt("sp_str_ends_with(sp_String_cstr(%s), %s)", recv, arg);
+                    free(arg);
+                }
+                else if (strcmp(method, "empty?") == 0)
+                    r = sfmt("(sp_String_length(%s) == 0)", recv);
+                else if (strcmp(method, "sub") == 0 && call->arguments &&
+                         call->arguments->arguments.size == 2) {
+                    char *from = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    char *to = codegen_expr(ctx, call->arguments->arguments.nodes[1]);
+                    r = sfmt("sp_str_sub(sp_String_cstr(%s), %s, %s)", recv, from, to);
+                    free(from); free(to);
+                }
+                else if (strcmp(method, "ljust") == 0 && call->arguments) {
+                    char *w = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    if (call->arguments->arguments.size >= 2) {
+                        char *pad = codegen_expr(ctx, call->arguments->arguments.nodes[1]);
+                        r = sfmt("sp_str_ljust(sp_String_cstr(%s), %s, (%s)[0])", recv, w, pad);
+                        free(pad);
+                    } else {
+                        r = sfmt("sp_str_ljust(sp_String_cstr(%s), %s, ' ')", recv, w);
+                    }
+                    free(w);
+                }
+                else if (strcmp(method, "rjust") == 0 && call->arguments) {
+                    char *w = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    if (call->arguments->arguments.size >= 2) {
+                        char *pad = codegen_expr(ctx, call->arguments->arguments.nodes[1]);
+                        r = sfmt("sp_str_rjust(sp_String_cstr(%s), %s, (%s)[0])", recv, w, pad);
+                        free(pad);
+                    } else {
+                        r = sfmt("sp_str_rjust(sp_String_cstr(%s), %s, ' ')", recv, w);
+                    }
+                    free(w);
+                }
+                else if (strcmp(method, "center") == 0 && call->arguments) {
+                    char *w = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    if (call->arguments->arguments.size >= 2) {
+                        char *pad = codegen_expr(ctx, call->arguments->arguments.nodes[1]);
+                        r = sfmt("sp_str_center(sp_String_cstr(%s), %s, (%s)[0])", recv, w, pad);
+                        free(pad);
+                    } else {
+                        r = sfmt("sp_str_center(sp_String_cstr(%s), %s, ' ')", recv, w);
+                    }
+                    free(w);
+                }
+                else if (strcmp(method, "lstrip") == 0)
+                    r = sfmt("sp_str_lstrip(sp_String_cstr(%s))", recv);
+                else if (strcmp(method, "rstrip") == 0)
+                    r = sfmt("sp_str_rstrip(sp_String_cstr(%s))", recv);
+                else if (strcmp(method, "tr") == 0 && call->arguments &&
+                         call->arguments->arguments.size == 2) {
+                    char *from = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    char *to = codegen_expr(ctx, call->arguments->arguments.nodes[1]);
+                    r = sfmt("sp_str_tr(sp_String_cstr(%s), %s, %s)", recv, from, to);
+                    free(from); free(to);
+                }
+                else if (strcmp(method, "delete") == 0 && call->arguments &&
+                         call->arguments->arguments.size == 1) {
+                    char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    r = sfmt("sp_str_delete(sp_String_cstr(%s), %s)", recv, arg);
+                    free(arg);
+                }
+                else if (strcmp(method, "squeeze") == 0)
+                    r = sfmt("sp_str_squeeze(sp_String_cstr(%s))", recv);
+                else if (strcmp(method, "to_i") == 0)
+                    r = sfmt("((mrb_int)strtol(sp_String_cstr(%s), NULL, 10))", recv);
+                else if (strcmp(method, "count") == 0 && call->arguments &&
+                         call->arguments->arguments.size == 1) {
+                    char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    r = sfmt("sp_str_count(sp_String_cstr(%s), %s)", recv, arg);
+                    free(arg);
+                }
+                else if (strcmp(method, "each_line") == 0) {
+                    ctx->needs_str_split = true;
+                    r = sfmt("sp_str_split(sp_String_cstr(%s), \"\\n\")", recv);
+                }
+                else if (strcmp(method, "freeze") == 0)
+                    r = sfmt("sp_String_cstr(%s)", recv);
+                else if (strcmp(method, "frozen?") == 0)
+                    r = xstrdup("FALSE"); /* mutable strings are not frozen */
+                else if (strcmp(method, "chars") == 0) {
+                    ctx->needs_str_split = true;
+                    r = sfmt("sp_str_chars(sp_String_cstr(%s))", recv);
+                }
+                else if (strcmp(method, "bytes") == 0)
+                    r = sfmt("sp_str_bytes(sp_String_cstr(%s))", recv);
+                else if (strcmp(method, "to_f") == 0)
+                    r = sfmt("sp_str_to_f(sp_String_cstr(%s))", recv);
+                else if (strcmp(method, "ord") == 0)
+                    r = sfmt("((mrb_int)(unsigned char)(sp_String_cstr(%s))[0])", recv);
+                else if (strcmp(method, "match?") == 0 && call->arguments &&
+                         call->arguments->arguments.size == 1) {
+                    char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    r = sfmt("(strstr(sp_String_cstr(%s), %s) != NULL)", recv, arg);
+                    free(arg);
+                }
                 if (r) {
                     free(recv); free(method);
                     return r;
