@@ -118,8 +118,12 @@ make test        # quick: mandelbrot only
 spinel/
 ├── src/
 │   ├── main.c          # CLI, file reading, Prism parsing, require resolution
-│   ├── codegen.h       # Type system, class/method/module info structs
-│   └── codegen.c       # Multi-pass code generator (~12200 lines)
+│   ├── codegen.h       # Type system, class/method/module info structs, shared declarations
+│   ├── codegen.c       # Orchestrator, utilities, class analysis, lambda, require
+│   ├── type.c          # Type inference and resolution
+│   ├── expr.c          # Expression code generation
+│   ├── stmt.c          # Statement code generation
+│   └── emit.c          # C code emission (header, structs, methods)
 ├── examples/           # 54 test programs (53 automated)
 ├── prototype/
 │   └── tools/          # RBS extraction, LumiTrace prototype tools
