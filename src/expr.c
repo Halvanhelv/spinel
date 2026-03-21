@@ -3188,6 +3188,19 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(recv); free(method);
                 return r;
             }
+            if (strcmp(method, "to_s") == 0 && recv_t.kind == SPINEL_TYPE_FLOAT) {
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *r = sfmt("sp_float_to_s(%s)", recv);
+                free(recv); free(method);
+                return r;
+            }
+            if (strcmp(method, "to_s") == 0 &&
+                (recv_t.kind == SPINEL_TYPE_VALUE || recv_t.kind == SPINEL_TYPE_UNKNOWN)) {
+                char *recv = codegen_expr(ctx, call->receiver);
+                char *r = sfmt("sp_int_to_s((mrb_int)%s)", recv);
+                free(recv); free(method);
+                return r;
+            }
             if (strcmp(method, "to_i") == 0 && recv_t.kind == SPINEL_TYPE_FLOAT) {
                 char *recv = codegen_expr(ctx, call->receiver);
                 char *r = sfmt("((mrb_int)%s)", recv);

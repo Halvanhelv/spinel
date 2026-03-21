@@ -1737,6 +1737,28 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
             }
         }
 
+        /* receiver.puts / receiver.print on non-FILE (unknown/VALUE) → fallback to stdout */
+        if (call->receiver && (strcmp(method, "puts") == 0 || strcmp(method, "print") == 0)) {
+            vtype_t recv_t = infer_type(ctx, call->receiver);
+            if (recv_t.kind == SPINEL_TYPE_VALUE || recv_t.kind == SPINEL_TYPE_UNKNOWN) {
+                bool is_puts = strcmp(method, "puts") == 0;
+                if (call->arguments && call->arguments->arguments.size > 0) {
+                    char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    if (is_puts)
+                        emit(ctx, "fprintf(stdout, \"%%s\\n\", %s);\n", arg);
+                    else
+                        emit(ctx, "fprintf(stdout, \"%%s\", %s);\n", arg);
+                    free(arg);
+                } else {
+                    if (is_puts)
+                        emit(ctx, "fputc('\\n', stdout);\n");
+                    /* print with no args is a no-op */
+                }
+                free(method);
+                break;
+            }
+        }
+
         /* General call as statement */
         {
             char *expr = codegen_expr(ctx, node);
