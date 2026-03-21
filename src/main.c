@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <unistd.h>
 #include <prism.h>
 #include "codegen.h"
 
@@ -76,7 +77,13 @@ int main(int argc, char **argv) {
     if (lib_path_count == 0) {
         static char default_lib[4096];
         char exe_dir[4096];
-        snprintf(exe_dir, sizeof(exe_dir), "%s", argv[0]);
+        /* Try /proc/self/exe for reliable exe path (Linux) */
+        ssize_t len = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir) - 1);
+        if (len > 0) {
+            exe_dir[len] = '\0';
+        } else {
+            snprintf(exe_dir, sizeof(exe_dir), "%s", argv[0]);
+        }
         char *slash = strrchr(exe_dir, '/');
         if (slash) *slash = '\0'; else snprintf(exe_dir, sizeof(exe_dir), ".");
         snprintf(default_lib, sizeof(default_lib), "%s/lib", exe_dir);
