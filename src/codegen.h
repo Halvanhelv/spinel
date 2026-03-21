@@ -61,7 +61,7 @@ typedef struct {
 } param_info_t;
 
 /* Method info */
-#define MAX_PARAMS 8
+#define MAX_PARAMS 16
 typedef struct {
     char name[64];
     pm_node_t *body_node;  /* AST of the method body */
@@ -73,6 +73,9 @@ typedef struct {
     bool is_setter;        /* simple ivar setter: def x=(v); @x = v; end */
     char accessor_ivar[64]; /* ivar name for getter/setter */
     bool is_class_method;  /* true for def self.foo (class method) */
+    bool has_rest;         /* true if method has *rest parameter */
+    char rest_name[64];    /* name of the rest parameter */
+    bool has_yield;        /* true if method body contains yield */
     pm_parser_t *origin_parser; /* parser that owns this method's AST */
 } method_info_t;
 

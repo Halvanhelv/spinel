@@ -1053,6 +1053,26 @@ vtype_t infer_type(codegen_ctx_t *ctx, pm_node_t *node) {
         return t;
     }
 
+    case PM_LOCAL_VARIABLE_OR_WRITE_NODE: {
+        pm_local_variable_or_write_node_t *n =
+            (pm_local_variable_or_write_node_t *)node;
+        char *name = cstr(ctx, n->name);
+        var_entry_t *v = var_lookup(ctx, name);
+        vtype_t t = v ? v->type : infer_type(ctx, n->value);
+        free(name);
+        return t;
+    }
+
+    case PM_LOCAL_VARIABLE_AND_WRITE_NODE: {
+        pm_local_variable_and_write_node_t *n =
+            (pm_local_variable_and_write_node_t *)node;
+        char *name = cstr(ctx, n->name);
+        var_entry_t *v = var_lookup(ctx, name);
+        vtype_t t = v ? v->type : infer_type(ctx, n->value);
+        free(name);
+        return t;
+    }
+
     case PM_INSTANCE_VARIABLE_OPERATOR_WRITE_NODE: {
         pm_instance_variable_operator_write_node_t *n =
             (pm_instance_variable_operator_write_node_t *)node;
@@ -1145,6 +1165,28 @@ void infer_pass(codegen_ctx_t *ctx, pm_node_t *node) {
         } else {
             var_declare(ctx, name, rhs_type, false);
         }
+        free(name);
+        break;
+    }
+    case PM_LOCAL_VARIABLE_OR_WRITE_NODE: {
+        pm_local_variable_or_write_node_t *n =
+            (pm_local_variable_or_write_node_t *)node;
+        infer_pass(ctx, n->value);
+        char *name = cstr(ctx, n->name);
+        vtype_t type = infer_type(ctx, n->value);
+        var_entry_t *v = var_lookup(ctx, name);
+        if (!v) var_declare(ctx, name, type, false);
+        free(name);
+        break;
+    }
+    case PM_LOCAL_VARIABLE_AND_WRITE_NODE: {
+        pm_local_variable_and_write_node_t *n =
+            (pm_local_variable_and_write_node_t *)node;
+        infer_pass(ctx, n->value);
+        char *name = cstr(ctx, n->name);
+        vtype_t type = infer_type(ctx, n->value);
+        var_entry_t *v = var_lookup(ctx, name);
+        if (!v) var_declare(ctx, name, type, false);
         free(name);
         break;
     }
@@ -1357,6 +1399,37 @@ void infer_pass(codegen_ctx_t *ctx, pm_node_t *node) {
     case PM_YIELD_NODE:
         /* yield nodes are handled during codegen */
         break;
+    case PM_MULTI_WRITE_NODE: {
+        pm_multi_write_node_t *mw = (pm_multi_write_node_t *)node;
+        /* Register left-hand-side variables */
+        for (size_t i = 0; i < mw->lefts.size; i++) {
+            pm_node_t *l = mw->lefts.nodes[i];
+            if (PM_NODE_TYPE(l) == PM_LOCAL_VARIABLE_TARGET_NODE) {
+                pm_local_variable_target_node_t *t = (pm_local_variable_target_node_t *)l;
+                char *vname = cstr(ctx, t->name);
+                vtype_t et = vt_prim(SPINEL_TYPE_INTEGER);
+                /* If RHS is array literal, infer element type */
+                if (PM_NODE_TYPE(mw->value) == PM_ARRAY_NODE) {
+                    pm_array_node_t *ary = (pm_array_node_t *)mw->value;
+                    if (i < ary->elements.size)
+                        et = infer_type(ctx, ary->elements.nodes[i]);
+                }
+                var_declare(ctx, vname, et, false);
+                free(vname);
+            }
+        }
+        /* Also handle rest (*rest) target */
+        if (mw->rest && PM_NODE_TYPE(mw->rest) == PM_SPLAT_NODE) {
+            pm_splat_node_t *spl = (pm_splat_node_t *)mw->rest;
+            if (spl->expression && PM_NODE_TYPE(spl->expression) == PM_LOCAL_VARIABLE_TARGET_NODE) {
+                pm_local_variable_target_node_t *t = (pm_local_variable_target_node_t *)spl->expression;
+                char *vname = cstr(ctx, t->name);
+                var_declare(ctx, vname, vt_prim(SPINEL_TYPE_ARRAY), false);
+                free(vname);
+            }
+        }
+        break;
+    }
     case PM_BEGIN_NODE: {
         pm_begin_node_t *bn = (pm_begin_node_t *)node;
         if (bn->statements) infer_pass(ctx, (pm_node_t *)bn->statements);

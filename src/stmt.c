@@ -149,6 +149,28 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
         break;
     }
 
+    case PM_LOCAL_VARIABLE_OR_WRITE_NODE: {
+        pm_local_variable_or_write_node_t *n =
+            (pm_local_variable_or_write_node_t *)node;
+        char *name = cstr(ctx, n->name);
+        char *cn = make_cname(name, false);
+        char *val = codegen_expr(ctx, n->value);
+        emit(ctx, "if (!%s) %s = %s;\n", cn, cn, val);
+        free(name); free(cn); free(val);
+        break;
+    }
+
+    case PM_LOCAL_VARIABLE_AND_WRITE_NODE: {
+        pm_local_variable_and_write_node_t *n =
+            (pm_local_variable_and_write_node_t *)node;
+        char *name = cstr(ctx, n->name);
+        char *cn = make_cname(name, false);
+        char *val = codegen_expr(ctx, n->value);
+        emit(ctx, "if (%s) %s = %s;\n", cn, cn, val);
+        free(name); free(cn); free(val);
+        break;
+    }
+
     case PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE: {
         pm_local_variable_operator_write_node_t *n =
             (pm_local_variable_operator_write_node_t *)node;
@@ -1972,6 +1994,35 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
                 }
             }
             ctx->indent--; emit(ctx, "}\n");
+        } else {
+            /* RHS is a variable or expression — unpack via sp_IntArray_get */
+            char *rhs = codegen_expr(ctx, n->value);
+            for (size_t i = 0; i < n->lefts.size; i++) {
+                if (PM_NODE_TYPE(n->lefts.nodes[i]) == PM_LOCAL_VARIABLE_TARGET_NODE) {
+                    pm_local_variable_target_node_t *t = (pm_local_variable_target_node_t *)n->lefts.nodes[i];
+                    char *vn = cstr(ctx, t->name);
+                    char *cn = make_cname(vn, false);
+                    emit(ctx, "%s = sp_IntArray_get(%s, %d);\n", cn, rhs, (int)i);
+                    free(vn); free(cn);
+                }
+            }
+            /* Handle rest (*rest) */
+            if (n->rest && PM_NODE_TYPE(n->rest) == PM_SPLAT_NODE) {
+                pm_splat_node_t *spl = (pm_splat_node_t *)n->rest;
+                if (spl->expression && PM_NODE_TYPE(spl->expression) == PM_LOCAL_VARIABLE_TARGET_NODE) {
+                    pm_local_variable_target_node_t *t = (pm_local_variable_target_node_t *)spl->expression;
+                    char *vn = cstr(ctx, t->name);
+                    char *cn = make_cname(vn, false);
+                    int tmp = ctx->temp_counter++;
+                    emit(ctx, "{ sp_IntArray *_rest_%d = sp_IntArray_new();\n", tmp);
+                    emit(ctx, "  for (mrb_int _ri_%d = %d; _ri_%d < sp_IntArray_length(%s); _ri_%d++)\n",
+                         tmp, (int)n->lefts.size, tmp, rhs, tmp);
+                    emit(ctx, "    sp_IntArray_push(_rest_%d, sp_IntArray_get(%s, _ri_%d));\n", tmp, rhs, tmp);
+                    emit(ctx, "  %s = _rest_%d; }\n", cn, tmp);
+                    free(vn); free(cn);
+                }
+            }
+            free(rhs);
         }
         break;
     }
@@ -2027,6 +2078,8 @@ void codegen_stmts(codegen_ctx_t *ctx, pm_node_t *node) {
                 PM_NODE_TYPE(stmt) != PM_CONSTANT_WRITE_NODE &&
                 PM_NODE_TYPE(stmt) != PM_INSTANCE_VARIABLE_WRITE_NODE &&
                 PM_NODE_TYPE(stmt) != PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE &&
+                PM_NODE_TYPE(stmt) != PM_LOCAL_VARIABLE_OR_WRITE_NODE &&
+                PM_NODE_TYPE(stmt) != PM_LOCAL_VARIABLE_AND_WRITE_NODE &&
                 PM_NODE_TYPE(stmt) != PM_BREAK_NODE) {
                 char *val = codegen_expr(ctx, stmt);
                 if (val && strcmp(val, "/* nil */") != 0) {

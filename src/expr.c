@@ -1040,6 +1040,17 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                         free(args); free(a);
                         args = na;
                     }
+                    /* Fill in default values for optional params */
+                    if (init_m) {
+                        for (int i = argc; i < init_m->param_count; i++) {
+                            if (init_m->params[i].is_optional && init_m->params[i].default_node) {
+                                char *def = codegen_expr(ctx, (pm_node_t *)init_m->params[i].default_node);
+                                char *na = sfmt("%s%s%s", args, i > 0 ? ", " : "", def);
+                                free(args); free(def);
+                                args = na;
+                            }
+                        }
+                    }
                 }
                 char *r = sfmt("sp_%s_new(%s)", cls_name, args);
                 free(cls_name); free(args); free(method);
@@ -1418,7 +1429,7 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                          call->arguments &&
                          call->arguments->arguments.size == 1) {
                     char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
-                    r = sfmt("sp_IntArray_push(%s, %s)", recv, arg);
+                    r = sfmt("(sp_IntArray_push(%s, %s), %s)", recv, arg, recv);
                     free(arg);
                 }
                 else if (strcmp(method, "insert") == 0 && call->arguments &&
@@ -4347,6 +4358,26 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
             emit(ctx, "return 0;\n");
         }
         return xstrdup("0"); /* unreachable but needed for expression context */
+    }
+
+    case PM_LOCAL_VARIABLE_OR_WRITE_NODE: {
+        pm_local_variable_or_write_node_t *n = (pm_local_variable_or_write_node_t *)node;
+        char *name = cstr(ctx, n->name);
+        char *cn = make_cname(name, false);
+        char *val = codegen_expr(ctx, n->value);
+        char *r = sfmt("(%s ? %s : (%s = %s))", cn, cn, cn, val);
+        free(name); free(cn); free(val);
+        return r;
+    }
+
+    case PM_LOCAL_VARIABLE_AND_WRITE_NODE: {
+        pm_local_variable_and_write_node_t *n = (pm_local_variable_and_write_node_t *)node;
+        char *name = cstr(ctx, n->name);
+        char *cn = make_cname(name, false);
+        char *val = codegen_expr(ctx, n->value);
+        char *r = sfmt("(%s ? (%s = %s) : %s)", cn, cn, val, cn);
+        free(name); free(cn); free(val);
+        return r;
     }
 
     case PM_INSTANCE_VARIABLE_OR_WRITE_NODE: {

@@ -366,6 +366,55 @@ static void analyze_method(codegen_ctx_t *ctx, class_info_t *cls,
                 free(pname);
             }
         }
+        /* Optional parameters (def foo(x = 10)) */
+        for (size_t i = 0; i < params->optionals.size && m->param_count < MAX_PARAMS; i++) {
+            pm_node_t *p = params->optionals.nodes[i];
+            if (PM_NODE_TYPE(p) == PM_OPTIONAL_PARAMETER_NODE) {
+                pm_optional_parameter_node_t *op = (pm_optional_parameter_node_t *)p;
+                char *pname = cstr(ctx, op->name);
+                snprintf(m->params[m->param_count].name, 64, "%s", pname);
+                m->params[m->param_count].type = infer_type(ctx, op->value);
+                m->params[m->param_count].is_optional = true;
+                m->params[m->param_count].default_node = op->value;
+                m->param_count++;
+                free(pname);
+            }
+        }
+        /* Rest parameter (def foo(*args)) */
+        if (params->rest && PM_NODE_TYPE(params->rest) == PM_REST_PARAMETER_NODE) {
+            pm_rest_parameter_node_t *rp = (pm_rest_parameter_node_t *)params->rest;
+            if (rp->name) {
+                char *pname = cstr(ctx, rp->name);
+                m->has_rest = true;
+                snprintf(m->rest_name, sizeof(m->rest_name), "%s", pname);
+                snprintf(m->params[m->param_count].name, 64, "%s", pname);
+                m->params[m->param_count].type = vt_prim(SPINEL_TYPE_ARRAY);
+                m->param_count++;
+                free(pname);
+            }
+        }
+        /* Keyword parameters (def foo(name:, greeting: "Hello")) */
+        for (size_t i = 0; i < params->keywords.size && m->param_count < MAX_PARAMS; i++) {
+            pm_node_t *p = params->keywords.nodes[i];
+            if (PM_NODE_TYPE(p) == PM_REQUIRED_KEYWORD_PARAMETER_NODE) {
+                pm_required_keyword_parameter_node_t *kp = (pm_required_keyword_parameter_node_t *)p;
+                char *pname = cstr(ctx, kp->name);
+                snprintf(m->params[m->param_count].name, 64, "%s", pname);
+                m->params[m->param_count].type = vt_prim(SPINEL_TYPE_VALUE);
+                m->param_count++;
+                free(pname);
+            }
+            if (PM_NODE_TYPE(p) == PM_OPTIONAL_KEYWORD_PARAMETER_NODE) {
+                pm_optional_keyword_parameter_node_t *kp = (pm_optional_keyword_parameter_node_t *)p;
+                char *pname = cstr(ctx, kp->name);
+                snprintf(m->params[m->param_count].name, 64, "%s", pname);
+                m->params[m->param_count].type = infer_type(ctx, kp->value);
+                m->params[m->param_count].is_optional = true;
+                m->params[m->param_count].default_node = kp->value;
+                m->param_count++;
+                free(pname);
+            }
+        }
     }
 
     /* Detect getter pattern: def x; @x; end */
@@ -417,10 +466,11 @@ static void analyze_ivars_from_init(codegen_ctx_t *ctx, class_info_t *cls,
             pm_instance_variable_write_node_t *iw =
                 (pm_instance_variable_write_node_t *)s;
             char *ivname = cstr(ctx, iw->name);
+            const char *escaped = escape_c_keyword(ivname + 1);
             /* Skip if already registered (e.g., from attr_accessor) */
-            if (!find_ivar(cls, ivname + 1) && cls->ivar_count < MAX_IVARS) {
+            if (!find_ivar(cls, escaped) && cls->ivar_count < MAX_IVARS) {
                 ivar_info_t *iv = &cls->ivars[cls->ivar_count++];
-                snprintf(iv->name, sizeof(iv->name), "%s", escape_c_keyword(ivname + 1));
+                snprintf(iv->name, sizeof(iv->name), "%s", escaped);
                 /* Type will be resolved in pass 2 */
                 iv->type = vt_prim(SPINEL_TYPE_VALUE);
             }
@@ -438,9 +488,10 @@ static void scan_ivars_deep(codegen_ctx_t *ctx, class_info_t *cls, pm_node_t *no
         pm_instance_variable_write_node_t *iw =
             (pm_instance_variable_write_node_t *)node;
         char *ivname = cstr(ctx, iw->name);
-        if (!find_ivar(cls, ivname + 1) && cls->ivar_count < MAX_IVARS) {
+        const char *esc = escape_c_keyword(ivname + 1);
+        if (!find_ivar(cls, esc) && cls->ivar_count < MAX_IVARS) {
             ivar_info_t *iv = &cls->ivars[cls->ivar_count++];
-            snprintf(iv->name, sizeof(iv->name), "%s", escape_c_keyword(ivname + 1));
+            snprintf(iv->name, sizeof(iv->name), "%s", esc);
             iv->type = vt_prim(SPINEL_TYPE_VALUE);
         }
         free(ivname);
@@ -450,12 +501,27 @@ static void scan_ivars_deep(codegen_ctx_t *ctx, class_info_t *cls, pm_node_t *no
         pm_instance_variable_operator_write_node_t *iw =
             (pm_instance_variable_operator_write_node_t *)node;
         char *ivname = cstr(ctx, iw->name);
-        if (!find_ivar(cls, ivname + 1) && cls->ivar_count < MAX_IVARS) {
+        const char *esc = escape_c_keyword(ivname + 1);
+        if (!find_ivar(cls, esc) && cls->ivar_count < MAX_IVARS) {
             ivar_info_t *iv = &cls->ivars[cls->ivar_count++];
-            snprintf(iv->name, sizeof(iv->name), "%s", escape_c_keyword(ivname + 1));
+            snprintf(iv->name, sizeof(iv->name), "%s", esc);
             iv->type = vt_prim(SPINEL_TYPE_VALUE);
         }
         free(ivname);
+        break;
+    }
+    case PM_INSTANCE_VARIABLE_OR_WRITE_NODE: {
+        pm_instance_variable_or_write_node_t *iw =
+            (pm_instance_variable_or_write_node_t *)node;
+        char *ivname = cstr(ctx, iw->name);
+        const char *esc = escape_c_keyword(ivname + 1);
+        if (!find_ivar(cls, esc) && cls->ivar_count < MAX_IVARS) {
+            ivar_info_t *iv = &cls->ivars[cls->ivar_count++];
+            snprintf(iv->name, sizeof(iv->name), "%s", esc);
+            iv->type = vt_prim(SPINEL_TYPE_VALUE);
+        }
+        free(ivname);
+        scan_ivars_deep(ctx, cls, iw->value);
         break;
     }
     case PM_STATEMENTS_NODE: {
@@ -527,6 +593,21 @@ static void scan_ivars_deep(codegen_ctx_t *ctx, class_info_t *cls, pm_node_t *no
     }
     case PM_LOCAL_VARIABLE_WRITE_NODE: {
         pm_local_variable_write_node_t *n = (pm_local_variable_write_node_t *)node;
+        scan_ivars_deep(ctx, cls, n->value);
+        break;
+    }
+    case PM_LOCAL_VARIABLE_OR_WRITE_NODE: {
+        pm_local_variable_or_write_node_t *n = (pm_local_variable_or_write_node_t *)node;
+        scan_ivars_deep(ctx, cls, n->value);
+        break;
+    }
+    case PM_LOCAL_VARIABLE_AND_WRITE_NODE: {
+        pm_local_variable_and_write_node_t *n = (pm_local_variable_and_write_node_t *)node;
+        scan_ivars_deep(ctx, cls, n->value);
+        break;
+    }
+    case PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE: {
+        pm_local_variable_operator_write_node_t *n = (pm_local_variable_operator_write_node_t *)node;
         scan_ivars_deep(ctx, cls, n->value);
         break;
     }
@@ -2555,24 +2636,6 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
         emit_raw(ctx, "\n");
     }
 
-    /* Initialize functions for superclasses (called via super) */
-    for (int i = 0; i < ctx->class_count; i++) {
-        pm_parser_t *saved = ctx->parser;
-        if (ctx->classes[i].origin_parser)
-            ctx->parser = ctx->classes[i].origin_parser;
-        emit_initialize_func(ctx, &ctx->classes[i]);
-        ctx->parser = saved;
-    }
-
-    /* Constructors */
-    for (int i = 0; i < ctx->class_count; i++) {
-        pm_parser_t *saved = ctx->parser;
-        if (ctx->classes[i].origin_parser)
-            ctx->parser = ctx->classes[i].origin_parser;
-        emit_constructor(ctx, &ctx->classes[i]);
-        ctx->parser = saved;
-    }
-
     /* Forward declarations for class methods (sanitize operator names) */
     for (int i = 0; i < ctx->class_count; i++) {
         class_info_t *cls = &ctx->classes[i];
@@ -2614,6 +2677,24 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
         }
     }
     emit_raw(ctx, "\n");
+
+    /* Initialize functions for superclasses (called via super) */
+    for (int i = 0; i < ctx->class_count; i++) {
+        pm_parser_t *saved = ctx->parser;
+        if (ctx->classes[i].origin_parser)
+            ctx->parser = ctx->classes[i].origin_parser;
+        emit_initialize_func(ctx, &ctx->classes[i]);
+        ctx->parser = saved;
+    }
+
+    /* Constructors */
+    for (int i = 0; i < ctx->class_count; i++) {
+        pm_parser_t *saved = ctx->parser;
+        if (ctx->classes[i].origin_parser)
+            ctx->parser = ctx->classes[i].origin_parser;
+        emit_constructor(ctx, &ctx->classes[i]);
+        ctx->parser = saved;
+    }
 
     /* Class methods */
     for (int i = 0; i < ctx->class_count; i++) {

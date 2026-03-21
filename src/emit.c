@@ -158,7 +158,7 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
 
     for (int i = 0; i < init->param_count; i++) {
         if (i > 0) emit_raw(ctx, ", ");
-        char *ct = vt_ctype(ctx, init->params[i].type, false);
+        char *ct = vt_ctype(ctx, init->params[i].type, true);
         emit_raw(ctx, "%s lv_%s", ct, init->params[i].name);
         free(ct);
     }
@@ -393,7 +393,7 @@ void emit_method(codegen_ctx_t *ctx, class_info_t *cls, method_info_t *m) {
             continue;
         }
         else if (v->type.kind == SPINEL_TYPE_ARRAY) {
-            emit(ctx, "%s *%s = NULL;\n", ct, cn);
+            emit(ctx, "%s %s = NULL;\n", ct, cn);
             if (method_has_gc_vars)
                 emit(ctx, "SP_GC_ROOT(%s);\n", cn);
             free(ct); free(cn);
