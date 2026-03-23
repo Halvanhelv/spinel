@@ -709,12 +709,26 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
                 free(left); free(right); free(method);
                 return r;
             }
-            /* string == nil → (str == NULL), string != nil → (str != NULL) */
-            if (lt.kind == SPINEL_TYPE_STRING && rt.kind == SPINEL_TYPE_NIL) {
+            /* pointer == nil → (ptr == NULL) for STRING, OBJECT, ARRAY, etc. */
+            if (rt.kind == SPINEL_TYPE_NIL &&
+                (lt.kind == SPINEL_TYPE_STRING || lt.kind == SPINEL_TYPE_OBJECT ||
+                 lt.kind == SPINEL_TYPE_ARRAY || lt.kind == SPINEL_TYPE_FLOAT_ARRAY ||
+                 lt.kind == SPINEL_TYPE_SP_STRING || lt.kind == SPINEL_TYPE_HASH)) {
                 if (strcmp(method, "==") == 0 || strcmp(method, "!=") == 0) {
                     char *left = codegen_expr(ctx, call->receiver);
                     char *r = sfmt("(%s %s NULL)", left, strcmp(method, "==") == 0 ? "==" : "!=");
                     free(left); free(method);
+                    return r;
+                }
+            }
+            /* nil == pointer (reversed) */
+            if (lt.kind == SPINEL_TYPE_NIL &&
+                (rt.kind == SPINEL_TYPE_STRING || rt.kind == SPINEL_TYPE_OBJECT ||
+                 rt.kind == SPINEL_TYPE_ARRAY || rt.kind == SPINEL_TYPE_FLOAT_ARRAY)) {
+                if (strcmp(method, "==") == 0 || strcmp(method, "!=") == 0) {
+                    char *right = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
+                    char *r = sfmt("(%s %s NULL)", right, strcmp(method, "==") == 0 ? "==" : "!=");
+                    free(right); free(method);
                     return r;
                 }
             }
