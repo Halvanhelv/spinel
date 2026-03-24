@@ -1476,6 +1476,10 @@ void infer_pass(codegen_ctx_t *ctx, pm_node_t *node) {
         break;
     case PM_MULTI_WRITE_NODE: {
         pm_multi_write_node_t *mw = (pm_multi_write_node_t *)node;
+        /* Infer element type from RHS */
+        vtype_t rhs_type = vt_prim(SPINEL_TYPE_UNKNOWN);
+        if (PM_NODE_TYPE(mw->value) != PM_ARRAY_NODE)
+            rhs_type = infer_type(ctx, mw->value);
         /* Register left-hand-side variables */
         for (size_t i = 0; i < mw->lefts.size; i++) {
             pm_node_t *l = mw->lefts.nodes[i];
@@ -1483,11 +1487,15 @@ void infer_pass(codegen_ctx_t *ctx, pm_node_t *node) {
                 pm_local_variable_target_node_t *t = (pm_local_variable_target_node_t *)l;
                 char *vname = cstr(ctx, t->name);
                 vtype_t et = vt_prim(SPINEL_TYPE_INTEGER);
-                /* If RHS is array literal, infer element type */
                 if (PM_NODE_TYPE(mw->value) == PM_ARRAY_NODE) {
+                    /* If RHS is array literal, infer element type */
                     pm_array_node_t *ary = (pm_array_node_t *)mw->value;
                     if (i < ary->elements.size)
                         et = infer_type(ctx, ary->elements.nodes[i]);
+                } else if (rhs_type.kind == SPINEL_TYPE_FLOAT_ARRAY) {
+                    et = vt_prim(SPINEL_TYPE_FLOAT);
+                } else if (rhs_type.kind == SPINEL_TYPE_ARRAY) {
+                    et = vt_prim(SPINEL_TYPE_INTEGER);
                 }
                 var_declare(ctx, vname, et, false);
                 free(vname);
@@ -1935,6 +1943,10 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                         pm_local_variable_write_node_t *lw = (pm_local_variable_write_node_t *)s;
                         if (ms_sp < 255) ms_stack[ms_sp++] = lw->value;
                     }
+                    if (PM_NODE_TYPE(s) == PM_MULTI_WRITE_NODE) {
+                        pm_multi_write_node_t *mw = (pm_multi_write_node_t *)s;
+                        if (ms_sp < 255) ms_stack[ms_sp++] = mw->value;
+                    }
                     if (PM_NODE_TYPE(s) == PM_STATEMENTS_NODE) {
                         pm_statements_node_t *ss = (pm_statements_node_t *)s;
                         for (size_t si2 = 0; si2 < ss->body.size && ms_sp < 255; si2++)
@@ -2105,6 +2117,10 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                     if (PM_NODE_TYPE(s) == PM_LOCAL_VARIABLE_WRITE_NODE) {
                         pm_local_variable_write_node_t *lw = (pm_local_variable_write_node_t *)s;
                         if (tl_sp < 255) tl_stack[tl_sp++] = lw->value;
+                    }
+                    if (PM_NODE_TYPE(s) == PM_MULTI_WRITE_NODE) {
+                        pm_multi_write_node_t *mw = (pm_multi_write_node_t *)s;
+                        if (tl_sp < 255) tl_stack[tl_sp++] = mw->value;
                     }
                     if (PM_NODE_TYPE(s) == PM_STATEMENTS_NODE) {
                         pm_statements_node_t *ss = (pm_statements_node_t *)s;
@@ -2306,6 +2322,10 @@ void resolve_class_types(codegen_ctx_t *ctx, pm_node_t *prog_root) {
                 if (PM_NODE_TYPE(cur) == PM_LOCAL_VARIABLE_WRITE_NODE) {
                     pm_local_variable_write_node_t *lw = (pm_local_variable_write_node_t *)cur;
                     if (sp < 255) stack[sp++] = lw->value;
+                }
+                if (PM_NODE_TYPE(cur) == PM_MULTI_WRITE_NODE) {
+                    pm_multi_write_node_t *mw = (pm_multi_write_node_t *)cur;
+                    if (sp < 255) stack[sp++] = mw->value;
                 }
                 if (PM_NODE_TYPE(cur) == PM_BEGIN_NODE) {
                     pm_begin_node_t *bn = (pm_begin_node_t *)cur;

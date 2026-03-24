@@ -2119,14 +2119,26 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
             }
             ctx->indent--; emit(ctx, "}\n");
         } else {
-            /* RHS is a variable or expression — unpack via sp_IntArray_get */
-            char *rhs = codegen_expr(ctx, n->value);
+            /* RHS is a variable or expression — evaluate once, unpack via sp_IntArray_get */
+            vtype_t rhs_type = infer_type(ctx, n->value);
+            char *rhs_expr = codegen_expr(ctx, n->value);
+            int mv_id = ctx->temp_counter++;
+            const char *arr_type = "sp_IntArray";
+            const char *get_fn = "sp_IntArray_get";
+            const char *len_fn = "sp_IntArray_length";
+            if (rhs_type.kind == SPINEL_TYPE_FLOAT_ARRAY) {
+                arr_type = "sp_FloatArray";
+                get_fn = "sp_FloatArray_get";
+                len_fn = "sp_FloatArray_length";
+            }
+            emit(ctx, "{ %s *_mv_%d = %s;\n", arr_type, mv_id, rhs_expr);
+            ctx->indent++;
             for (size_t i = 0; i < n->lefts.size; i++) {
                 if (PM_NODE_TYPE(n->lefts.nodes[i]) == PM_LOCAL_VARIABLE_TARGET_NODE) {
                     pm_local_variable_target_node_t *t = (pm_local_variable_target_node_t *)n->lefts.nodes[i];
                     char *vn = cstr(ctx, t->name);
                     char *cn = make_cname(vn, false);
-                    emit(ctx, "%s = sp_IntArray_get(%s, %d);\n", cn, rhs, (int)i);
+                    emit(ctx, "%s = %s(_mv_%d, %d);\n", cn, get_fn, mv_id, (int)i);
                     free(vn); free(cn);
                 }
             }
@@ -2138,15 +2150,17 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
                     char *vn = cstr(ctx, t->name);
                     char *cn = make_cname(vn, false);
                     int tmp = ctx->temp_counter++;
-                    emit(ctx, "{ sp_IntArray *_rest_%d = sp_IntArray_new();\n", tmp);
-                    emit(ctx, "  for (mrb_int _ri_%d = %d; _ri_%d < sp_IntArray_length(%s); _ri_%d++)\n",
-                         tmp, (int)n->lefts.size, tmp, rhs, tmp);
-                    emit(ctx, "    sp_IntArray_push(_rest_%d, sp_IntArray_get(%s, _ri_%d));\n", tmp, rhs, tmp);
+                    emit(ctx, "{ %s *_rest_%d = %s_new();\n", arr_type, tmp, arr_type);
+                    emit(ctx, "  for (mrb_int _ri_%d = %d; _ri_%d < %s(_mv_%d); _ri_%d++)\n",
+                         tmp, (int)n->lefts.size, tmp, len_fn, mv_id, tmp);
+                    emit(ctx, "    %s_push(_rest_%d, %s(_mv_%d, _ri_%d));\n", arr_type, tmp, get_fn, mv_id, tmp);
                     emit(ctx, "  %s = _rest_%d; }\n", cn, tmp);
                     free(vn); free(cn);
                 }
             }
-            free(rhs);
+            ctx->indent--;
+            emit(ctx, "}\n");
+            free(rhs_expr);
         }
         break;
     }
