@@ -1048,26 +1048,49 @@ void emit_header(codegen_ctx_t *ctx) {
         emit_raw(ctx, "    return r;\n}\n\n");
     }
 
-    /* ---- String helpers ---- */
+    /* ---- String helpers (only emit those actually referenced) ---- */
+    /* Build a combined source string for method name detection */
+    const char *_src = (const char *)ctx->parser->start;
+    size_t _slen = ctx->parser->end - ctx->parser->start;
+    /* Also check required file sources */
+    char *_all_src = (char *)malloc(_slen + 1);
+    memcpy(_all_src, _src, _slen); _all_src[_slen] = '\0';
+    for (int _ri = 0; _ri < ctx->required_file_count; _ri++) {
+        if (!ctx->required_files[_ri].source) continue;
+        size_t rl = strlen(ctx->required_files[_ri].source);
+        _all_src = (char *)realloc(_all_src, _slen + rl + 2);
+        _all_src[_slen] = '\n'; memcpy(_all_src + _slen + 1, ctx->required_files[_ri].source, rl + 1);
+        _slen += rl + 1;
+    }
+    #define SRC_HAS(s) (memmem(_all_src, _slen, s, sizeof(s)-1) != NULL)
+    if (SRC_HAS("upcase") || ctx->needs_sp_string) {
     emit_raw(ctx, "static const char *sp_str_upcase(const char *s) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
     emit_raw(ctx, "    for (size_t i = 0; i <= n; i++) r[i] = toupper((unsigned char)s[i]);\n");
     emit_raw(ctx, "    return r;\n}\n");
+    }
+    if (SRC_HAS("downcase") || ctx->needs_sp_string) {
     emit_raw(ctx, "static const char *sp_str_downcase(const char *s) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
     emit_raw(ctx, "    for (size_t i = 0; i <= n; i++) r[i] = tolower((unsigned char)s[i]);\n");
     emit_raw(ctx, "    return r;\n}\n");
+    }
+    /* sp_str_concat and sp_int_to_s: needed for string interpolation and + operator */
+    if (SRC_HAS("\"") || SRC_HAS("+") || SRC_HAS("to_s")) {
     emit_raw(ctx, "static const char *sp_str_concat(const char *a, const char *b) {\n");
     emit_raw(ctx, "    size_t la = strlen(a), lb = strlen(b);\n");
     emit_raw(ctx, "    char *r = (char *)malloc(la + lb + 1);\n");
     emit_raw(ctx, "    memcpy(r, a, la); memcpy(r + la, b, lb + 1); return r;\n}\n");
     emit_raw(ctx, "static const char *sp_int_to_s(mrb_int n) {\n");
     emit_raw(ctx, "    char *r = (char *)malloc(24); snprintf(r, 24, \"%%lld\", (long long)n); return r;\n}\n");
+    }
+    if (SRC_HAS("[")) {
     emit_raw(ctx, "static const char *sp_str_char_at(const char *s, mrb_int idx) {\n");
     emit_raw(ctx, "    mrb_int len = (mrb_int)strlen(s);\n");
     emit_raw(ctx, "    if (idx < 0) idx += len;\n");
     emit_raw(ctx, "    if (idx < 0 || idx >= len) return \"\";\n");
     emit_raw(ctx, "    char *r = (char *)malloc(2); r[0] = s[idx]; r[1] = '\\0'; return r;\n}\n\n");
+    }
 
     /* ---- File I/O helpers (only when needed) ---- */
     if (ctx->needs_file_io) {
@@ -1217,43 +1240,51 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "static int64_t sp_StringIO_fileno(sp_StringIO *s) { (void)s; return -1; }\n\n");
     } /* needs_stringio */
 
-    /* ---- Additional string helpers ---- */
+    /* ---- Additional string helpers (conditional) ---- */
+    if (SRC_HAS("strip")) {
     emit_raw(ctx, "static const char *sp_str_strip(const char *s) {\n");
     emit_raw(ctx, "    while (*s && isspace((unsigned char)*s)) s++;\n");
     emit_raw(ctx, "    size_t n = strlen(s);\n");
     emit_raw(ctx, "    while (n > 0 && isspace((unsigned char)s[n-1])) n--;\n");
     emit_raw(ctx, "    char *r = (char *)malloc(n + 1);\n");
     emit_raw(ctx, "    memcpy(r, s, n); r[n] = '\\0'; return r;\n}\n");
-
+    }
+    if (SRC_HAS("chomp")) {
     emit_raw(ctx, "static const char *sp_str_chomp(const char *s) {\n");
     emit_raw(ctx, "    size_t n = strlen(s);\n");
     emit_raw(ctx, "    if (n > 0 && s[n-1] == '\\n') { if (n > 1 && s[n-2] == '\\r') n--; n--; }\n");
     emit_raw(ctx, "    char *r = (char *)malloc(n + 1);\n");
     emit_raw(ctx, "    memcpy(r, s, n); r[n] = '\\0'; return r;\n}\n");
-
+    }
+    if (SRC_HAS("capitalize")) {
     emit_raw(ctx, "static const char *sp_str_capitalize(const char *s) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
     emit_raw(ctx, "    for (size_t i = 0; i <= n; i++) r[i] = (i == 0) ? toupper((unsigned char)s[i]) : tolower((unsigned char)s[i]);\n");
     emit_raw(ctx, "    return r;\n}\n");
-
+    }
+    if (SRC_HAS("reverse") || ctx->needs_sp_string) {
     emit_raw(ctx, "static const char *sp_str_reverse(const char *s) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
     emit_raw(ctx, "    for (size_t i = 0; i < n; i++) r[i] = s[n - 1 - i];\n");
     emit_raw(ctx, "    r[n] = '\\0'; return r;\n}\n");
-
+    }
+    if (SRC_HAS("count")) {
     emit_raw(ctx, "static mrb_int sp_str_count(const char *s, const char *chars) {\n");
     emit_raw(ctx, "    mrb_int c = 0;\n");
     emit_raw(ctx, "    for (; *s; s++) { for (const char *p = chars; *p; p++) { if (*s == *p) { c++; break; } } }\n");
     emit_raw(ctx, "    return c;\n}\n");
-
+    }
+    if (SRC_HAS("start_with")) {
     emit_raw(ctx, "static mrb_bool sp_str_starts_with(const char *s, const char *prefix) {\n");
     emit_raw(ctx, "    size_t pn = strlen(prefix);\n");
     emit_raw(ctx, "    return strncmp(s, prefix, pn) == 0;\n}\n");
-
+    }
+    if (SRC_HAS("end_with")) {
     emit_raw(ctx, "static mrb_bool sp_str_ends_with(const char *s, const char *suffix) {\n");
     emit_raw(ctx, "    size_t sn = strlen(s), xn = strlen(suffix);\n");
     emit_raw(ctx, "    return sn >= xn && strcmp(s + sn - xn, suffix) == 0;\n}\n");
-
+    }
+    if (SRC_HAS("gsub")) {
     emit_raw(ctx, "static const char *sp_str_gsub(const char *s, const char *from, const char *to) {\n");
     emit_raw(ctx, "    size_t fl = strlen(from), tl = strlen(to);\n");
     emit_raw(ctx, "    size_t cap = strlen(s) * 2 + 16; char *r = (char *)malloc(cap); size_t ri = 0;\n");
@@ -1267,7 +1298,8 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "        }\n");
     emit_raw(ctx, "    }\n");
     emit_raw(ctx, "    r[ri] = '\\0'; return r;\n}\n");
-
+    }
+    if (SRC_HAS("sub")) {
     emit_raw(ctx, "static const char *sp_str_sub(const char *s, const char *from, const char *to) {\n");
     emit_raw(ctx, "    const char *p = strstr(s, from);\n");
     emit_raw(ctx, "    if (!p) { size_t n = strlen(s); char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
@@ -1276,34 +1308,41 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "    size_t before = p - s;\n");
     emit_raw(ctx, "    memcpy(r, s, before); memcpy(r + before, to, tl);\n");
     emit_raw(ctx, "    memcpy(r + before + tl, p + fl, sn - before - fl + 1); return r;\n}\n");
-
+    }
+    if (SRC_HAS("*")) {
     emit_raw(ctx, "static const char *sp_str_repeat(const char *s, mrb_int n) {\n");
     emit_raw(ctx, "    size_t sl = strlen(s); char *r = (char *)malloc(sl * n + 1);\n");
     emit_raw(ctx, "    for (mrb_int i = 0; i < n; i++) memcpy(r + sl * i, s, sl);\n");
     emit_raw(ctx, "    r[sl * n] = '\\0'; return r;\n}\n\n");
-
-    /* ljust / rjust / center */
+    }
+    if (SRC_HAS("ljust")) {
     emit_raw(ctx, "static const char *sp_str_ljust(const char *s, mrb_int w, char pad) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); if ((mrb_int)n >= w) { char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
     emit_raw(ctx, "    char *r = (char *)malloc(w+1); memcpy(r,s,n); memset(r+n,pad,w-n); r[w]='\\0'; return r;\n}\n");
+    }
+    if (SRC_HAS("rjust")) {
     emit_raw(ctx, "static const char *sp_str_rjust(const char *s, mrb_int w, char pad) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); if ((mrb_int)n >= w) { char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
     emit_raw(ctx, "    char *r = (char *)malloc(w+1); memset(r,pad,w-n); memcpy(r+w-n,s,n+1); return r;\n}\n");
+    }
+    if (SRC_HAS("center")) {
     emit_raw(ctx, "static const char *sp_str_center(const char *s, mrb_int w, char pad) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); if ((mrb_int)n >= w) { char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
     emit_raw(ctx, "    mrb_int left = (w - (mrb_int)n) / 2; mrb_int right = w - (mrb_int)n - left;\n");
     emit_raw(ctx, "    char *r = (char *)malloc(w+1); memset(r,pad,w); memcpy(r+left,s,n); r[w]='\\0'; return r;\n}\n");
-
-    /* lstrip / rstrip */
+    }
+    if (SRC_HAS("lstrip")) {
     emit_raw(ctx, "static const char *sp_str_lstrip(const char *s) {\n");
     emit_raw(ctx, "    while (*s && isspace((unsigned char)*s)) s++;\n");
     emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r;\n}\n");
+    }
+    if (SRC_HAS("rstrip")) {
     emit_raw(ctx, "static const char *sp_str_rstrip(const char *s) {\n");
     emit_raw(ctx, "    size_t n = strlen(s);\n");
     emit_raw(ctx, "    while (n > 0 && isspace((unsigned char)s[n-1])) n--;\n");
     emit_raw(ctx, "    char *r = (char *)malloc(n+1); memcpy(r,s,n); r[n]='\\0'; return r;\n}\n");
-
-    /* tr / delete / squeeze */
+    }
+    if (SRC_HAS(".tr")) {
     emit_raw(ctx, "static const char *sp_str_tr(const char *s, const char *from, const char *to) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n+1);\n");
     emit_raw(ctx, "    size_t fl = strlen(from), tl = strlen(to);\n");
@@ -1312,16 +1351,20 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "        if (p && s[i]) { size_t idx = p - from; r[i] = (idx < tl) ? to[idx] : to[tl-1]; }\n");
     emit_raw(ctx, "        else r[i] = s[i];\n");
     emit_raw(ctx, "    } return r;\n}\n");
+    }
+    if (SRC_HAS("delete")) {
     emit_raw(ctx, "static const char *sp_str_delete(const char *s, const char *chars) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n+1); size_t ri = 0;\n");
     emit_raw(ctx, "    for (size_t i = 0; i < n; i++) { if (!memchr(chars, s[i], strlen(chars))) r[ri++] = s[i]; }\n");
     emit_raw(ctx, "    r[ri] = '\\0'; return r;\n}\n");
+    }
+    if (SRC_HAS("squeeze")) {
     emit_raw(ctx, "static const char *sp_str_squeeze(const char *s) {\n");
     emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n+1); size_t ri = 0;\n");
     emit_raw(ctx, "    for (size_t i = 0; i < n; i++) { if (i == 0 || s[i] != s[i-1]) r[ri++] = s[i]; }\n");
     emit_raw(ctx, "    r[ri] = '\\0'; return r;\n}\n");
-
-    /* slice / [range] */
+    }
+    if (SRC_HAS("slice")) {
     emit_raw(ctx, "static const char *sp_str_slice(const char *s, mrb_int start, mrb_int len) {\n");
     emit_raw(ctx, "    mrb_int sn = (mrb_int)strlen(s);\n");
     emit_raw(ctx, "    if (start < 0) start += sn;\n");
@@ -1329,14 +1372,10 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "    if (start >= sn || len <= 0) { char *r = (char *)malloc(1); r[0]='\\0'; return r; }\n");
     emit_raw(ctx, "    if (start + len > sn) len = sn - start;\n");
     emit_raw(ctx, "    char *r = (char *)malloc(len+1); memcpy(r, s+start, len); r[len]='\\0'; return r;\n}\n");
-
-    /* to_f */
+    }
+    if (SRC_HAS("to_f")) {
     emit_raw(ctx, "static mrb_float sp_str_to_f(const char *s) { return strtod(s, NULL); }\n");
-
-    /* bytes/chars helpers emitted after array types (see below) */
-
-
-    /* sp_str_char_at already emitted above */
+    }
 
     /* ---- Mutable string (sp_String) ---- */
     if (ctx->needs_sp_string) {
@@ -1382,27 +1421,33 @@ void emit_header(codegen_ctx_t *ctx) {
     }
 
     /* ---- Float format (Ruby-style: always show decimal point) ---- */
+    if (SRC_HAS("to_s") || SRC_HAS("puts") || ctx->needs_poly) {
     emit_raw(ctx, "static const char *sp_float_to_s(mrb_float f) {\n");
     emit_raw(ctx, "    char *r = (char *)malloc(32);\n");
     emit_raw(ctx, "    snprintf(r, 32, \"%%g\", f);\n");
     emit_raw(ctx, "    if (!strchr(r, '.') && !strchr(r, 'e') && !strchr(r, 'E')) strcat(r, \".0\");\n");
     emit_raw(ctx, "    return r;\n}\n\n");
+    }
 
     /* ---- Backtick helper (popen/pclose) ---- */
+    if (SRC_HAS("`")) {
     emit_raw(ctx, "static const char *sp_backtick(const char *cmd) {\n");
     emit_raw(ctx, "    FILE *p = popen(cmd, \"r\");\n");
     emit_raw(ctx, "    if (!p) return \"\";\n");
     emit_raw(ctx, "    char buf[4096]; size_t n = fread(buf, 1, sizeof(buf)-1, p);\n");
     emit_raw(ctx, "    buf[n] = '\\0'; pclose(p);\n");
     emit_raw(ctx, "    char *r = (char *)malloc(n+1); memcpy(r, buf, n+1); return r;\n}\n\n");
+    }
 
     /* ---- format() helper (snprintf wrapper) ---- */
+    if (SRC_HAS("format") || SRC_HAS("sprintf") || SRC_HAS("printf")) {
     emit_raw(ctx, "static const char *sp_format(const char *fmt, ...) {\n");
     emit_raw(ctx, "    va_list ap; va_start(ap, fmt);\n");
     emit_raw(ctx, "    int n = vsnprintf(NULL, 0, fmt, ap); va_end(ap);\n");
     emit_raw(ctx, "    char *r = (char *)malloc(n + 1);\n");
     emit_raw(ctx, "    va_start(ap, fmt); vsnprintf(r, n + 1, fmt, ap); va_end(ap);\n");
     emit_raw(ctx, "    return r;\n}\n\n");
+    }
 
     /* ---- Polymorphic to_s (after sp_int_to_s/sp_float_to_s) ---- */
     if (ctx->needs_poly) {
@@ -2325,6 +2370,9 @@ void emit_header(codegen_ctx_t *ctx) {
         emit_raw(ctx, "    if (a->len >= a->cap) { a->cap *= 2; a->data = (sp_Val **)realloc(a->data, sizeof(sp_Val *) * a->cap); }\n");
         emit_raw(ctx, "    a->data[a->len++] = v;\n}\n\n");
     }
+
+    #undef SRC_HAS
+    free(_all_src);
 }
 
 /* Emit hand-written FizzBuzz helper functions for lambda mode */
@@ -2431,4 +2479,5 @@ void emit_mega_dispatch_funcs(codegen_ctx_t *ctx) {
             emit_raw(ctx, "}\n\n");
         }
     }
+
 }
