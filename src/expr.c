@@ -3141,16 +3141,73 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
       const uint8_t *src = pm_string_source(&sym->unescaped);
       size_t len = pm_string_length(&sym->unescaped);
       char mname[64]; snprintf(mname, sizeof(mname), "%.*s", (int)len, src);
-      bool result = false;
+
+      /* Monomorphic: resolve at compile time */
       if (recv_t.kind == SPINEL_TYPE_OBJECT) {
         class_info_t *c = find_class(ctx, recv_t.klass);
+        bool result = false;
         if (c) {
           class_info_t *owner;
           result = find_method_inherited(ctx, c, mname, &owner) != NULL;
         }
+        free(method);
+        return xstrdup(result ? "TRUE" : "FALSE");
       }
+      /* Built-in types: check known method list at compile time */
+      if (recv_t.kind != SPINEL_TYPE_POLY &&
+        recv_t.kind != SPINEL_TYPE_VALUE &&
+        recv_t.kind != SPINEL_TYPE_UNKNOWN) {
+        bool result = builtin_has_method(recv_t.kind, mname);
+        /* Also check extension methods (open class) */
+        if (!result)
+          result = find_ext_method(ctx, recv_t.kind, mname) != NULL;
+        free(method);
+        return xstrdup(result ? "TRUE" : "FALSE");
+      }
+      /* Polymorphic: generate runtime type-tag check */
+      if (recv_t.kind == SPINEL_TYPE_POLY) {
+        char *recv = codegen_expr(ctx, call->receiver);
+        /* Build: (SP_TAG(recv) == SP_T_INT ? (has_method_for_int) : ...) */
+        /* Check each possible type in the poly set */
+        bool int_has = builtin_has_method(SPINEL_TYPE_INTEGER, mname);
+        bool flt_has = builtin_has_method(SPINEL_TYPE_FLOAT, mname);
+        bool str_has = builtin_has_method(SPINEL_TYPE_STRING, mname);
+        bool nil_has = (strcmp(mname, "nil?") == 0 || strcmp(mname, "to_s") == 0 ||
+                        strcmp(mname, "is_a?") == 0 || strcmp(mname, "respond_to?") == 0);
+        /* Also check user-defined classes in the poly set */
+        bool obj_has = false;
+        for (int ci = 0; ci < ctx->class_count; ci++) {
+          class_info_t *owner;
+          if (find_method_inherited(ctx, &ctx->classes[ci], mname, &owner)) {
+            obj_has = true;
+            break;
+          }
+        }
+        /* If all types have it, return TRUE; if none, return FALSE */
+        if (int_has && flt_has && str_has && nil_has && (obj_has || ctx->class_count == 0)) {
+          free(recv); free(method);
+          return xstrdup("TRUE");
+        }
+        if (!int_has && !flt_has && !str_has && !nil_has && !obj_has) {
+          free(recv); free(method);
+          return xstrdup("FALSE");
+        }
+        /* Mixed: generate runtime check */
+        char *r = sfmt("(SP_TAG(%s) == SP_T_INT ? %s : "
+                        "SP_TAG(%s) == SP_T_FLOAT ? %s : "
+                        "SP_TAG(%s) == SP_T_STR ? %s : "
+                        "SP_IS_NIL(%s) ? %s : %s)",
+                        recv, int_has ? "TRUE" : "FALSE",
+                        recv, flt_has ? "TRUE" : "FALSE",
+                        recv, str_has ? "TRUE" : "FALSE",
+                        recv, nil_has ? "TRUE" : "FALSE",
+                        obj_has ? "TRUE" : "FALSE");
+        free(recv); free(method);
+        return r;
+      }
+      /* Fallback: unknown type, assume FALSE */
       free(method);
-      return xstrdup(result ? "TRUE" : "FALSE");
+      return xstrdup("FALSE");
     }
 
     /* Extension methods on built-in types (open class support) */

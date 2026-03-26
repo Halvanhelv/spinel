@@ -387,6 +387,7 @@ func_info_t *find_func(codegen_ctx_t *ctx, const char *name);
 /* --- Extension method lookup (codegen.c) --- */
 method_info_t *find_ext_method(codegen_ctx_t *ctx, spinel_type_t recv_type, const char *name);
 spinel_type_t builtin_type_for_name(const char *name);
+bool builtin_has_method(spinel_type_t kind, const char *name);
 
 /* --- Variable management (codegen.c) --- */
 var_entry_t *var_lookup(codegen_ctx_t *ctx, const char *name);
