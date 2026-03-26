@@ -1313,7 +1313,8 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "    if (strncmp(s, from, fl) == 0) {\n");
     emit_raw(ctx, "      if (ri + tl >= cap) { cap = (ri + tl) * 2; r = (char *)realloc(r, cap); }\n");
     emit_raw(ctx, "      memcpy(r + ri, to, tl); ri += tl; s += fl;\n");
-    emit_raw(ctx, "    } else {\n");
+    emit_raw(ctx, "    }\n");
+    emit_raw(ctx, "    else {\n");
     emit_raw(ctx, "      if (ri + 1 >= cap) { cap *= 2; r = (char *)realloc(r, cap); }\n");
     emit_raw(ctx, "      r[ri++] = *s++;\n");
     emit_raw(ctx, "    }\n");
@@ -1777,7 +1778,8 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "      *pp = h->next;\n");
     emit_raw(ctx, "      if (h->finalize) h->finalize((char *)h + sizeof(sp_gc_hdr));\n");
     emit_raw(ctx, "      free(h);\n");
-    emit_raw(ctx, "    } else {\n");
+    emit_raw(ctx, "    }\n");
+    emit_raw(ctx, "    else {\n");
     emit_raw(ctx, "      h->marked = 0;\n");
     emit_raw(ctx, "      sp_gc_bytes += sizeof(sp_gc_hdr); /* approximate */\n");
     emit_raw(ctx, "      pp = &h->next;\n");
