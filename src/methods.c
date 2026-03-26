@@ -13,10 +13,27 @@
 #include <string.h>
 #include "codegen.h"
 
-/* Shorthand for table entries */
-#define M(name, ret, min, max) {name, ret, min, max, false}
-#define MB(name, ret, min, max) {name, ret, min, max, true}
-#define END {NULL, 0, 0, 0, false}
+/* Shorthand for table entries.
+ * M(name, ret, min, max)                — no block, arg types unspecified
+ * MA(name, ret, min, max, t1, ...)      — no block, with arg types
+ * MB(name, ret, min, max)               — needs block, arg types unspecified
+ * Unspecified arg_types default to {0} = SPINEL_TYPE_UNKNOWN = accept any */
+#define M(name, ret, min, max) \
+  {name, ret, min, max, false, {0}}
+#define MA1(name, ret, min, max, t1) \
+  {name, ret, min, max, false, {t1}}
+#define MA2(name, ret, min, max, t1, t2) \
+  {name, ret, min, max, false, {t1, t2}}
+#define MB(name, ret, min, max) \
+  {name, ret, min, max, true, {0}}
+#define END {NULL, 0, 0, 0, false, {0}}
+
+/* Type shorthand */
+#define T_INT  SPINEL_TYPE_INTEGER
+#define T_FLT  SPINEL_TYPE_FLOAT
+#define T_STR  SPINEL_TYPE_STRING
+#define T_BOOL SPINEL_TYPE_BOOLEAN
+#define T_ARY  SPINEL_TYPE_ARRAY
 
 /* ------------------------------------------------------------------ */
 /* Universal methods (available on all types)                          */
@@ -43,12 +60,12 @@ static const builtin_method_def_t universal_methods[] = {
 /* ------------------------------------------------------------------ */
 static const builtin_method_def_t integer_methods[] = {
   /* Arithmetic */
-  M("+",  SPINEL_TYPE_INTEGER, 1, 1),
-  M("-",  SPINEL_TYPE_INTEGER, 1, 1),
-  M("*",  SPINEL_TYPE_INTEGER, 1, 1),
-  M("/",  SPINEL_TYPE_INTEGER, 1, 1),
-  M("%",  SPINEL_TYPE_INTEGER, 1, 1),
-  M("**", SPINEL_TYPE_INTEGER, 1, 1),
+  MA1("+",  SPINEL_TYPE_INTEGER, 1, 1, T_INT),
+  MA1("-",  SPINEL_TYPE_INTEGER, 1, 1, T_INT),
+  MA1("*",  SPINEL_TYPE_INTEGER, 1, 1, T_INT),
+  MA1("/",  SPINEL_TYPE_INTEGER, 1, 1, T_INT),
+  MA1("%",  SPINEL_TYPE_INTEGER, 1, 1, T_INT),
+  MA1("**", SPINEL_TYPE_INTEGER, 1, 1, T_INT),
   M("-@", SPINEL_TYPE_INTEGER, 0, 0),
   /* Comparison */
   M("<",  SPINEL_TYPE_BOOLEAN, 1, 1),
@@ -86,10 +103,10 @@ static const builtin_method_def_t integer_methods[] = {
   M("ceil",       SPINEL_TYPE_INTEGER, 0, 0),
   M("round",      SPINEL_TYPE_INTEGER, 0, 0),
   M("truncate",   SPINEL_TYPE_INTEGER, 0, 0),
-  M("clamp",      SPINEL_TYPE_INTEGER, 2, 2),
-  M("gcd",        SPINEL_TYPE_INTEGER, 1, 1),
-  M("lcm",        SPINEL_TYPE_INTEGER, 1, 1),
-  M("pow",        SPINEL_TYPE_INTEGER, 1, 2),
+  MA2("clamp",    SPINEL_TYPE_INTEGER, 2, 2, T_INT, T_INT),
+  MA1("gcd",      SPINEL_TYPE_INTEGER, 1, 1, T_INT),
+  MA1("lcm",      SPINEL_TYPE_INTEGER, 1, 1, T_INT),
+  MA1("pow",      SPINEL_TYPE_INTEGER, 1, 2, T_INT),
   M("bit_length", SPINEL_TYPE_INTEGER, 0, 0),
   M("[]",         SPINEL_TYPE_INTEGER, 1, 1),
   M("divmod",     SPINEL_TYPE_ARRAY,   1, 1),
@@ -149,14 +166,14 @@ static const builtin_method_def_t string_methods[] = {
   M("size",        SPINEL_TYPE_INTEGER, 0, 0),
   M("bytesize",    SPINEL_TYPE_INTEGER, 0, 0),
   M("empty?",      SPINEL_TYPE_BOOLEAN, 0, 0),
-  M("include?",    SPINEL_TYPE_BOOLEAN, 1, 1),
-  M("start_with?", SPINEL_TYPE_BOOLEAN, 1, -1),
-  M("end_with?",   SPINEL_TYPE_BOOLEAN, 1, -1),
-  M("match?",      SPINEL_TYPE_BOOLEAN, 1, 1),
+  MA1("include?",    SPINEL_TYPE_BOOLEAN, 1, 1, T_STR),
+  MA1("start_with?", SPINEL_TYPE_BOOLEAN, 1, -1, T_STR),
+  MA1("end_with?",   SPINEL_TYPE_BOOLEAN, 1, -1, T_STR),
+  MA1("match?",      SPINEL_TYPE_BOOLEAN, 1, 1, T_STR),
   M("ascii_only?", SPINEL_TYPE_BOOLEAN, 0, 0),
-  M("count",       SPINEL_TYPE_INTEGER, 1, 1),
-  M("index",       SPINEL_TYPE_INTEGER, 1, 2),
-  M("rindex",      SPINEL_TYPE_INTEGER, 1, 2),
+  MA1("count",       SPINEL_TYPE_INTEGER, 1, 1, T_STR),
+  MA1("index",       SPINEL_TYPE_INTEGER, 1, 2, T_STR),
+  MA1("rindex",      SPINEL_TYPE_INTEGER, 1, 2, T_STR),
   M("=~",          SPINEL_TYPE_INTEGER, 1, 1),
   M("ord",         SPINEL_TYPE_INTEGER, 0, 0),
   M("getbyte",     SPINEL_TYPE_INTEGER, 1, 1),
@@ -164,10 +181,10 @@ static const builtin_method_def_t string_methods[] = {
   M("[]",    SPINEL_TYPE_STRING, 1, 2),
   M("slice", SPINEL_TYPE_STRING, 1, 2),
   /* Transform */
-  M("+",          SPINEL_TYPE_STRING, 1, 1),
-  M("*",          SPINEL_TYPE_STRING, 1, 1),
-  M("<<",         SPINEL_TYPE_STRING, 1, 1),
-  M("concat",     SPINEL_TYPE_STRING, 1, -1),
+  MA1("+",        SPINEL_TYPE_STRING, 1, 1, T_STR),
+  MA1("*",        SPINEL_TYPE_STRING, 1, 1, T_INT),
+  MA1("<<",       SPINEL_TYPE_STRING, 1, 1, T_STR),
+  MA1("concat",   SPINEL_TYPE_STRING, 1, -1, T_STR),
   M("upcase",     SPINEL_TYPE_STRING, 0, 0),
   M("downcase",   SPINEL_TYPE_STRING, 0, 0),
   M("capitalize", SPINEL_TYPE_STRING, 0, 0),
@@ -178,9 +195,9 @@ static const builtin_method_def_t string_methods[] = {
   M("rstrip",     SPINEL_TYPE_STRING, 0, 0),
   M("chomp",      SPINEL_TYPE_STRING, 0, 1),
   M("chop",       SPINEL_TYPE_STRING, 0, 0),
-  M("gsub",       SPINEL_TYPE_STRING, 2, 2),
-  M("sub",        SPINEL_TYPE_STRING, 2, 2),
-  M("tr",         SPINEL_TYPE_STRING, 2, 2),
+  MA2("gsub",     SPINEL_TYPE_STRING, 2, 2, T_STR, T_STR),
+  MA2("sub",      SPINEL_TYPE_STRING, 2, 2, T_STR, T_STR),
+  MA2("tr",       SPINEL_TYPE_STRING, 2, 2, T_STR, T_STR),
   M("delete",     SPINEL_TYPE_STRING, 1, -1),
   M("squeeze",    SPINEL_TYPE_STRING, 0, 1),
   M("ljust",      SPINEL_TYPE_STRING, 1, 2),
@@ -229,14 +246,14 @@ static const builtin_method_def_t array_methods[] = {
   M("empty?",   SPINEL_TYPE_BOOLEAN, 0, 0),
   M("include?", SPINEL_TYPE_BOOLEAN, 1, 1),
   /* Modify */
-  M("push",      SPINEL_TYPE_ARRAY, 1, -1),
-  M("<<",        SPINEL_TYPE_ARRAY, 1, 1),
+  MA1("push",    SPINEL_TYPE_ARRAY, 1, -1, T_INT),
+  MA1("<<",      SPINEL_TYPE_ARRAY, 1, 1, T_INT),
   M("pop",       SPINEL_TYPE_INTEGER, 0, 0),
   M("shift",     SPINEL_TYPE_INTEGER, 0, 0),
-  M("unshift",   SPINEL_TYPE_INTEGER, 1, 1),
-  M("insert",    SPINEL_TYPE_ARRAY,   2, 2),
-  M("delete",    SPINEL_TYPE_INTEGER, 1, 1),
-  M("delete_at", SPINEL_TYPE_INTEGER, 1, 1),
+  MA1("unshift", SPINEL_TYPE_INTEGER, 1, 1, T_INT),
+  MA2("insert",  SPINEL_TYPE_ARRAY,   2, 2, T_INT, T_INT),
+  MA1("delete",  SPINEL_TYPE_INTEGER, 1, 1, T_INT),
+  MA1("delete_at", SPINEL_TYPE_INTEGER, 1, 1, T_INT),
   /* Transform */
   M("sort",      SPINEL_TYPE_ARRAY, 0, 0),
   M("sort!",     SPINEL_TYPE_ARRAY, 0, 0),
@@ -306,11 +323,11 @@ static const builtin_method_def_t float_array_methods[] = {
 /* Hash methods (StrIntHash)                                           */
 /* ------------------------------------------------------------------ */
 static const builtin_method_def_t hash_methods[] = {
-  M("[]",      SPINEL_TYPE_INTEGER, 1, 1),
-  M("[]=",     SPINEL_TYPE_INTEGER, 2, 2),
-  M("store",   SPINEL_TYPE_INTEGER, 2, 2),
-  M("fetch",   SPINEL_TYPE_INTEGER, 1, 2),
-  M("delete",  SPINEL_TYPE_INTEGER, 1, 1),
+  MA1("[]",    SPINEL_TYPE_INTEGER, 1, 1, T_STR),
+  MA2("[]=",   SPINEL_TYPE_INTEGER, 2, 2, T_STR, T_INT),
+  MA2("store", SPINEL_TYPE_INTEGER, 2, 2, T_STR, T_INT),
+  MA1("fetch", SPINEL_TYPE_INTEGER, 1, 2, T_STR),
+  MA1("delete", SPINEL_TYPE_INTEGER, 1, 1, T_STR),
   M("length",  SPINEL_TYPE_INTEGER, 0, 0),
   M("size",    SPINEL_TYPE_INTEGER, 0, 0),
   M("count",   SPINEL_TYPE_INTEGER, 0, 0),
@@ -487,9 +504,9 @@ static const builtin_method_def_t sp_string_methods[] = {
   M("rstrip",     SPINEL_TYPE_STRING, 0, 0),
   M("chomp",      SPINEL_TYPE_STRING, 0, 1),
   M("chop",       SPINEL_TYPE_STRING, 0, 0),
-  M("gsub",       SPINEL_TYPE_STRING, 2, 2),
-  M("sub",        SPINEL_TYPE_STRING, 2, 2),
-  M("tr",         SPINEL_TYPE_STRING, 2, 2),
+  MA2("gsub",     SPINEL_TYPE_STRING, 2, 2, T_STR, T_STR),
+  MA2("sub",      SPINEL_TYPE_STRING, 2, 2, T_STR, T_STR),
+  MA2("tr",       SPINEL_TYPE_STRING, 2, 2, T_STR, T_STR),
   M("delete",     SPINEL_TYPE_STRING, 1, -1),
   M("squeeze",    SPINEL_TYPE_STRING, 0, 1),
   M("ljust",      SPINEL_TYPE_STRING, 1, 2),
@@ -515,7 +532,14 @@ static const builtin_method_def_t sp_string_methods[] = {
 };
 
 #undef M
+#undef MA1
+#undef MA2
 #undef MB
+#undef T_INT
+#undef T_FLT
+#undef T_STR
+#undef T_BOOL
+#undef T_ARY
 #undef END
 
 /* ------------------------------------------------------------------ */
@@ -566,5 +590,12 @@ bool builtin_has_method(spinel_type_t kind, const char *name) {
 spinel_type_t builtin_return_type(spinel_type_t recv_kind, const char *name) {
   const builtin_method_def_t *m = builtin_find_method(recv_kind, name);
   if (m) return m->return_type;
+  return SPINEL_TYPE_UNKNOWN;
+}
+
+spinel_type_t builtin_arg_type(spinel_type_t recv_kind, const char *name, int arg_idx) {
+  const builtin_method_def_t *m = builtin_find_method(recv_kind, name);
+  if (m && arg_idx >= 0 && arg_idx < MAX_METHOD_ARGS)
+    return m->arg_types[arg_idx];
   return SPINEL_TYPE_UNKNOWN;
 }
