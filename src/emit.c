@@ -20,19 +20,19 @@ void emit_struct(codegen_ctx_t *ctx, class_info_t *cls) {
     const char *field_name = escape_c_keyword(iv->name);
     /* Special: Scene.spheres is sp_Sphere *[3] */
     if (strcmp(cls->name, "Scene") == 0 && strcmp(iv->name, "spheres") == 0) {
-      emit_raw(ctx, "    sp_Sphere *spheres[3];\n");
+      emit_raw(ctx, "  sp_Sphere *spheres[3];\n");
       continue;
     }
     char *ct = vt_ctype(ctx, iv->type, false);
     if (iv->type.kind == SPINEL_TYPE_OBJECT) {
       class_info_t *fc = find_class(ctx, iv->type.klass);
       if (fc && !fc->is_value_type)
-        emit_raw(ctx, "    %s *%s;\n", ct, field_name);
+        emit_raw(ctx, "  %s *%s;\n", ct, field_name);
       else
-        emit_raw(ctx, "    %s %s;\n", ct, field_name);
+        emit_raw(ctx, "  %s %s;\n", ct, field_name);
     }
     else {
-      emit_raw(ctx, "    %s %s;\n", ct, field_name);
+      emit_raw(ctx, "  %s %s;\n", ct, field_name);
     }
     free(ct);
   }
@@ -81,7 +81,7 @@ void emit_initialize_func(codegen_ctx_t *ctx, class_info_t *cls) {
         const char *field = ivname + 1;
         char *val_expr = codegen_expr(ctx, iw->value);
         if (strstr(val_expr, "array_init") == NULL)
-          emit_raw(ctx, "    self->%s = %s;\n", field, val_expr);
+          emit_raw(ctx, "  self->%s = %s;\n", field, val_expr);
         free(ivname);
         free(val_expr);
       }
@@ -101,14 +101,14 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
       /* Parent has no initialize either: generate default constructor */
       emit_raw(ctx, "static sp_%s *sp_%s_new(void) {\n", cls->name, cls->name);
       if (ctx->needs_gc) {
-        emit_raw(ctx, "    sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, NULL);\n",
+        emit_raw(ctx, "  sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, NULL);\n",
              cls->name, cls->name, cls->name);
       }
       else {
-        emit_raw(ctx, "    sp_%s *self = (sp_%s *)calloc(1, sizeof(sp_%s));\n",
+        emit_raw(ctx, "  sp_%s *self = (sp_%s *)calloc(1, sizeof(sp_%s));\n",
              cls->name, cls->name, cls->name);
       }
-      emit_raw(ctx, "    return self;\n}\n\n");
+      emit_raw(ctx, "  return self;\n}\n\n");
       return;
     }
     if (parent && parent_init) {
@@ -124,24 +124,24 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
       emit_raw(ctx, ") {\n");
 
       if (ctx->needs_gc) {
-        emit_raw(ctx, "    SP_GC_SAVE();\n");
-        emit_raw(ctx, "    sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, NULL);\n",
+        emit_raw(ctx, "  SP_GC_SAVE();\n");
+        emit_raw(ctx, "  sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, NULL);\n",
              cls->name, cls->name, cls->name);
-        emit_raw(ctx, "    SP_GC_ROOT(self);\n");
+        emit_raw(ctx, "  SP_GC_ROOT(self);\n");
       }
       else {
-        emit_raw(ctx, "    sp_%s *self = (sp_%s *)calloc(1, sizeof(sp_%s));\n",
+        emit_raw(ctx, "  sp_%s *self = (sp_%s *)calloc(1, sizeof(sp_%s));\n",
              cls->name, cls->name, cls->name);
       }
       /* Call parent's initialize */
-      emit_raw(ctx, "    sp_%s_initialize((sp_%s *)self", parent->name, parent->name);
+      emit_raw(ctx, "  sp_%s_initialize((sp_%s *)self", parent->name, parent->name);
       for (int i = 0; i < parent_init->param_count; i++)
         emit_raw(ctx, ", lv_%s", parent_init->params[i].name);
       emit_raw(ctx, ");\n");
 
       if (ctx->needs_gc)
-        emit_raw(ctx, "    SP_GC_RESTORE();\n");
-      emit_raw(ctx, "    return self;\n");
+        emit_raw(ctx, "  SP_GC_RESTORE();\n");
+      emit_raw(ctx, "  return self;\n");
       emit_raw(ctx, "}\n\n");
     }
     return;
@@ -150,20 +150,20 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
     /* No initialize method: generate a default constructor */
     if (cls->is_value_type) {
       emit_raw(ctx, "static sp_%s sp_%s_new(void) {\n", cls->name, cls->name);
-      emit_raw(ctx, "    sp_%s self = {0};\n", cls->name);
-      emit_raw(ctx, "    return self;\n}\n\n");
+      emit_raw(ctx, "  sp_%s self = {0};\n", cls->name);
+      emit_raw(ctx, "  return self;\n}\n\n");
     }
     else {
       emit_raw(ctx, "static sp_%s *sp_%s_new(void) {\n", cls->name, cls->name);
       if (ctx->needs_gc) {
-        emit_raw(ctx, "    sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, NULL);\n",
+        emit_raw(ctx, "  sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, NULL);\n",
              cls->name, cls->name, cls->name);
       }
       else {
-        emit_raw(ctx, "    sp_%s *self = (sp_%s *)calloc(1, sizeof(sp_%s));\n",
+        emit_raw(ctx, "  sp_%s *self = (sp_%s *)calloc(1, sizeof(sp_%s));\n",
              cls->name, cls->name, cls->name);
       }
-      emit_raw(ctx, "    return self;\n}\n\n");
+      emit_raw(ctx, "  return self;\n}\n\n");
     }
     return;
   }
@@ -185,7 +185,7 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
   emit_raw(ctx, ") {\n");
 
   if (cls->is_value_type) {
-    emit_raw(ctx, "    sp_%s self;\n", cls->name);
+    emit_raw(ctx, "  sp_%s self;\n", cls->name);
   }
   else if (ctx->needs_gc) {
     /* Determine if this class has a scan function */
@@ -198,17 +198,17 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
         if (sph && !sph->is_value_type) { has_gc_fields = true; break; }
       }
     }
-    emit_raw(ctx, "    SP_GC_SAVE();\n");
+    emit_raw(ctx, "  SP_GC_SAVE();\n");
     if (has_gc_fields)
-      emit_raw(ctx, "    sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, sp_%s_gc_scan);\n",
+      emit_raw(ctx, "  sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, sp_%s_gc_scan);\n",
            cls->name, cls->name, cls->name, cls->name);
     else
-      emit_raw(ctx, "    sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, NULL);\n",
+      emit_raw(ctx, "  sp_%s *self = (sp_%s *)sp_gc_alloc(sizeof(sp_%s), NULL, NULL);\n",
            cls->name, cls->name, cls->name);
-    emit_raw(ctx, "    SP_GC_ROOT(self);\n");
+    emit_raw(ctx, "  SP_GC_ROOT(self);\n");
   }
   else {
-    emit_raw(ctx, "    sp_%s *self = (sp_%s *)calloc(1, sizeof(sp_%s));\n",
+    emit_raw(ctx, "  sp_%s *self = (sp_%s *)calloc(1, sizeof(sp_%s));\n",
          cls->name, cls->name, cls->name);
   }
 
@@ -218,9 +218,9 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
     /* Synthetic constructor (e.g., Struct.new) — assign params to fields */
     for (int fi = 0; fi < init->param_count && fi < cls->ivar_count; fi++) {
       if (cls->is_value_type)
-        emit_raw(ctx, "    self.%s = lv_%s;\n", cls->ivars[fi].name, init->params[fi].name);
+        emit_raw(ctx, "  self.%s = lv_%s;\n", cls->ivars[fi].name, init->params[fi].name);
       else
-        emit_raw(ctx, "    self->%s = lv_%s;\n", cls->ivars[fi].name, init->params[fi].name);
+        emit_raw(ctx, "  self->%s = lv_%s;\n", cls->ivars[fi].name, init->params[fi].name);
     }
   }
   else if (PM_NODE_TYPE(init->body_node) == PM_STATEMENTS_NODE) {
@@ -238,9 +238,9 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
         /* Skip array_init — arrays are initialized via []= */
         if (strstr(val_expr, "array_init") == NULL) {
           if (cls->is_value_type)
-            emit_raw(ctx, "    self.%s = %s;\n", field, val_expr);
+            emit_raw(ctx, "  self.%s = %s;\n", field, val_expr);
           else
-            emit_raw(ctx, "    self->%s = %s;\n", field, val_expr);
+            emit_raw(ctx, "  self->%s = %s;\n", field, val_expr);
         }
         free(ivname);
         free(val_expr);
@@ -259,9 +259,9 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
             args = na;
           }
           if (cls->is_value_type)
-            emit_raw(ctx, "    sp_%s_initialize(&self%s);\n", parent->name, args);
+            emit_raw(ctx, "  sp_%s_initialize(&self%s);\n", parent->name, args);
           else
-            emit_raw(ctx, "    sp_%s_initialize((sp_%s *)self%s);\n", parent->name, parent->name, args);
+            emit_raw(ctx, "  sp_%s_initialize((sp_%s *)self%s);\n", parent->name, parent->name, args);
           free(args);
         }
       }
@@ -278,8 +278,8 @@ void emit_constructor(codegen_ctx_t *ctx, class_info_t *cls) {
 
   /* For Isect: handle special initializations */
   if (!cls->is_value_type && ctx->needs_gc)
-    emit_raw(ctx, "    SP_GC_RESTORE();\n");
-  emit_raw(ctx, "    return self;\n");
+    emit_raw(ctx, "  SP_GC_RESTORE();\n");
+  emit_raw(ctx, "  return self;\n");
   emit_raw(ctx, "}\n\n");
 }
 
@@ -302,7 +302,7 @@ void emit_method(codegen_ctx_t *ctx, class_info_t *cls, method_info_t *m) {
     const char *ptr = cls->is_value_type ? "" : "*";
     emit_raw(ctx, "static mrb_bool sp_%s_%s(sp_%s %sself, sp_%s %slv_other) {\n",
          cls->name, c_mname, cls->name, ptr, cls->name, ptr);
-    emit_raw(ctx, "    return sp_%s__cmp(self, lv_other) %s 0;\n",
+    emit_raw(ctx, "  return sp_%s__cmp(self, lv_other) %s 0;\n",
          cls->name, c_op);
     emit_raw(ctx, "}\n\n");
     return;
@@ -487,7 +487,7 @@ void emit_method(codegen_ctx_t *ctx, class_info_t *cls, method_info_t *m) {
   }
 
   if (method_has_gc_vars && ret_void)
-    emit_raw(ctx, "    SP_GC_RESTORE();\n");
+    emit_raw(ctx, "  SP_GC_RESTORE();\n");
 
   ctx->gc_scope_active = saved_gc_scope;
   ctx->indent = saved_indent;
@@ -771,7 +771,7 @@ void emit_top_func(codegen_ctx_t *ctx, func_info_t *f) {
   }
 
   if (func_has_gc_vars && ret_void)
-    emit_raw(ctx, "    SP_GC_RESTORE();\n");
+    emit_raw(ctx, "  SP_GC_RESTORE();\n");
 
   ctx->gc_scope_active = saved_gc_scope;
   ctx->indent = saved_indent;
@@ -968,15 +968,15 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "static int64_t sp_unbox_bool(sp_RbValue v) { return (int64_t)(v & 1); }\n\n");
     /* sp_poly_puts */
     emit_raw(ctx, "static void sp_poly_puts(sp_RbValue v) {\n");
-    emit_raw(ctx, "    uint16_t t = SP_TAG(v);\n");
-    emit_raw(ctx, "    if (t == SP_T_INT) { printf(\"%%lld\\n\", (long long)sp_unbox_int(v)); }\n");
-    emit_raw(ctx, "    else if (t == SP_T_FLOAT) { char buf[32]; snprintf(buf,32,\"%%g\",sp_unbox_float(v));\n");
-    emit_raw(ctx, "        printf(\"%%s%%s\\n\", buf, strchr(buf,'.')||strchr(buf,'e')?\"\":\".0\"); }\n");
-    emit_raw(ctx, "    else if (t == SP_T_STRING) { const char *s=sp_unbox_str(v); fputs(s,stdout);\n");
-    emit_raw(ctx, "        if(!*s||s[strlen(s)-1]!='\\n') putchar('\\n'); }\n");
-    emit_raw(ctx, "    else if (t == SP_T_BOOL) { puts(sp_unbox_bool(v) ? \"true\" : \"false\"); }\n");
-    emit_raw(ctx, "    else if (t == SP_T_NIL) { puts(\"\"); }\n");
-    emit_raw(ctx, "    else { puts(\"(object)\"); }\n");
+    emit_raw(ctx, "  uint16_t t = SP_TAG(v);\n");
+    emit_raw(ctx, "  if (t == SP_T_INT) { printf(\"%%lld\\n\", (long long)sp_unbox_int(v)); }\n");
+    emit_raw(ctx, "  else if (t == SP_T_FLOAT) { char buf[32]; snprintf(buf,32,\"%%g\",sp_unbox_float(v));\n");
+    emit_raw(ctx, "    printf(\"%%s%%s\\n\", buf, strchr(buf,'.')||strchr(buf,'e')?\"\":\".0\"); }\n");
+    emit_raw(ctx, "  else if (t == SP_T_STRING) { const char *s=sp_unbox_str(v); fputs(s,stdout);\n");
+    emit_raw(ctx, "    if(!*s||s[strlen(s)-1]!='\\n') putchar('\\n'); }\n");
+    emit_raw(ctx, "  else if (t == SP_T_BOOL) { puts(sp_unbox_bool(v) ? \"true\" : \"false\"); }\n");
+    emit_raw(ctx, "  else if (t == SP_T_NIL) { puts(\"\"); }\n");
+    emit_raw(ctx, "  else { puts(\"(object)\"); }\n");
     emit_raw(ctx, "}\n");
     emit_raw(ctx, "static mrb_bool sp_poly_nil_p(sp_RbValue v) { return SP_TAG(v) == SP_T_NIL; }\n\n");
   }
@@ -985,88 +985,88 @@ void emit_header(codegen_ctx_t *ctx) {
   if (ctx->needs_rb_array) {
     emit_raw(ctx, "typedef struct { sp_RbValue *data; mrb_int len; mrb_int cap; } sp_RbArray;\n");
     emit_raw(ctx, "static sp_RbArray *sp_RbArray_new(void) {\n");
-    emit_raw(ctx, "    sp_RbArray *a = (sp_RbArray *)malloc(sizeof(sp_RbArray));\n");
-    emit_raw(ctx, "    a->cap = 8; a->len = 0;\n");
-    emit_raw(ctx, "    a->data = (sp_RbValue *)malloc(sizeof(sp_RbValue) * a->cap);\n");
-    emit_raw(ctx, "    return a;\n}\n");
+    emit_raw(ctx, "  sp_RbArray *a = (sp_RbArray *)malloc(sizeof(sp_RbArray));\n");
+    emit_raw(ctx, "  a->cap = 8; a->len = 0;\n");
+    emit_raw(ctx, "  a->data = (sp_RbValue *)malloc(sizeof(sp_RbValue) * a->cap);\n");
+    emit_raw(ctx, "  return a;\n}\n");
     emit_raw(ctx, "static void sp_RbArray_push(sp_RbArray *a, sp_RbValue v) {\n");
-    emit_raw(ctx, "    if (a->len >= a->cap) { a->cap *= 2; a->data = (sp_RbValue *)realloc(a->data, sizeof(sp_RbValue) * a->cap); }\n");
-    emit_raw(ctx, "    a->data[a->len++] = v;\n}\n");
+    emit_raw(ctx, "  if (a->len >= a->cap) { a->cap *= 2; a->data = (sp_RbValue *)realloc(a->data, sizeof(sp_RbValue) * a->cap); }\n");
+    emit_raw(ctx, "  a->data[a->len++] = v;\n}\n");
     emit_raw(ctx, "static sp_RbValue sp_RbArray_get(sp_RbArray *a, mrb_int idx) {\n");
-    emit_raw(ctx, "    if (idx < 0) idx += a->len;\n");
-    emit_raw(ctx, "    return a->data[idx];\n}\n");
+    emit_raw(ctx, "  if (idx < 0) idx += a->len;\n");
+    emit_raw(ctx, "  return a->data[idx];\n}\n");
     emit_raw(ctx, "static mrb_int sp_RbArray_length(sp_RbArray *a) { return a->len; }\n\n");
   }
 
   /* ---- Heterogeneous hash (sp_RbHash: string key → sp_RbValue) ---- */
   if (ctx->needs_rb_hash) {
     emit_raw(ctx, "typedef struct sp_RbHashEntry {\n");
-    emit_raw(ctx, "    const char *key;\n");
-    emit_raw(ctx, "    sp_RbValue value;\n");
-    emit_raw(ctx, "    struct sp_RbHashEntry *next;       /* bucket chain */\n");
-    emit_raw(ctx, "    struct sp_RbHashEntry *order_next; /* insertion order */\n");
+    emit_raw(ctx, "  const char *key;\n");
+    emit_raw(ctx, "  sp_RbValue value;\n");
+    emit_raw(ctx, "  struct sp_RbHashEntry *next;       /* bucket chain */\n");
+    emit_raw(ctx, "  struct sp_RbHashEntry *order_next; /* insertion order */\n");
     emit_raw(ctx, "} sp_RbHashEntry;\n\n");
     emit_raw(ctx, "typedef struct {\n");
-    emit_raw(ctx, "    sp_RbHashEntry **buckets;\n");
-    emit_raw(ctx, "    sp_RbHashEntry *first, *last; /* insertion order */\n");
-    emit_raw(ctx, "    mrb_int size, cap;\n");
+    emit_raw(ctx, "  sp_RbHashEntry **buckets;\n");
+    emit_raw(ctx, "  sp_RbHashEntry *first, *last; /* insertion order */\n");
+    emit_raw(ctx, "  mrb_int size, cap;\n");
     emit_raw(ctx, "} sp_RbHash;\n\n");
     emit_raw(ctx, "static unsigned sp_rb_hash_str(const char *s) {\n");
-    emit_raw(ctx, "    unsigned h = 5381;\n");
-    emit_raw(ctx, "    while (*s) h = h * 33 + (unsigned char)*s++;\n");
-    emit_raw(ctx, "    return h;\n");
+    emit_raw(ctx, "  unsigned h = 5381;\n");
+    emit_raw(ctx, "  while (*s) h = h * 33 + (unsigned char)*s++;\n");
+    emit_raw(ctx, "  return h;\n");
     emit_raw(ctx, "}\n\n");
     emit_raw(ctx, "static sp_RbHash *sp_RbHash_new(void) {\n");
-    emit_raw(ctx, "    sp_RbHash *h = (sp_RbHash *)calloc(1, sizeof(sp_RbHash));\n");
-    emit_raw(ctx, "    h->cap = 16; h->size = 0; h->first = NULL; h->last = NULL;\n");
-    emit_raw(ctx, "    h->buckets = (sp_RbHashEntry **)calloc(h->cap, sizeof(sp_RbHashEntry *));\n");
-    emit_raw(ctx, "    return h;\n}\n\n");
+    emit_raw(ctx, "  sp_RbHash *h = (sp_RbHash *)calloc(1, sizeof(sp_RbHash));\n");
+    emit_raw(ctx, "  h->cap = 16; h->size = 0; h->first = NULL; h->last = NULL;\n");
+    emit_raw(ctx, "  h->buckets = (sp_RbHashEntry **)calloc(h->cap, sizeof(sp_RbHashEntry *));\n");
+    emit_raw(ctx, "  return h;\n}\n\n");
     emit_raw(ctx, "static void sp_RbHash_set(sp_RbHash *h, const char *key, sp_RbValue value) {\n");
-    emit_raw(ctx, "    unsigned idx = sp_rb_hash_str(key) %% h->cap;\n");
-    emit_raw(ctx, "    sp_RbHashEntry *e = h->buckets[idx];\n");
-    emit_raw(ctx, "    while (e) {\n");
-    emit_raw(ctx, "        if (strcmp(e->key, key) == 0) { e->value = value; return; }\n");
-    emit_raw(ctx, "        e = e->next;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    e = (sp_RbHashEntry *)malloc(sizeof(sp_RbHashEntry));\n");
-    emit_raw(ctx, "    e->key = key;\n");
-    emit_raw(ctx, "    e->value = value;\n");
-    emit_raw(ctx, "    e->next = h->buckets[idx];\n");
-    emit_raw(ctx, "    h->buckets[idx] = e;\n");
-    emit_raw(ctx, "    e->order_next = NULL;\n");
-    emit_raw(ctx, "    if (h->last) h->last->order_next = e; else h->first = e;\n");
-    emit_raw(ctx, "    h->last = e;\n");
-    emit_raw(ctx, "    h->size++;\n");
+    emit_raw(ctx, "  unsigned idx = sp_rb_hash_str(key) %% h->cap;\n");
+    emit_raw(ctx, "  sp_RbHashEntry *e = h->buckets[idx];\n");
+    emit_raw(ctx, "  while (e) {\n");
+    emit_raw(ctx, "    if (strcmp(e->key, key) == 0) { e->value = value; return; }\n");
+    emit_raw(ctx, "    e = e->next;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  e = (sp_RbHashEntry *)malloc(sizeof(sp_RbHashEntry));\n");
+    emit_raw(ctx, "  e->key = key;\n");
+    emit_raw(ctx, "  e->value = value;\n");
+    emit_raw(ctx, "  e->next = h->buckets[idx];\n");
+    emit_raw(ctx, "  h->buckets[idx] = e;\n");
+    emit_raw(ctx, "  e->order_next = NULL;\n");
+    emit_raw(ctx, "  if (h->last) h->last->order_next = e; else h->first = e;\n");
+    emit_raw(ctx, "  h->last = e;\n");
+    emit_raw(ctx, "  h->size++;\n");
     emit_raw(ctx, "}\n\n");
     emit_raw(ctx, "static sp_RbValue sp_RbHash_get(sp_RbHash *h, const char *key) {\n");
-    emit_raw(ctx, "    unsigned idx = sp_rb_hash_str(key) %% h->cap;\n");
-    emit_raw(ctx, "    sp_RbHashEntry *e = h->buckets[idx];\n");
-    emit_raw(ctx, "    while (e) {\n");
-    emit_raw(ctx, "        if (strcmp(e->key, key) == 0) return e->value;\n");
-    emit_raw(ctx, "        e = e->next;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    return sp_box_nil();\n");
+    emit_raw(ctx, "  unsigned idx = sp_rb_hash_str(key) %% h->cap;\n");
+    emit_raw(ctx, "  sp_RbHashEntry *e = h->buckets[idx];\n");
+    emit_raw(ctx, "  while (e) {\n");
+    emit_raw(ctx, "    if (strcmp(e->key, key) == 0) return e->value;\n");
+    emit_raw(ctx, "    e = e->next;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  return sp_box_nil();\n");
     emit_raw(ctx, "}\n\n");
     emit_raw(ctx, "static mrb_int sp_RbHash_length(sp_RbHash *h) {\n");
-    emit_raw(ctx, "    return h->size;\n}\n\n");
+    emit_raw(ctx, "  return h->size;\n}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_RbHash_has_key(sp_RbHash *h, const char *key) {\n");
-    emit_raw(ctx, "    unsigned idx = sp_rb_hash_str(key) %% h->cap;\n");
-    emit_raw(ctx, "    sp_RbHashEntry *e = h->buckets[idx];\n");
-    emit_raw(ctx, "    while (e) {\n");
-    emit_raw(ctx, "        if (strcmp(e->key, key) == 0) return TRUE;\n");
-    emit_raw(ctx, "        e = e->next;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    return FALSE;\n}\n\n");
+    emit_raw(ctx, "  unsigned idx = sp_rb_hash_str(key) %% h->cap;\n");
+    emit_raw(ctx, "  sp_RbHashEntry *e = h->buckets[idx];\n");
+    emit_raw(ctx, "  while (e) {\n");
+    emit_raw(ctx, "    if (strcmp(e->key, key) == 0) return TRUE;\n");
+    emit_raw(ctx, "    e = e->next;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  return FALSE;\n}\n\n");
 
     /* RbHash: merge → new hash with entries from both */
     emit_raw(ctx, "static sp_RbHash *sp_RbHash_merge(sp_RbHash *h1, sp_RbHash *h2) {\n");
-    emit_raw(ctx, "    sp_RbHash *r = sp_RbHash_new();\n");
-    emit_raw(ctx, "    sp_RbHashEntry *e = h1->first;\n");
-    emit_raw(ctx, "    while (e) { sp_RbHash_set(r, e->key, e->value); e = e->order_next; }\n");
-    emit_raw(ctx, "    e = h2->first;\n");
-    emit_raw(ctx, "    while (e) { sp_RbHash_set(r, e->key, e->value); e = e->order_next; }\n");
-    emit_raw(ctx, "    return r;\n}\n\n");
+    emit_raw(ctx, "  sp_RbHash *r = sp_RbHash_new();\n");
+    emit_raw(ctx, "  sp_RbHashEntry *e = h1->first;\n");
+    emit_raw(ctx, "  while (e) { sp_RbHash_set(r, e->key, e->value); e = e->order_next; }\n");
+    emit_raw(ctx, "  e = h2->first;\n");
+    emit_raw(ctx, "  while (e) { sp_RbHash_set(r, e->key, e->value); e = e->order_next; }\n");
+    emit_raw(ctx, "  return r;\n}\n\n");
   }
 
   /* ---- String helpers (only emit those actually referenced) ---- */
@@ -1086,73 +1086,73 @@ void emit_header(codegen_ctx_t *ctx) {
   #define SRC_HAS(s) (memmem(_all_src, _slen, s, sizeof(s)-1) != NULL)
   if (SRC_HAS("upcase") || ctx->needs_sp_string) {
     emit_raw(ctx, "static const char *sp_str_upcase(const char *s) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
-    emit_raw(ctx, "    for (size_t i = 0; i <= n; i++) r[i] = toupper((unsigned char)s[i]);\n");
-    emit_raw(ctx, "    return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
+    emit_raw(ctx, "  for (size_t i = 0; i <= n; i++) r[i] = toupper((unsigned char)s[i]);\n");
+    emit_raw(ctx, "  return r;\n}\n");
   }
   if (SRC_HAS("downcase") || ctx->needs_sp_string) {
     emit_raw(ctx, "static const char *sp_str_downcase(const char *s) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
-    emit_raw(ctx, "    for (size_t i = 0; i <= n; i++) r[i] = tolower((unsigned char)s[i]);\n");
-    emit_raw(ctx, "    return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
+    emit_raw(ctx, "  for (size_t i = 0; i <= n; i++) r[i] = tolower((unsigned char)s[i]);\n");
+    emit_raw(ctx, "  return r;\n}\n");
   }
   /* sp_str_concat and sp_int_to_s: needed for string interpolation and + operator */
   if (SRC_HAS("\"") || SRC_HAS("+") || SRC_HAS("to_s")) {
     emit_raw(ctx, "static const char *sp_str_concat(const char *a, const char *b) {\n");
-    emit_raw(ctx, "    size_t la = strlen(a), lb = strlen(b);\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(la + lb + 1);\n");
-    emit_raw(ctx, "    memcpy(r, a, la); memcpy(r + la, b, lb + 1); return r;\n}\n");
+    emit_raw(ctx, "  size_t la = strlen(a), lb = strlen(b);\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(la + lb + 1);\n");
+    emit_raw(ctx, "  memcpy(r, a, la); memcpy(r + la, b, lb + 1); return r;\n}\n");
     emit_raw(ctx, "static const char *sp_int_to_s(mrb_int n) {\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(24); snprintf(r, 24, \"%%lld\", (long long)n); return r;\n}\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(24); snprintf(r, 24, \"%%lld\", (long long)n); return r;\n}\n");
   }
   if (SRC_HAS("[")) {
     emit_raw(ctx, "static const char *sp_str_char_at(const char *s, mrb_int idx) {\n");
-    emit_raw(ctx, "    mrb_int len = (mrb_int)strlen(s);\n");
-    emit_raw(ctx, "    if (idx < 0) idx += len;\n");
-    emit_raw(ctx, "    if (idx < 0 || idx >= len) return \"\";\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(2); r[0] = s[idx]; r[1] = '\\0'; return r;\n}\n\n");
+    emit_raw(ctx, "  mrb_int len = (mrb_int)strlen(s);\n");
+    emit_raw(ctx, "  if (idx < 0) idx += len;\n");
+    emit_raw(ctx, "  if (idx < 0 || idx >= len) return \"\";\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(2); r[0] = s[idx]; r[1] = '\\0'; return r;\n}\n\n");
   }
 
   /* ---- File I/O helpers (only when needed) ---- */
   if (ctx->needs_file_io) {
     emit_raw(ctx, "static const char *sp_File_read(const char *path) {\n");
-    emit_raw(ctx, "    FILE *f = fopen(path, \"rb\"); if (!f) return \"\";\n");
-    emit_raw(ctx, "    fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);\n");
-    emit_raw(ctx, "    char *buf = (char *)malloc(len + 1); fread(buf, 1, len, f); buf[len] = 0;\n");
-    emit_raw(ctx, "    fclose(f); return buf;\n}\n");
+    emit_raw(ctx, "  FILE *f = fopen(path, \"rb\"); if (!f) return \"\";\n");
+    emit_raw(ctx, "  fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);\n");
+    emit_raw(ctx, "  char *buf = (char *)malloc(len + 1); fread(buf, 1, len, f); buf[len] = 0;\n");
+    emit_raw(ctx, "  fclose(f); return buf;\n}\n");
     emit_raw(ctx, "static mrb_int sp_File_write(const char *path, const char *data) {\n");
-    emit_raw(ctx, "    FILE *f = fopen(path, \"wb\"); if (!f) return 0;\n");
-    emit_raw(ctx, "    size_t n = strlen(data); fwrite(data, 1, n, f); fclose(f);\n");
-    emit_raw(ctx, "    return (mrb_int)n;\n}\n");
+    emit_raw(ctx, "  FILE *f = fopen(path, \"wb\"); if (!f) return 0;\n");
+    emit_raw(ctx, "  size_t n = strlen(data); fwrite(data, 1, n, f); fclose(f);\n");
+    emit_raw(ctx, "  return (mrb_int)n;\n}\n");
     emit_raw(ctx, "static mrb_bool sp_File_exist(const char *path) {\n");
-    emit_raw(ctx, "    FILE *f = fopen(path, \"r\"); if (f) { fclose(f); return TRUE; } return FALSE;\n}\n");
+    emit_raw(ctx, "  FILE *f = fopen(path, \"r\"); if (f) { fclose(f); return TRUE; } return FALSE;\n}\n");
     emit_raw(ctx, "static mrb_int sp_File_delete(const char *path) {\n");
-    emit_raw(ctx, "    return remove(path) == 0 ? 1 : 0;\n}\n");
+    emit_raw(ctx, "  return remove(path) == 0 ? 1 : 0;\n}\n");
     emit_raw(ctx, "static const char *sp_File_join(const char *a, const char *b) {\n");
-    emit_raw(ctx, "    size_t la = strlen(a), lb = strlen(b);\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(la + 1 + lb + 1);\n");
-    emit_raw(ctx, "    memcpy(r, a, la); r[la] = '/'; memcpy(r + la + 1, b, lb + 1); return r;\n}\n");
+    emit_raw(ctx, "  size_t la = strlen(a), lb = strlen(b);\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(la + 1 + lb + 1);\n");
+    emit_raw(ctx, "  memcpy(r, a, la); r[la] = '/'; memcpy(r + la + 1, b, lb + 1); return r;\n}\n");
     emit_raw(ctx, "static const char *sp_File_expand_path(const char *path) {\n");
-    emit_raw(ctx, "    char *r = realpath(path, NULL); return r ? r : path;\n}\n");
+    emit_raw(ctx, "  char *r = realpath(path, NULL); return r ? r : path;\n}\n");
     emit_raw(ctx, "static const char *sp_File_basename(const char *path) {\n");
-    emit_raw(ctx, "    char *tmp = (char *)malloc(strlen(path) + 1); strcpy(tmp, path);\n");
-    emit_raw(ctx, "    const char *b = basename(tmp); char *r = (char *)malloc(strlen(b) + 1);\n");
-    emit_raw(ctx, "    strcpy(r, b); free(tmp); return r;\n}\n");
+    emit_raw(ctx, "  char *tmp = (char *)malloc(strlen(path) + 1); strcpy(tmp, path);\n");
+    emit_raw(ctx, "  const char *b = basename(tmp); char *r = (char *)malloc(strlen(b) + 1);\n");
+    emit_raw(ctx, "  strcpy(r, b); free(tmp); return r;\n}\n");
     emit_raw(ctx, "static const char *sp_File_dirname(const char *path) {\n");
-    emit_raw(ctx, "    char *tmp = (char *)malloc(strlen(path) + 1); strcpy(tmp, path);\n");
-    emit_raw(ctx, "    const char *d = dirname(tmp); char *r = (char *)malloc(strlen(d) + 1);\n");
-    emit_raw(ctx, "    strcpy(r, d); free(tmp); return r;\n}\n");
+    emit_raw(ctx, "  char *tmp = (char *)malloc(strlen(path) + 1); strcpy(tmp, path);\n");
+    emit_raw(ctx, "  const char *d = dirname(tmp); char *r = (char *)malloc(strlen(d) + 1);\n");
+    emit_raw(ctx, "  strcpy(r, d); free(tmp); return r;\n}\n");
     emit_raw(ctx, "static mrb_int sp_File_rename(const char *old, const char *new_) {\n");
-    emit_raw(ctx, "    return rename(old, new_) == 0 ? 0 : -1;\n}\n");
+    emit_raw(ctx, "  return rename(old, new_) == 0 ? 0 : -1;\n}\n");
     emit_raw(ctx, "static mrb_int sp_File_size(const char *path) {\n");
-    emit_raw(ctx, "    struct stat st; if (stat(path, &st) != 0) return -1; return (mrb_int)st.st_size;\n}\n");
+    emit_raw(ctx, "  struct stat st; if (stat(path, &st) != 0) return -1; return (mrb_int)st.st_size;\n}\n");
     emit_raw(ctx, "static mrb_int sp_File_mtime(const char *path) {\n");
-    emit_raw(ctx, "    struct stat st; if (stat(path, &st) != 0) return 0; return (mrb_int)st.st_mtime;\n}\n");
+    emit_raw(ctx, "  struct stat st; if (stat(path, &st) != 0) return 0; return (mrb_int)st.st_mtime;\n}\n");
     emit_raw(ctx, "static mrb_int sp_File_ctime(const char *path) {\n");
-    emit_raw(ctx, "    struct stat st; if (stat(path, &st) != 0) return 0; return (mrb_int)st.st_ctime;\n}\n");
+    emit_raw(ctx, "  struct stat st; if (stat(path, &st) != 0) return 0; return (mrb_int)st.st_ctime;\n}\n");
     emit_raw(ctx, "static const char *sp_File_readlink(const char *path) {\n");
-    emit_raw(ctx, "    char *buf = (char *)malloc(4096); ssize_t n = readlink(path, buf, 4095);\n");
-    emit_raw(ctx, "    if (n < 0) { free(buf); return \"\"; } buf[n] = '\\0'; return buf;\n}\n\n");
+    emit_raw(ctx, "  char *buf = (char *)malloc(4096); ssize_t n = readlink(path, buf, 4095);\n");
+    emit_raw(ctx, "  if (n < 0) { free(buf); return \"\"; } buf[n] = '\\0'; return buf;\n}\n\n");
 
     /* ---- sp_File: file object for File.open block ---- */
     emit_raw(ctx, "#include <sys/file.h>\n");
@@ -1162,97 +1162,97 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "#define sp_File_LOCK_UN LOCK_UN\n");
     emit_raw(ctx, "#define sp_File_LOCK_NB LOCK_NB\n");
     emit_raw(ctx, "static sp_File *sp_File_open(const char *path, const char *mode) {\n");
-    emit_raw(ctx, "    sp_File *f = (sp_File *)malloc(sizeof(sp_File));\n");
-    emit_raw(ctx, "    f->fp = fopen(path, mode);\n");
-    emit_raw(ctx, "    return f;\n}\n");
+    emit_raw(ctx, "  sp_File *f = (sp_File *)malloc(sizeof(sp_File));\n");
+    emit_raw(ctx, "  f->fp = fopen(path, mode);\n");
+    emit_raw(ctx, "  return f;\n}\n");
     emit_raw(ctx, "static void sp_File_close(sp_File *f) {\n");
-    emit_raw(ctx, "    if (f && f->fp) fclose(f->fp); free(f);\n}\n");
+    emit_raw(ctx, "  if (f && f->fp) fclose(f->fp); free(f);\n}\n");
     emit_raw(ctx, "static void sp_File_puts(sp_File *f, const char *s) {\n");
-    emit_raw(ctx, "    fputs(s, f->fp); fputc('\\n', f->fp);\n}\n");
+    emit_raw(ctx, "  fputs(s, f->fp); fputc('\\n', f->fp);\n}\n");
     emit_raw(ctx, "static void sp_File_write_str(sp_File *f, const char *s) {\n");
-    emit_raw(ctx, "    fputs(s, f->fp);\n}\n");
+    emit_raw(ctx, "  fputs(s, f->fp);\n}\n");
     emit_raw(ctx, "static const char *sp_File_readline(sp_File *f) {\n");
-    emit_raw(ctx, "    char *buf = (char *)malloc(4096);\n");
-    emit_raw(ctx, "    if (!fgets(buf, 4096, f->fp)) { free(buf); return \"\"; }\n");
-    emit_raw(ctx, "    size_t n = strlen(buf);\n");
-    emit_raw(ctx, "    if (n > 0 && buf[n-1] == '\\n') buf[n-1] = '\\0';\n");
-    emit_raw(ctx, "    return buf;\n}\n");
+    emit_raw(ctx, "  char *buf = (char *)malloc(4096);\n");
+    emit_raw(ctx, "  if (!fgets(buf, 4096, f->fp)) { free(buf); return \"\"; }\n");
+    emit_raw(ctx, "  size_t n = strlen(buf);\n");
+    emit_raw(ctx, "  if (n > 0 && buf[n-1] == '\\n') buf[n-1] = '\\0';\n");
+    emit_raw(ctx, "  return buf;\n}\n");
     emit_raw(ctx, "static const char *sp_File_read_all(sp_File *f) {\n");
-    emit_raw(ctx, "    long cur = ftell(f->fp); fseek(f->fp, 0, SEEK_END);\n");
-    emit_raw(ctx, "    long len = ftell(f->fp); fseek(f->fp, cur, SEEK_SET);\n");
-    emit_raw(ctx, "    long remain = len - cur;\n");
-    emit_raw(ctx, "    char *buf = (char *)malloc(remain + 1);\n");
-    emit_raw(ctx, "    fread(buf, 1, remain, f->fp); buf[remain] = 0;\n");
-    emit_raw(ctx, "    return buf;\n}\n\n");
+    emit_raw(ctx, "  long cur = ftell(f->fp); fseek(f->fp, 0, SEEK_END);\n");
+    emit_raw(ctx, "  long len = ftell(f->fp); fseek(f->fp, cur, SEEK_SET);\n");
+    emit_raw(ctx, "  long remain = len - cur;\n");
+    emit_raw(ctx, "  char *buf = (char *)malloc(remain + 1);\n");
+    emit_raw(ctx, "  fread(buf, 1, remain, f->fp); buf[remain] = 0;\n");
+    emit_raw(ctx, "  return buf;\n}\n\n");
   } /* needs_file_io */
 
   /* ---- sp_StringIO: in-memory IO (only when needed) ---- */
   if (ctx->needs_stringio) {
     emit_raw(ctx, "#include <stdarg.h>\n");
     emit_raw(ctx, "typedef struct {\n");
-    emit_raw(ctx, "    char *buf; int64_t len; int64_t cap; int64_t pos; int64_t lineno; int closed;\n");
+    emit_raw(ctx, "  char *buf; int64_t len; int64_t cap; int64_t pos; int64_t lineno; int closed;\n");
     emit_raw(ctx, "} sp_StringIO;\n");
     emit_raw(ctx, "static void sio_grow(sp_StringIO *sio, int64_t need) {\n");
-    emit_raw(ctx, "    int64_t req = sio->pos + need; if (req <= sio->cap) return;\n");
-    emit_raw(ctx, "    int64_t nc = sio->cap ? sio->cap : 64; while (nc < req) nc *= 2;\n");
-    emit_raw(ctx, "    sio->buf = (char *)realloc(sio->buf, nc + 1); sio->cap = nc;\n}\n");
+    emit_raw(ctx, "  int64_t req = sio->pos + need; if (req <= sio->cap) return;\n");
+    emit_raw(ctx, "  int64_t nc = sio->cap ? sio->cap : 64; while (nc < req) nc *= 2;\n");
+    emit_raw(ctx, "  sio->buf = (char *)realloc(sio->buf, nc + 1); sio->cap = nc;\n}\n");
     emit_raw(ctx, "static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) {\n");
-    emit_raw(ctx, "    sio_grow(sio, dl);\n");
-    emit_raw(ctx, "    if (sio->pos > sio->len) memset(sio->buf + sio->len, 0, sio->pos - sio->len);\n");
-    emit_raw(ctx, "    memcpy(sio->buf + sio->pos, d, dl); sio->pos += dl;\n");
-    emit_raw(ctx, "    if (sio->pos > sio->len) sio->len = sio->pos;\n");
-    emit_raw(ctx, "    sio->buf[sio->len] = '\\0'; return dl;\n}\n");
+    emit_raw(ctx, "  sio_grow(sio, dl);\n");
+    emit_raw(ctx, "  if (sio->pos > sio->len) memset(sio->buf + sio->len, 0, sio->pos - sio->len);\n");
+    emit_raw(ctx, "  memcpy(sio->buf + sio->pos, d, dl); sio->pos += dl;\n");
+    emit_raw(ctx, "  if (sio->pos > sio->len) sio->len = sio->pos;\n");
+    emit_raw(ctx, "  sio->buf[sio->len] = '\\0'; return dl;\n}\n");
     emit_raw(ctx, "static sp_StringIO *sp_StringIO_new(void) {\n");
-    emit_raw(ctx, "    sp_StringIO *s = (sp_StringIO *)calloc(1, sizeof(sp_StringIO));\n");
-    emit_raw(ctx, "    s->buf = (char *)calloc(1, 64); s->cap = 63; return s;\n}\n");
+    emit_raw(ctx, "  sp_StringIO *s = (sp_StringIO *)calloc(1, sizeof(sp_StringIO));\n");
+    emit_raw(ctx, "  s->buf = (char *)calloc(1, 64); s->cap = 63; return s;\n}\n");
     emit_raw(ctx, "static sp_StringIO *sp_StringIO_new_s(const char *init) {\n");
-    emit_raw(ctx, "    sp_StringIO *s = (sp_StringIO *)calloc(1, sizeof(sp_StringIO));\n");
-    emit_raw(ctx, "    int64_t l = (int64_t)strlen(init); int64_t c = l < 63 ? 63 : l;\n");
-    emit_raw(ctx, "    s->buf = (char *)malloc(c+1); memcpy(s->buf, init, l); s->buf[l]='\\0';\n");
-    emit_raw(ctx, "    s->len = l; s->cap = c; return s;\n}\n");
+    emit_raw(ctx, "  sp_StringIO *s = (sp_StringIO *)calloc(1, sizeof(sp_StringIO));\n");
+    emit_raw(ctx, "  int64_t l = (int64_t)strlen(init); int64_t c = l < 63 ? 63 : l;\n");
+    emit_raw(ctx, "  s->buf = (char *)malloc(c+1); memcpy(s->buf, init, l); s->buf[l]='\\0';\n");
+    emit_raw(ctx, "  s->len = l; s->cap = c; return s;\n}\n");
     emit_raw(ctx, "static const char *sp_StringIO_string(sp_StringIO *s) { return s->buf ? s->buf : \"\"; }\n");
     emit_raw(ctx, "static int64_t sp_StringIO_pos(sp_StringIO *s) { return s->pos; }\n");
     emit_raw(ctx, "static int64_t sp_StringIO_lineno(sp_StringIO *s) { return s->lineno; }\n");
     emit_raw(ctx, "static int64_t sp_StringIO_size(sp_StringIO *s) { return s->len; }\n");
     emit_raw(ctx, "static int64_t sp_StringIO_write(sp_StringIO *s, const char *str) {\n");
-    emit_raw(ctx, "    return sio_write(s, str, (int64_t)strlen(str));\n}\n");
+    emit_raw(ctx, "  return sio_write(s, str, (int64_t)strlen(str));\n}\n");
     emit_raw(ctx, "static int64_t sp_StringIO_puts(sp_StringIO *s, const char *str) {\n");
-    emit_raw(ctx, "    int64_t l = (int64_t)strlen(str); sio_write(s, str, l);\n");
-    emit_raw(ctx, "    if (l == 0 || str[l-1] != '\\n') sio_write(s, \"\\n\", 1); return 0;\n}\n");
+    emit_raw(ctx, "  int64_t l = (int64_t)strlen(str); sio_write(s, str, l);\n");
+    emit_raw(ctx, "  if (l == 0 || str[l-1] != '\\n') sio_write(s, \"\\n\", 1); return 0;\n}\n");
     emit_raw(ctx, "static int64_t sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, \"\\n\", 1); return 0; }\n");
     emit_raw(ctx, "static int64_t sp_StringIO_print(sp_StringIO *s, const char *str) {\n");
-    emit_raw(ctx, "    return sio_write(s, str, (int64_t)strlen(str));\n}\n");
+    emit_raw(ctx, "  return sio_write(s, str, (int64_t)strlen(str));\n}\n");
     emit_raw(ctx, "static int64_t sp_StringIO_putc(sp_StringIO *s, int64_t ch) {\n");
-    emit_raw(ctx, "    char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch;\n}\n");
+    emit_raw(ctx, "  char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch;\n}\n");
     emit_raw(ctx, "static sp_StringIO *sp_StringIO_append(sp_StringIO *s, const char *str) {\n");
-    emit_raw(ctx, "    sio_write(s, str, (int64_t)strlen(str)); return s;\n}\n");
+    emit_raw(ctx, "  sio_write(s, str, (int64_t)strlen(str)); return s;\n}\n");
     emit_raw(ctx, "static const char *sp_StringIO_read(sp_StringIO *s) {\n");
-    emit_raw(ctx, "    if (s->pos >= s->len) return \"\";\n");
-    emit_raw(ctx, "    const char *r = s->buf + s->pos; s->pos = s->len; return r;\n}\n");
+    emit_raw(ctx, "  if (s->pos >= s->len) return \"\";\n");
+    emit_raw(ctx, "  const char *r = s->buf + s->pos; s->pos = s->len; return r;\n}\n");
     emit_raw(ctx, "static const char *sp_StringIO_read_n(sp_StringIO *s, int64_t n) {\n");
-    emit_raw(ctx, "    if (s->pos >= s->len) return NULL;\n");
-    emit_raw(ctx, "    int64_t rem = s->len - s->pos; if (n > rem) n = rem;\n");
-    emit_raw(ctx, "    static char rb[65536]; if (n >= (int64_t)sizeof(rb)) n = sizeof(rb)-1;\n");
-    emit_raw(ctx, "    memcpy(rb, s->buf + s->pos, n); rb[n] = '\\0'; s->pos += n; return rb;\n}\n");
+    emit_raw(ctx, "  if (s->pos >= s->len) return NULL;\n");
+    emit_raw(ctx, "  int64_t rem = s->len - s->pos; if (n > rem) n = rem;\n");
+    emit_raw(ctx, "  static char rb[65536]; if (n >= (int64_t)sizeof(rb)) n = sizeof(rb)-1;\n");
+    emit_raw(ctx, "  memcpy(rb, s->buf + s->pos, n); rb[n] = '\\0'; s->pos += n; return rb;\n}\n");
     emit_raw(ctx, "static const char *sp_StringIO_gets(sp_StringIO *s) {\n");
-    emit_raw(ctx, "    if (s->pos >= s->len) return NULL;\n");
-    emit_raw(ctx, "    const char *st = s->buf + s->pos; const char *nl = memchr(st, '\\n', s->len - s->pos);\n");
-    emit_raw(ctx, "    int64_t ll = nl ? (nl - st) + 1 : s->len - s->pos;\n");
-    emit_raw(ctx, "    static char gb[65536]; if (ll >= (int64_t)sizeof(gb)) ll = sizeof(gb)-1;\n");
-    emit_raw(ctx, "    memcpy(gb, st, ll); gb[ll] = '\\0'; s->pos += ll; s->lineno++; return gb;\n}\n");
+    emit_raw(ctx, "  if (s->pos >= s->len) return NULL;\n");
+    emit_raw(ctx, "  const char *st = s->buf + s->pos; const char *nl = memchr(st, '\\n', s->len - s->pos);\n");
+    emit_raw(ctx, "  int64_t ll = nl ? (nl - st) + 1 : s->len - s->pos;\n");
+    emit_raw(ctx, "  static char gb[65536]; if (ll >= (int64_t)sizeof(gb)) ll = sizeof(gb)-1;\n");
+    emit_raw(ctx, "  memcpy(gb, st, ll); gb[ll] = '\\0'; s->pos += ll; s->lineno++; return gb;\n}\n");
     emit_raw(ctx, "static const char *sp_StringIO_getc(sp_StringIO *s) {\n");
-    emit_raw(ctx, "    if (s->pos >= s->len) return NULL;\n");
-    emit_raw(ctx, "    static char gc[2]; gc[0] = s->buf[s->pos++]; gc[1] = '\\0'; return gc;\n}\n");
+    emit_raw(ctx, "  if (s->pos >= s->len) return NULL;\n");
+    emit_raw(ctx, "  static char gc[2]; gc[0] = s->buf[s->pos++]; gc[1] = '\\0'; return gc;\n}\n");
     emit_raw(ctx, "static int64_t sp_StringIO_getbyte(sp_StringIO *s) {\n");
-    emit_raw(ctx, "    if (s->pos >= s->len) return -1;\n");
-    emit_raw(ctx, "    return (int64_t)(unsigned char)s->buf[s->pos++];\n}\n");
+    emit_raw(ctx, "  if (s->pos >= s->len) return -1;\n");
+    emit_raw(ctx, "  return (int64_t)(unsigned char)s->buf[s->pos++];\n}\n");
     emit_raw(ctx, "static int64_t sp_StringIO_rewind(sp_StringIO *s) { s->pos = 0; s->lineno = 0; return 0; }\n");
     emit_raw(ctx, "static int64_t sp_StringIO_seek(sp_StringIO *s, int64_t off, int64_t w) {\n");
-    emit_raw(ctx, "    int64_t np; switch(w) { case 1: np=s->pos+off; break; case 2: np=s->len+off; break; default: np=off; }\n");
-    emit_raw(ctx, "    if (np < 0) np = 0; s->pos = np; return 0;\n}\n");
+    emit_raw(ctx, "  int64_t np; switch(w) { case 1: np=s->pos+off; break; case 2: np=s->len+off; break; default: np=off; }\n");
+    emit_raw(ctx, "  if (np < 0) np = 0; s->pos = np; return 0;\n}\n");
     emit_raw(ctx, "static mrb_bool sp_StringIO_eof_p(sp_StringIO *s) { return s->pos >= s->len; }\n");
     emit_raw(ctx, "static int64_t sp_StringIO_truncate(sp_StringIO *s, int64_t l) {\n");
-    emit_raw(ctx, "    if (l < 0) l = 0; if (l < s->len) { s->len = l; s->buf[l] = '\\0'; } return 0;\n}\n");
+    emit_raw(ctx, "  if (l < 0) l = 0; if (l < s->len) { s->len = l; s->buf[l] = '\\0'; } return 0;\n}\n");
     emit_raw(ctx, "static int64_t sp_StringIO_close(sp_StringIO *s) { s->closed = 1; return 0; }\n");
     emit_raw(ctx, "static mrb_bool sp_StringIO_closed_p(sp_StringIO *s) { return s->closed; }\n");
     emit_raw(ctx, "static sp_StringIO *sp_StringIO_flush(sp_StringIO *s) { return s; }\n");
@@ -1264,135 +1264,135 @@ void emit_header(codegen_ctx_t *ctx) {
   /* ---- Additional string helpers (conditional) ---- */
   if (SRC_HAS("strip")) {
     emit_raw(ctx, "static const char *sp_str_strip(const char *s) {\n");
-    emit_raw(ctx, "    while (*s && isspace((unsigned char)*s)) s++;\n");
-    emit_raw(ctx, "    size_t n = strlen(s);\n");
-    emit_raw(ctx, "    while (n > 0 && isspace((unsigned char)s[n-1])) n--;\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(n + 1);\n");
-    emit_raw(ctx, "    memcpy(r, s, n); r[n] = '\\0'; return r;\n}\n");
+    emit_raw(ctx, "  while (*s && isspace((unsigned char)*s)) s++;\n");
+    emit_raw(ctx, "  size_t n = strlen(s);\n");
+    emit_raw(ctx, "  while (n > 0 && isspace((unsigned char)s[n-1])) n--;\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(n + 1);\n");
+    emit_raw(ctx, "  memcpy(r, s, n); r[n] = '\\0'; return r;\n}\n");
   }
   if (SRC_HAS("chomp")) {
     emit_raw(ctx, "static const char *sp_str_chomp(const char *s) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s);\n");
-    emit_raw(ctx, "    if (n > 0 && s[n-1] == '\\n') { if (n > 1 && s[n-2] == '\\r') n--; n--; }\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(n + 1);\n");
-    emit_raw(ctx, "    memcpy(r, s, n); r[n] = '\\0'; return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s);\n");
+    emit_raw(ctx, "  if (n > 0 && s[n-1] == '\\n') { if (n > 1 && s[n-2] == '\\r') n--; n--; }\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(n + 1);\n");
+    emit_raw(ctx, "  memcpy(r, s, n); r[n] = '\\0'; return r;\n}\n");
   }
   if (SRC_HAS("capitalize")) {
     emit_raw(ctx, "static const char *sp_str_capitalize(const char *s) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
-    emit_raw(ctx, "    for (size_t i = 0; i <= n; i++) r[i] = (i == 0) ? toupper((unsigned char)s[i]) : tolower((unsigned char)s[i]);\n");
-    emit_raw(ctx, "    return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
+    emit_raw(ctx, "  for (size_t i = 0; i <= n; i++) r[i] = (i == 0) ? toupper((unsigned char)s[i]) : tolower((unsigned char)s[i]);\n");
+    emit_raw(ctx, "  return r;\n}\n");
   }
   if (SRC_HAS("reverse") || ctx->needs_sp_string) {
     emit_raw(ctx, "static const char *sp_str_reverse(const char *s) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
-    emit_raw(ctx, "    for (size_t i = 0; i < n; i++) r[i] = s[n - 1 - i];\n");
-    emit_raw(ctx, "    r[n] = '\\0'; return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); char *r = (char *)malloc(n + 1);\n");
+    emit_raw(ctx, "  for (size_t i = 0; i < n; i++) r[i] = s[n - 1 - i];\n");
+    emit_raw(ctx, "  r[n] = '\\0'; return r;\n}\n");
   }
   if (SRC_HAS("count")) {
     emit_raw(ctx, "static mrb_int sp_str_count(const char *s, const char *chars) {\n");
-    emit_raw(ctx, "    mrb_int c = 0;\n");
-    emit_raw(ctx, "    for (; *s; s++) { for (const char *p = chars; *p; p++) { if (*s == *p) { c++; break; } } }\n");
-    emit_raw(ctx, "    return c;\n}\n");
+    emit_raw(ctx, "  mrb_int c = 0;\n");
+    emit_raw(ctx, "  for (; *s; s++) { for (const char *p = chars; *p; p++) { if (*s == *p) { c++; break; } } }\n");
+    emit_raw(ctx, "  return c;\n}\n");
   }
   if (SRC_HAS("start_with")) {
     emit_raw(ctx, "static mrb_bool sp_str_starts_with(const char *s, const char *prefix) {\n");
-    emit_raw(ctx, "    size_t pn = strlen(prefix);\n");
-    emit_raw(ctx, "    return strncmp(s, prefix, pn) == 0;\n}\n");
+    emit_raw(ctx, "  size_t pn = strlen(prefix);\n");
+    emit_raw(ctx, "  return strncmp(s, prefix, pn) == 0;\n}\n");
   }
   if (SRC_HAS("end_with")) {
     emit_raw(ctx, "static mrb_bool sp_str_ends_with(const char *s, const char *suffix) {\n");
-    emit_raw(ctx, "    size_t sn = strlen(s), xn = strlen(suffix);\n");
-    emit_raw(ctx, "    return sn >= xn && strcmp(s + sn - xn, suffix) == 0;\n}\n");
+    emit_raw(ctx, "  size_t sn = strlen(s), xn = strlen(suffix);\n");
+    emit_raw(ctx, "  return sn >= xn && strcmp(s + sn - xn, suffix) == 0;\n}\n");
   }
   if (SRC_HAS("gsub")) {
     emit_raw(ctx, "static const char *sp_str_gsub(const char *s, const char *from, const char *to) {\n");
-    emit_raw(ctx, "    size_t fl = strlen(from), tl = strlen(to);\n");
-    emit_raw(ctx, "    size_t cap = strlen(s) * 2 + 16; char *r = (char *)malloc(cap); size_t ri = 0;\n");
-    emit_raw(ctx, "    while (*s) {\n");
-    emit_raw(ctx, "        if (strncmp(s, from, fl) == 0) {\n");
-    emit_raw(ctx, "            if (ri + tl >= cap) { cap = (ri + tl) * 2; r = (char *)realloc(r, cap); }\n");
-    emit_raw(ctx, "            memcpy(r + ri, to, tl); ri += tl; s += fl;\n");
-    emit_raw(ctx, "        } else {\n");
-    emit_raw(ctx, "            if (ri + 1 >= cap) { cap *= 2; r = (char *)realloc(r, cap); }\n");
-    emit_raw(ctx, "            r[ri++] = *s++;\n");
-    emit_raw(ctx, "        }\n");
+    emit_raw(ctx, "  size_t fl = strlen(from), tl = strlen(to);\n");
+    emit_raw(ctx, "  size_t cap = strlen(s) * 2 + 16; char *r = (char *)malloc(cap); size_t ri = 0;\n");
+    emit_raw(ctx, "  while (*s) {\n");
+    emit_raw(ctx, "    if (strncmp(s, from, fl) == 0) {\n");
+    emit_raw(ctx, "      if (ri + tl >= cap) { cap = (ri + tl) * 2; r = (char *)realloc(r, cap); }\n");
+    emit_raw(ctx, "      memcpy(r + ri, to, tl); ri += tl; s += fl;\n");
+    emit_raw(ctx, "    } else {\n");
+    emit_raw(ctx, "      if (ri + 1 >= cap) { cap *= 2; r = (char *)realloc(r, cap); }\n");
+    emit_raw(ctx, "      r[ri++] = *s++;\n");
     emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    r[ri] = '\\0'; return r;\n}\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  r[ri] = '\\0'; return r;\n}\n");
   }
   if (SRC_HAS("sub")) {
     emit_raw(ctx, "static const char *sp_str_sub(const char *s, const char *from, const char *to) {\n");
-    emit_raw(ctx, "    const char *p = strstr(s, from);\n");
-    emit_raw(ctx, "    if (!p) { size_t n = strlen(s); char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
-    emit_raw(ctx, "    size_t fl = strlen(from), tl = strlen(to), sn = strlen(s);\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(sn - fl + tl + 1);\n");
-    emit_raw(ctx, "    size_t before = p - s;\n");
-    emit_raw(ctx, "    memcpy(r, s, before); memcpy(r + before, to, tl);\n");
-    emit_raw(ctx, "    memcpy(r + before + tl, p + fl, sn - before - fl + 1); return r;\n}\n");
+    emit_raw(ctx, "  const char *p = strstr(s, from);\n");
+    emit_raw(ctx, "  if (!p) { size_t n = strlen(s); char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
+    emit_raw(ctx, "  size_t fl = strlen(from), tl = strlen(to), sn = strlen(s);\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(sn - fl + tl + 1);\n");
+    emit_raw(ctx, "  size_t before = p - s;\n");
+    emit_raw(ctx, "  memcpy(r, s, before); memcpy(r + before, to, tl);\n");
+    emit_raw(ctx, "  memcpy(r + before + tl, p + fl, sn - before - fl + 1); return r;\n}\n");
   }
   if (SRC_HAS("*")) {
     emit_raw(ctx, "static const char *sp_str_repeat(const char *s, mrb_int n) {\n");
-    emit_raw(ctx, "    size_t sl = strlen(s); char *r = (char *)malloc(sl * n + 1);\n");
-    emit_raw(ctx, "    for (mrb_int i = 0; i < n; i++) memcpy(r + sl * i, s, sl);\n");
-    emit_raw(ctx, "    r[sl * n] = '\\0'; return r;\n}\n\n");
+    emit_raw(ctx, "  size_t sl = strlen(s); char *r = (char *)malloc(sl * n + 1);\n");
+    emit_raw(ctx, "  for (mrb_int i = 0; i < n; i++) memcpy(r + sl * i, s, sl);\n");
+    emit_raw(ctx, "  r[sl * n] = '\\0'; return r;\n}\n\n");
   }
   if (SRC_HAS("ljust")) {
     emit_raw(ctx, "static const char *sp_str_ljust(const char *s, mrb_int w, char pad) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); if ((mrb_int)n >= w) { char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(w+1); memcpy(r,s,n); memset(r+n,pad,w-n); r[w]='\\0'; return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); if ((mrb_int)n >= w) { char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(w+1); memcpy(r,s,n); memset(r+n,pad,w-n); r[w]='\\0'; return r;\n}\n");
   }
   if (SRC_HAS("rjust")) {
     emit_raw(ctx, "static const char *sp_str_rjust(const char *s, mrb_int w, char pad) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); if ((mrb_int)n >= w) { char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(w+1); memset(r,pad,w-n); memcpy(r+w-n,s,n+1); return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); if ((mrb_int)n >= w) { char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(w+1); memset(r,pad,w-n); memcpy(r+w-n,s,n+1); return r;\n}\n");
   }
   if (SRC_HAS("center")) {
     emit_raw(ctx, "static const char *sp_str_center(const char *s, mrb_int w, char pad) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); if ((mrb_int)n >= w) { char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
-    emit_raw(ctx, "    mrb_int left = (w - (mrb_int)n) / 2; mrb_int right = w - (mrb_int)n - left;\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(w+1); memset(r,pad,w); memcpy(r+left,s,n); r[w]='\\0'; return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); if ((mrb_int)n >= w) { char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r; }\n");
+    emit_raw(ctx, "  mrb_int left = (w - (mrb_int)n) / 2; mrb_int right = w - (mrb_int)n - left;\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(w+1); memset(r,pad,w); memcpy(r+left,s,n); r[w]='\\0'; return r;\n}\n");
   }
   if (SRC_HAS("lstrip")) {
     emit_raw(ctx, "static const char *sp_str_lstrip(const char *s) {\n");
-    emit_raw(ctx, "    while (*s && isspace((unsigned char)*s)) s++;\n");
-    emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r;\n}\n");
+    emit_raw(ctx, "  while (*s && isspace((unsigned char)*s)) s++;\n");
+    emit_raw(ctx, "  size_t n = strlen(s); char *r = (char *)malloc(n+1); memcpy(r,s,n+1); return r;\n}\n");
   }
   if (SRC_HAS("rstrip")) {
     emit_raw(ctx, "static const char *sp_str_rstrip(const char *s) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s);\n");
-    emit_raw(ctx, "    while (n > 0 && isspace((unsigned char)s[n-1])) n--;\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(n+1); memcpy(r,s,n); r[n]='\\0'; return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s);\n");
+    emit_raw(ctx, "  while (n > 0 && isspace((unsigned char)s[n-1])) n--;\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(n+1); memcpy(r,s,n); r[n]='\\0'; return r;\n}\n");
   }
   if (SRC_HAS(".tr")) {
     emit_raw(ctx, "static const char *sp_str_tr(const char *s, const char *from, const char *to) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n+1);\n");
-    emit_raw(ctx, "    size_t fl = strlen(from), tl = strlen(to);\n");
-    emit_raw(ctx, "    for (size_t i = 0; i <= n; i++) {\n");
-    emit_raw(ctx, "        const char *p = memchr(from, s[i], fl);\n");
-    emit_raw(ctx, "        if (p && s[i]) { size_t idx = p - from; r[i] = (idx < tl) ? to[idx] : to[tl-1]; }\n");
-    emit_raw(ctx, "        else r[i] = s[i];\n");
-    emit_raw(ctx, "    } return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); char *r = (char *)malloc(n+1);\n");
+    emit_raw(ctx, "  size_t fl = strlen(from), tl = strlen(to);\n");
+    emit_raw(ctx, "  for (size_t i = 0; i <= n; i++) {\n");
+    emit_raw(ctx, "    const char *p = memchr(from, s[i], fl);\n");
+    emit_raw(ctx, "    if (p && s[i]) { size_t idx = p - from; r[i] = (idx < tl) ? to[idx] : to[tl-1]; }\n");
+    emit_raw(ctx, "    else r[i] = s[i];\n");
+    emit_raw(ctx, "  } return r;\n}\n");
   }
   if (SRC_HAS("delete")) {
     emit_raw(ctx, "static const char *sp_str_delete(const char *s, const char *chars) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n+1); size_t ri = 0;\n");
-    emit_raw(ctx, "    for (size_t i = 0; i < n; i++) { if (!memchr(chars, s[i], strlen(chars))) r[ri++] = s[i]; }\n");
-    emit_raw(ctx, "    r[ri] = '\\0'; return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); char *r = (char *)malloc(n+1); size_t ri = 0;\n");
+    emit_raw(ctx, "  for (size_t i = 0; i < n; i++) { if (!memchr(chars, s[i], strlen(chars))) r[ri++] = s[i]; }\n");
+    emit_raw(ctx, "  r[ri] = '\\0'; return r;\n}\n");
   }
   if (SRC_HAS("squeeze")) {
     emit_raw(ctx, "static const char *sp_str_squeeze(const char *s) {\n");
-    emit_raw(ctx, "    size_t n = strlen(s); char *r = (char *)malloc(n+1); size_t ri = 0;\n");
-    emit_raw(ctx, "    for (size_t i = 0; i < n; i++) { if (i == 0 || s[i] != s[i-1]) r[ri++] = s[i]; }\n");
-    emit_raw(ctx, "    r[ri] = '\\0'; return r;\n}\n");
+    emit_raw(ctx, "  size_t n = strlen(s); char *r = (char *)malloc(n+1); size_t ri = 0;\n");
+    emit_raw(ctx, "  for (size_t i = 0; i < n; i++) { if (i == 0 || s[i] != s[i-1]) r[ri++] = s[i]; }\n");
+    emit_raw(ctx, "  r[ri] = '\\0'; return r;\n}\n");
   }
   if (SRC_HAS("slice")) {
     emit_raw(ctx, "static const char *sp_str_slice(const char *s, mrb_int start, mrb_int len) {\n");
-    emit_raw(ctx, "    mrb_int sn = (mrb_int)strlen(s);\n");
-    emit_raw(ctx, "    if (start < 0) start += sn;\n");
-    emit_raw(ctx, "    if (start < 0) start = 0;\n");
-    emit_raw(ctx, "    if (start >= sn || len <= 0) { char *r = (char *)malloc(1); r[0]='\\0'; return r; }\n");
-    emit_raw(ctx, "    if (start + len > sn) len = sn - start;\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(len+1); memcpy(r, s+start, len); r[len]='\\0'; return r;\n}\n");
+    emit_raw(ctx, "  mrb_int sn = (mrb_int)strlen(s);\n");
+    emit_raw(ctx, "  if (start < 0) start += sn;\n");
+    emit_raw(ctx, "  if (start < 0) start = 0;\n");
+    emit_raw(ctx, "  if (start >= sn || len <= 0) { char *r = (char *)malloc(1); r[0]='\\0'; return r; }\n");
+    emit_raw(ctx, "  if (start + len > sn) len = sn - start;\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(len+1); memcpy(r, s+start, len); r[len]='\\0'; return r;\n}\n");
   }
   if (SRC_HAS("to_f")) {
     emit_raw(ctx, "static mrb_float sp_str_to_f(const char *s) { return strtod(s, NULL); }\n");
@@ -1402,84 +1402,84 @@ void emit_header(codegen_ctx_t *ctx) {
   if (ctx->needs_sp_string) {
     emit_raw(ctx, "typedef struct { char *data; int64_t len; int64_t cap; } sp_String;\n");
     emit_raw(ctx, "static sp_String *sp_String_new(const char *s) {\n");
-    emit_raw(ctx, "    sp_String *r = (sp_String *)malloc(sizeof(sp_String));\n");
-    emit_raw(ctx, "    r->len = (int64_t)strlen(s);\n");
-    emit_raw(ctx, "    r->cap = r->len < 16 ? 16 : r->len * 2;\n");
-    emit_raw(ctx, "    r->data = (char *)malloc(r->cap + 1);\n");
-    emit_raw(ctx, "    memcpy(r->data, s, r->len + 1);\n");
-    emit_raw(ctx, "    return r;\n}\n");
+    emit_raw(ctx, "  sp_String *r = (sp_String *)malloc(sizeof(sp_String));\n");
+    emit_raw(ctx, "  r->len = (int64_t)strlen(s);\n");
+    emit_raw(ctx, "  r->cap = r->len < 16 ? 16 : r->len * 2;\n");
+    emit_raw(ctx, "  r->data = (char *)malloc(r->cap + 1);\n");
+    emit_raw(ctx, "  memcpy(r->data, s, r->len + 1);\n");
+    emit_raw(ctx, "  return r;\n}\n");
     emit_raw(ctx, "static sp_String *sp_String_new_empty(void) { return sp_String_new(\"\"); }\n");
     emit_raw(ctx, "static void sp_String_append(sp_String *s, const char *t) {\n");
-    emit_raw(ctx, "    int64_t tl = (int64_t)strlen(t);\n");
-    emit_raw(ctx, "    if (s->len + tl >= s->cap) {\n");
-    emit_raw(ctx, "        s->cap = (s->len + tl) * 2;\n");
-    emit_raw(ctx, "        s->data = (char *)realloc(s->data, s->cap + 1);\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    memcpy(s->data + s->len, t, tl + 1);\n");
-    emit_raw(ctx, "    s->len += tl;\n}\n");
+    emit_raw(ctx, "  int64_t tl = (int64_t)strlen(t);\n");
+    emit_raw(ctx, "  if (s->len + tl >= s->cap) {\n");
+    emit_raw(ctx, "    s->cap = (s->len + tl) * 2;\n");
+    emit_raw(ctx, "    s->data = (char *)realloc(s->data, s->cap + 1);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  memcpy(s->data + s->len, t, tl + 1);\n");
+    emit_raw(ctx, "  s->len += tl;\n}\n");
     emit_raw(ctx, "static void sp_String_append_str(sp_String *s, sp_String *t) {\n");
-    emit_raw(ctx, "    sp_String_append(s, t->data);\n}\n");
+    emit_raw(ctx, "  sp_String_append(s, t->data);\n}\n");
     emit_raw(ctx, "static const char *sp_String_cstr(sp_String *s) { return s->data; }\n");
     emit_raw(ctx, "static int64_t sp_String_length(sp_String *s) { return s->len; }\n");
     emit_raw(ctx, "static const char *sp_String_upcase(sp_String *s) {\n");
-    emit_raw(ctx, "    return sp_str_upcase(s->data);\n}\n");
+    emit_raw(ctx, "  return sp_str_upcase(s->data);\n}\n");
     emit_raw(ctx, "static const char *sp_String_reverse(sp_String *s) {\n");
-    emit_raw(ctx, "    return sp_str_reverse(s->data);\n}\n");
+    emit_raw(ctx, "  return sp_str_reverse(s->data);\n}\n");
     emit_raw(ctx, "static mrb_bool sp_String_include(sp_String *s, const char *sub) {\n");
-    emit_raw(ctx, "    return strstr(s->data, sub) != NULL;\n}\n");
+    emit_raw(ctx, "  return strstr(s->data, sub) != NULL;\n}\n");
     emit_raw(ctx, "static void sp_String_replace(sp_String *s, const char *t) {\n");
-    emit_raw(ctx, "    size_t tlen = strlen(t);\n");
-    emit_raw(ctx, "    if (tlen >= (size_t)s->cap) { s->cap = tlen + 1; s->data = realloc(s->data, s->cap); }\n");
-    emit_raw(ctx, "    memcpy(s->data, t, tlen + 1); s->len = tlen;\n}\n");
+    emit_raw(ctx, "  size_t tlen = strlen(t);\n");
+    emit_raw(ctx, "  if (tlen >= (size_t)s->cap) { s->cap = tlen + 1; s->data = realloc(s->data, s->cap); }\n");
+    emit_raw(ctx, "  memcpy(s->data, t, tlen + 1); s->len = tlen;\n}\n");
     emit_raw(ctx, "static void sp_String_clear(sp_String *s) { s->data[0] = '\\0'; s->len = 0; }\n");
     emit_raw(ctx, "static sp_String *sp_String_dup(sp_String *s) { return sp_String_new(s->data); }\n");
     emit_raw(ctx, "static void sp_String_setbyte(sp_String *s, mrb_int i, mrb_int b) {\n");
-    emit_raw(ctx, "    if (i >= 0 && i < s->len) s->data[i] = (char)b;\n}\n");
+    emit_raw(ctx, "  if (i >= 0 && i < s->len) s->data[i] = (char)b;\n}\n");
     emit_raw(ctx, "static const char *sp_String_char_at(sp_String *s, int64_t idx) {\n");
-    emit_raw(ctx, "    if (idx < 0) idx += s->len;\n");
-    emit_raw(ctx, "    if (idx < 0 || idx >= s->len) return \"\";\n");
-    emit_raw(ctx, "    char *r = malloc(2); r[0] = s->data[idx]; r[1] = '\\0'; return r;\n}\n\n");
+    emit_raw(ctx, "  if (idx < 0) idx += s->len;\n");
+    emit_raw(ctx, "  if (idx < 0 || idx >= s->len) return \"\";\n");
+    emit_raw(ctx, "  char *r = malloc(2); r[0] = s->data[idx]; r[1] = '\\0'; return r;\n}\n\n");
   }
 
   /* ---- Float format (Ruby-style: always show decimal point) ---- */
   if (SRC_HAS("to_s") || SRC_HAS("puts") || ctx->needs_poly) {
     emit_raw(ctx, "static const char *sp_float_to_s(mrb_float f) {\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(32);\n");
-    emit_raw(ctx, "    snprintf(r, 32, \"%%g\", f);\n");
-    emit_raw(ctx, "    if (!strchr(r, '.') && !strchr(r, 'e') && !strchr(r, 'E')) strcat(r, \".0\");\n");
-    emit_raw(ctx, "    return r;\n}\n\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(32);\n");
+    emit_raw(ctx, "  snprintf(r, 32, \"%%g\", f);\n");
+    emit_raw(ctx, "  if (!strchr(r, '.') && !strchr(r, 'e') && !strchr(r, 'E')) strcat(r, \".0\");\n");
+    emit_raw(ctx, "  return r;\n}\n\n");
   }
 
   /* ---- Backtick helper (popen/pclose) ---- */
   if (SRC_HAS("`")) {
     emit_raw(ctx, "static const char *sp_backtick(const char *cmd) {\n");
-    emit_raw(ctx, "    FILE *p = popen(cmd, \"r\");\n");
-    emit_raw(ctx, "    if (!p) return \"\";\n");
-    emit_raw(ctx, "    char buf[4096]; size_t n = fread(buf, 1, sizeof(buf)-1, p);\n");
-    emit_raw(ctx, "    buf[n] = '\\0'; pclose(p);\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(n+1); memcpy(r, buf, n+1); return r;\n}\n\n");
+    emit_raw(ctx, "  FILE *p = popen(cmd, \"r\");\n");
+    emit_raw(ctx, "  if (!p) return \"\";\n");
+    emit_raw(ctx, "  char buf[4096]; size_t n = fread(buf, 1, sizeof(buf)-1, p);\n");
+    emit_raw(ctx, "  buf[n] = '\\0'; pclose(p);\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(n+1); memcpy(r, buf, n+1); return r;\n}\n\n");
   }
 
   /* ---- format() helper (snprintf wrapper) ---- */
   if (SRC_HAS("format") || SRC_HAS("sprintf") || SRC_HAS("printf")) {
     emit_raw(ctx, "static const char *sp_format(const char *fmt, ...) {\n");
-    emit_raw(ctx, "    va_list ap; va_start(ap, fmt);\n");
-    emit_raw(ctx, "    int n = vsnprintf(NULL, 0, fmt, ap); va_end(ap);\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(n + 1);\n");
-    emit_raw(ctx, "    va_start(ap, fmt); vsnprintf(r, n + 1, fmt, ap); va_end(ap);\n");
-    emit_raw(ctx, "    return r;\n}\n\n");
+    emit_raw(ctx, "  va_list ap; va_start(ap, fmt);\n");
+    emit_raw(ctx, "  int n = vsnprintf(NULL, 0, fmt, ap); va_end(ap);\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(n + 1);\n");
+    emit_raw(ctx, "  va_start(ap, fmt); vsnprintf(r, n + 1, fmt, ap); va_end(ap);\n");
+    emit_raw(ctx, "  return r;\n}\n\n");
   }
 
   /* ---- Polymorphic to_s (after sp_int_to_s/sp_float_to_s) ---- */
   if (ctx->needs_poly) {
     emit_raw(ctx, "static const char *sp_poly_to_s(sp_RbValue v) {\n");
-    emit_raw(ctx, "    uint16_t t = SP_TAG(v);\n");
-    emit_raw(ctx, "    if (t == SP_T_INT) return sp_int_to_s(sp_unbox_int(v));\n");
-    emit_raw(ctx, "    if (t == SP_T_FLOAT) return sp_float_to_s(sp_unbox_float(v));\n");
-    emit_raw(ctx, "    if (t == SP_T_STRING) return sp_unbox_str(v);\n");
-    emit_raw(ctx, "    if (t == SP_T_BOOL) return sp_unbox_bool(v) ? \"true\" : \"false\";\n");
-    emit_raw(ctx, "    if (t == SP_T_NIL) return \"\";\n");
-    emit_raw(ctx, "    return \"(object)\";\n");
+    emit_raw(ctx, "  uint16_t t = SP_TAG(v);\n");
+    emit_raw(ctx, "  if (t == SP_T_INT) return sp_int_to_s(sp_unbox_int(v));\n");
+    emit_raw(ctx, "  if (t == SP_T_FLOAT) return sp_float_to_s(sp_unbox_float(v));\n");
+    emit_raw(ctx, "  if (t == SP_T_STRING) return sp_unbox_str(v);\n");
+    emit_raw(ctx, "  if (t == SP_T_BOOL) return sp_unbox_bool(v) ? \"true\" : \"false\";\n");
+    emit_raw(ctx, "  if (t == SP_T_NIL) return \"\";\n");
+    emit_raw(ctx, "  return \"(object)\";\n");
     emit_raw(ctx, "}\n\n");
 
     /* ---- Polymorphic arithmetic/comparison helpers ---- */
@@ -1497,101 +1497,101 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "#define SP_BF sp_unbox_float(b)\n\n");
 
     emit_raw(ctx, "static sp_RbValue sp_poly_add(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return sp_box_int(SP_AI + SP_BI);\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
-    emit_raw(ctx, "        double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
-    emit_raw(ctx, "        double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
-    emit_raw(ctx, "        return sp_box_float(fa + fb);\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_STRING && SP_TAG_B == SP_T_STRING)\n");
-    emit_raw(ctx, "        return sp_box_str(sp_str_concat(sp_unbox_str(a), sp_unbox_str(b)));\n");
-    emit_raw(ctx, "    sp_raise(\"TypeError: + not defined\"); return sp_box_nil();\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return sp_box_int(SP_AI + SP_BI);\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
+    emit_raw(ctx, "    double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
+    emit_raw(ctx, "    double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
+    emit_raw(ctx, "    return sp_box_float(fa + fb);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_STRING && SP_TAG_B == SP_T_STRING)\n");
+    emit_raw(ctx, "    return sp_box_str(sp_str_concat(sp_unbox_str(a), sp_unbox_str(b)));\n");
+    emit_raw(ctx, "  sp_raise(\"TypeError: + not defined\"); return sp_box_nil();\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static sp_RbValue sp_poly_sub(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return sp_box_int(SP_AI - SP_BI);\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
-    emit_raw(ctx, "        double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
-    emit_raw(ctx, "        double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
-    emit_raw(ctx, "        return sp_box_float(fa - fb);\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    sp_raise(\"TypeError: - not defined\"); return sp_box_nil();\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return sp_box_int(SP_AI - SP_BI);\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
+    emit_raw(ctx, "    double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
+    emit_raw(ctx, "    double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
+    emit_raw(ctx, "    return sp_box_float(fa - fb);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  sp_raise(\"TypeError: - not defined\"); return sp_box_nil();\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static sp_RbValue sp_poly_mul(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return sp_box_int(SP_AI * SP_BI);\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
-    emit_raw(ctx, "        double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
-    emit_raw(ctx, "        double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
-    emit_raw(ctx, "        return sp_box_float(fa * fb);\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_STRING && SP_TAG_B == SP_T_INT)\n");
-    emit_raw(ctx, "        return sp_box_str(sp_str_repeat(sp_unbox_str(a), SP_BI));\n");
-    emit_raw(ctx, "    sp_raise(\"TypeError: * not defined\"); return sp_box_nil();\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return sp_box_int(SP_AI * SP_BI);\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
+    emit_raw(ctx, "    double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
+    emit_raw(ctx, "    double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
+    emit_raw(ctx, "    return sp_box_float(fa * fb);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_STRING && SP_TAG_B == SP_T_INT)\n");
+    emit_raw(ctx, "    return sp_box_str(sp_str_repeat(sp_unbox_str(a), SP_BI));\n");
+    emit_raw(ctx, "  sp_raise(\"TypeError: * not defined\"); return sp_box_nil();\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static sp_RbValue sp_poly_div(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return sp_box_int(SP_AI / SP_BI);\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
-    emit_raw(ctx, "        double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
-    emit_raw(ctx, "        double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
-    emit_raw(ctx, "        return sp_box_float(fa / fb);\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    sp_raise(\"TypeError: / not defined\"); return sp_box_nil();\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return sp_box_int(SP_AI / SP_BI);\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
+    emit_raw(ctx, "    double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
+    emit_raw(ctx, "    double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
+    emit_raw(ctx, "    return sp_box_float(fa / fb);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  sp_raise(\"TypeError: / not defined\"); return sp_box_nil();\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_poly_gt(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return SP_AI > SP_BI;\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
-    emit_raw(ctx, "        double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
-    emit_raw(ctx, "        double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
-    emit_raw(ctx, "        return fa > fb;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    sp_raise(\"TypeError: > not defined\"); return 0;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return SP_AI > SP_BI;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
+    emit_raw(ctx, "    double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
+    emit_raw(ctx, "    double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
+    emit_raw(ctx, "    return fa > fb;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  sp_raise(\"TypeError: > not defined\"); return 0;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_poly_lt(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return SP_AI < SP_BI;\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
-    emit_raw(ctx, "        double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
-    emit_raw(ctx, "        double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
-    emit_raw(ctx, "        return fa < fb;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    sp_raise(\"TypeError: < not defined\"); return 0;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return SP_AI < SP_BI;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
+    emit_raw(ctx, "    double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
+    emit_raw(ctx, "    double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
+    emit_raw(ctx, "    return fa < fb;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  sp_raise(\"TypeError: < not defined\"); return 0;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_poly_ge(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return SP_AI >= SP_BI;\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
-    emit_raw(ctx, "        double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
-    emit_raw(ctx, "        double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
-    emit_raw(ctx, "        return fa >= fb;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    sp_raise(\"TypeError: >= not defined\"); return 0;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return SP_AI >= SP_BI;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
+    emit_raw(ctx, "    double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
+    emit_raw(ctx, "    double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
+    emit_raw(ctx, "    return fa >= fb;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  sp_raise(\"TypeError: >= not defined\"); return 0;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_poly_le(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return SP_AI <= SP_BI;\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
-    emit_raw(ctx, "        double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
-    emit_raw(ctx, "        double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
-    emit_raw(ctx, "        return fa <= fb;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    sp_raise(\"TypeError: <= not defined\"); return 0;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_INT && SP_TAG_B == SP_T_INT) return SP_AI <= SP_BI;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_FLOAT || SP_TAG_B == SP_T_FLOAT) {\n");
+    emit_raw(ctx, "    double fa = SP_TAG_A == SP_T_FLOAT ? SP_AF : (double)SP_AI;\n");
+    emit_raw(ctx, "    double fb = SP_TAG_B == SP_T_FLOAT ? SP_BF : (double)SP_BI;\n");
+    emit_raw(ctx, "    return fa <= fb;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  sp_raise(\"TypeError: <= not defined\"); return 0;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_poly_eq(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    if (SP_TAG_A != SP_TAG_B) return 0;\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_INT) return SP_AI == SP_BI;\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_FLOAT) return SP_AF == SP_BF;\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_STRING) return strcmp(sp_unbox_str(a), sp_unbox_str(b)) == 0;\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_BOOL) return sp_unbox_bool(a) == sp_unbox_bool(b);\n");
-    emit_raw(ctx, "    if (SP_TAG_A == SP_T_NIL) return 1;\n");
-    emit_raw(ctx, "    return sp_unbox_obj(a) == sp_unbox_obj(b);\n");
+    emit_raw(ctx, "  if (SP_TAG_A != SP_TAG_B) return 0;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_INT) return SP_AI == SP_BI;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_FLOAT) return SP_AF == SP_BF;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_STRING) return strcmp(sp_unbox_str(a), sp_unbox_str(b)) == 0;\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_BOOL) return sp_unbox_bool(a) == sp_unbox_bool(b);\n");
+    emit_raw(ctx, "  if (SP_TAG_A == SP_T_NIL) return 1;\n");
+    emit_raw(ctx, "  return sp_unbox_obj(a) == sp_unbox_obj(b);\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_poly_neq(sp_RbValue a, sp_RbValue b) {\n");
-    emit_raw(ctx, "    return !sp_poly_eq(a, b);\n");
+    emit_raw(ctx, "  return !sp_poly_eq(a, b);\n");
     emit_raw(ctx, "}\n\n");
   }
 
@@ -1613,11 +1613,11 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "extern OnigSyntaxType OnigSyntaxRuby;\n");
     emit_raw(ctx, "extern int onig_initialize(OnigEncoding *encs, int n);\n");
     emit_raw(ctx, "extern int onig_new(regex_t **reg, const OnigUChar *pattern,\n");
-    emit_raw(ctx, "    const OnigUChar *pattern_end, int option, OnigEncoding enc,\n");
-    emit_raw(ctx, "    OnigSyntaxType *syntax, OnigErrorInfo *einfo);\n");
+    emit_raw(ctx, "  const OnigUChar *pattern_end, int option, OnigEncoding enc,\n");
+    emit_raw(ctx, "  OnigSyntaxType *syntax, OnigErrorInfo *einfo);\n");
     emit_raw(ctx, "extern int onig_search(regex_t *reg, const OnigUChar *str,\n");
-    emit_raw(ctx, "    const OnigUChar *end, const OnigUChar *start, const OnigUChar *range,\n");
-    emit_raw(ctx, "    OnigRegion *region, int option);\n");
+    emit_raw(ctx, "  const OnigUChar *end, const OnigUChar *start, const OnigUChar *range,\n");
+    emit_raw(ctx, "  OnigRegion *region, int option);\n");
     emit_raw(ctx, "extern OnigRegion *onig_region_new(void);\n");
     emit_raw(ctx, "extern void onig_region_free(OnigRegion *region, int free_self);\n\n");
 
@@ -1632,10 +1632,10 @@ void emit_header(codegen_ctx_t *ctx) {
 
     /* sp_regexp_init — compile all patterns at startup */
     emit_raw(ctx, "static void sp_regexp_init(void) {\n");
-    emit_raw(ctx, "    OnigEncoding enc = &OnigEncodingUTF8;\n");
-    emit_raw(ctx, "    OnigErrorInfo einfo;\n");
-    emit_raw(ctx, "    onig_initialize(&enc, 1);\n");
-    emit_raw(ctx, "    sp_match_region = onig_region_new();\n");
+    emit_raw(ctx, "  OnigEncoding enc = &OnigEncodingUTF8;\n");
+    emit_raw(ctx, "  OnigErrorInfo einfo;\n");
+    emit_raw(ctx, "  onig_initialize(&enc, 1);\n");
+    emit_raw(ctx, "  sp_match_region = onig_region_new();\n");
     for (int i = 0; i < ctx->regexp_counter; i++) {
       /* Escape the pattern for C string literal */
       const char *pat = ctx->regexps[i].pattern;
@@ -1648,87 +1648,87 @@ void emit_header(codegen_ctx_t *ctx) {
         else escaped[ep++] = pat[j];
       }
       escaped[ep] = '\0';
-      emit_raw(ctx, "    onig_new(&_re_%d, (const OnigUChar *)\"%s\", (const OnigUChar *)\"%s\" + %zu,\n",
+      emit_raw(ctx, "  onig_new(&_re_%d, (const OnigUChar *)\"%s\", (const OnigUChar *)\"%s\" + %zu,\n",
            ctx->regexps[i].id, escaped, escaped, plen);
-      emit_raw(ctx, "        ONIG_OPTION_DEFAULT, &OnigEncodingUTF8, &OnigSyntaxRuby, &einfo);\n");
+      emit_raw(ctx, "    ONIG_OPTION_DEFAULT, &OnigEncodingUTF8, &OnigSyntaxRuby, &einfo);\n");
     }
     emit_raw(ctx, "}\n\n");
 
     /* sp_re_match — perform match, store results, return position or -1 */
     emit_raw(ctx, "static mrb_int sp_re_match(regex_t *re, const char *s) {\n");
-    emit_raw(ctx, "    sp_match_str = s;\n");
-    emit_raw(ctx, "    const OnigUChar *end = (const OnigUChar *)s + strlen(s);\n");
-    emit_raw(ctx, "    int r = onig_search(re, (const OnigUChar *)s, end,\n");
-    emit_raw(ctx, "        (const OnigUChar *)s, end, sp_match_region, ONIG_OPTION_NONE);\n");
-    emit_raw(ctx, "    return (mrb_int)r;\n");
+    emit_raw(ctx, "  sp_match_str = s;\n");
+    emit_raw(ctx, "  const OnigUChar *end = (const OnigUChar *)s + strlen(s);\n");
+    emit_raw(ctx, "  int r = onig_search(re, (const OnigUChar *)s, end,\n");
+    emit_raw(ctx, "    (const OnigUChar *)s, end, sp_match_region, ONIG_OPTION_NONE);\n");
+    emit_raw(ctx, "  return (mrb_int)r;\n");
     emit_raw(ctx, "}\n\n");
 
     /* sp_re_match_p — check if match exists (boolean) */
     emit_raw(ctx, "static mrb_bool sp_re_match_p(regex_t *re, const char *s) {\n");
-    emit_raw(ctx, "    const OnigUChar *end = (const OnigUChar *)s + strlen(s);\n");
-    emit_raw(ctx, "    int r = onig_search(re, (const OnigUChar *)s, end,\n");
-    emit_raw(ctx, "        (const OnigUChar *)s, end, sp_match_region, ONIG_OPTION_NONE);\n");
-    emit_raw(ctx, "    return r >= 0;\n");
+    emit_raw(ctx, "  const OnigUChar *end = (const OnigUChar *)s + strlen(s);\n");
+    emit_raw(ctx, "  int r = onig_search(re, (const OnigUChar *)s, end,\n");
+    emit_raw(ctx, "    (const OnigUChar *)s, end, sp_match_region, ONIG_OPTION_NONE);\n");
+    emit_raw(ctx, "  return r >= 0;\n");
     emit_raw(ctx, "}\n\n");
 
     /* sp_re_group — extract $N from last match */
     emit_raw(ctx, "static const char *sp_re_group(int n) {\n");
-    emit_raw(ctx, "    if (n < 0 || n >= sp_match_region->num_regs) return \"\";\n");
-    emit_raw(ctx, "    int beg = sp_match_region->beg[n], end = sp_match_region->end[n];\n");
-    emit_raw(ctx, "    if (beg < 0) return \"\";\n");
-    emit_raw(ctx, "    int len = end - beg;\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(len + 1);\n");
-    emit_raw(ctx, "    memcpy(r, sp_match_str + beg, len);\n");
-    emit_raw(ctx, "    r[len] = '\\0';\n");
-    emit_raw(ctx, "    return r;\n");
+    emit_raw(ctx, "  if (n < 0 || n >= sp_match_region->num_regs) return \"\";\n");
+    emit_raw(ctx, "  int beg = sp_match_region->beg[n], end = sp_match_region->end[n];\n");
+    emit_raw(ctx, "  if (beg < 0) return \"\";\n");
+    emit_raw(ctx, "  int len = end - beg;\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(len + 1);\n");
+    emit_raw(ctx, "  memcpy(r, sp_match_str + beg, len);\n");
+    emit_raw(ctx, "  r[len] = '\\0';\n");
+    emit_raw(ctx, "  return r;\n");
     emit_raw(ctx, "}\n\n");
 
     /* sp_re_gsub — global substitution with regexp */
     emit_raw(ctx, "static const char *sp_re_gsub(regex_t *re, const char *s, const char *repl) {\n");
-    emit_raw(ctx, "    size_t slen = strlen(s), rlen = strlen(repl);\n");
-    emit_raw(ctx, "    size_t cap = slen * 2 + 16; char *out = (char *)malloc(cap); size_t oi = 0;\n");
-    emit_raw(ctx, "    OnigRegion *region = onig_region_new();\n");
-    emit_raw(ctx, "    const OnigUChar *end = (const OnigUChar *)s + slen;\n");
-    emit_raw(ctx, "    int pos = 0;\n");
-    emit_raw(ctx, "    while (pos <= (int)slen) {\n");
-    emit_raw(ctx, "        int r = onig_search(re, (const OnigUChar *)s, end,\n");
-    emit_raw(ctx, "            (const OnigUChar *)s + pos, end, region, ONIG_OPTION_NONE);\n");
-    emit_raw(ctx, "        if (r < 0) break;\n");
-    emit_raw(ctx, "        int mbeg = region->beg[0], mend = region->end[0];\n");
-    emit_raw(ctx, "        size_t need = oi + (mbeg - pos) + rlen + (slen - mend) + 1;\n");
-    emit_raw(ctx, "        if (need > cap) { cap = need * 2; out = (char *)realloc(out, cap); }\n");
-    emit_raw(ctx, "        memcpy(out + oi, s + pos, mbeg - pos); oi += mbeg - pos;\n");
-    emit_raw(ctx, "        memcpy(out + oi, repl, rlen); oi += rlen;\n");
-    emit_raw(ctx, "        pos = mend;\n");
-    emit_raw(ctx, "        if (mend == mbeg) pos++; /* avoid infinite loop on zero-width match */\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    size_t rest = slen - pos;\n");
-    emit_raw(ctx, "    if (oi + rest + 1 > cap) { cap = oi + rest + 1; out = (char *)realloc(out, cap); }\n");
-    emit_raw(ctx, "    memcpy(out + oi, s + pos, rest); oi += rest;\n");
-    emit_raw(ctx, "    out[oi] = '\\0';\n");
-    emit_raw(ctx, "    onig_region_free(region, 1);\n");
-    emit_raw(ctx, "    return out;\n");
+    emit_raw(ctx, "  size_t slen = strlen(s), rlen = strlen(repl);\n");
+    emit_raw(ctx, "  size_t cap = slen * 2 + 16; char *out = (char *)malloc(cap); size_t oi = 0;\n");
+    emit_raw(ctx, "  OnigRegion *region = onig_region_new();\n");
+    emit_raw(ctx, "  const OnigUChar *end = (const OnigUChar *)s + slen;\n");
+    emit_raw(ctx, "  int pos = 0;\n");
+    emit_raw(ctx, "  while (pos <= (int)slen) {\n");
+    emit_raw(ctx, "    int r = onig_search(re, (const OnigUChar *)s, end,\n");
+    emit_raw(ctx, "      (const OnigUChar *)s + pos, end, region, ONIG_OPTION_NONE);\n");
+    emit_raw(ctx, "    if (r < 0) break;\n");
+    emit_raw(ctx, "    int mbeg = region->beg[0], mend = region->end[0];\n");
+    emit_raw(ctx, "    size_t need = oi + (mbeg - pos) + rlen + (slen - mend) + 1;\n");
+    emit_raw(ctx, "    if (need > cap) { cap = need * 2; out = (char *)realloc(out, cap); }\n");
+    emit_raw(ctx, "    memcpy(out + oi, s + pos, mbeg - pos); oi += mbeg - pos;\n");
+    emit_raw(ctx, "    memcpy(out + oi, repl, rlen); oi += rlen;\n");
+    emit_raw(ctx, "    pos = mend;\n");
+    emit_raw(ctx, "    if (mend == mbeg) pos++; /* avoid infinite loop on zero-width match */\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  size_t rest = slen - pos;\n");
+    emit_raw(ctx, "  if (oi + rest + 1 > cap) { cap = oi + rest + 1; out = (char *)realloc(out, cap); }\n");
+    emit_raw(ctx, "  memcpy(out + oi, s + pos, rest); oi += rest;\n");
+    emit_raw(ctx, "  out[oi] = '\\0';\n");
+    emit_raw(ctx, "  onig_region_free(region, 1);\n");
+    emit_raw(ctx, "  return out;\n");
     emit_raw(ctx, "}\n\n");
 
     /* sp_re_sub — single substitution with regexp */
     emit_raw(ctx, "static const char *sp_re_sub(regex_t *re, const char *s, const char *repl) {\n");
-    emit_raw(ctx, "    size_t slen = strlen(s), rlen = strlen(repl);\n");
-    emit_raw(ctx, "    OnigRegion *region = onig_region_new();\n");
-    emit_raw(ctx, "    const OnigUChar *end = (const OnigUChar *)s + slen;\n");
-    emit_raw(ctx, "    int r = onig_search(re, (const OnigUChar *)s, end,\n");
-    emit_raw(ctx, "        (const OnigUChar *)s, end, region, ONIG_OPTION_NONE);\n");
-    emit_raw(ctx, "    if (r < 0) {\n");
-    emit_raw(ctx, "        onig_region_free(region, 1);\n");
-    emit_raw(ctx, "        char *dup = (char *)malloc(slen + 1); memcpy(dup, s, slen + 1); return dup;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    int mbeg = region->beg[0], mend = region->end[0];\n");
-    emit_raw(ctx, "    size_t olen = slen - (mend - mbeg) + rlen;\n");
-    emit_raw(ctx, "    char *out = (char *)malloc(olen + 1);\n");
-    emit_raw(ctx, "    memcpy(out, s, mbeg);\n");
-    emit_raw(ctx, "    memcpy(out + mbeg, repl, rlen);\n");
-    emit_raw(ctx, "    memcpy(out + mbeg + rlen, s + mend, slen - mend + 1);\n");
+    emit_raw(ctx, "  size_t slen = strlen(s), rlen = strlen(repl);\n");
+    emit_raw(ctx, "  OnigRegion *region = onig_region_new();\n");
+    emit_raw(ctx, "  const OnigUChar *end = (const OnigUChar *)s + slen;\n");
+    emit_raw(ctx, "  int r = onig_search(re, (const OnigUChar *)s, end,\n");
+    emit_raw(ctx, "    (const OnigUChar *)s, end, region, ONIG_OPTION_NONE);\n");
+    emit_raw(ctx, "  if (r < 0) {\n");
     emit_raw(ctx, "    onig_region_free(region, 1);\n");
-    emit_raw(ctx, "    return out;\n");
+    emit_raw(ctx, "    char *dup = (char *)malloc(slen + 1); memcpy(dup, s, slen + 1); return dup;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  int mbeg = region->beg[0], mend = region->end[0];\n");
+    emit_raw(ctx, "  size_t olen = slen - (mend - mbeg) + rlen;\n");
+    emit_raw(ctx, "  char *out = (char *)malloc(olen + 1);\n");
+    emit_raw(ctx, "  memcpy(out, s, mbeg);\n");
+    emit_raw(ctx, "  memcpy(out + mbeg, repl, rlen);\n");
+    emit_raw(ctx, "  memcpy(out + mbeg + rlen, s + mend, slen - mend + 1);\n");
+    emit_raw(ctx, "  onig_region_free(region, 1);\n");
+    emit_raw(ctx, "  return out;\n");
     emit_raw(ctx, "}\n\n");
 
   }
@@ -1737,10 +1737,10 @@ void emit_header(codegen_ctx_t *ctx) {
   if (ctx->needs_gc) {
     emit_raw(ctx, "/* ---- Mark-and-sweep GC runtime ---- */\n");
     emit_raw(ctx, "typedef struct sp_gc_hdr {\n");
-    emit_raw(ctx, "    struct sp_gc_hdr *next;\n");
-    emit_raw(ctx, "    void (*finalize)(void *);\n");
-    emit_raw(ctx, "    void (*scan)(void *);\n");
-    emit_raw(ctx, "    unsigned marked : 1;\n");
+    emit_raw(ctx, "  struct sp_gc_hdr *next;\n");
+    emit_raw(ctx, "  void (*finalize)(void *);\n");
+    emit_raw(ctx, "  void (*scan)(void *);\n");
+    emit_raw(ctx, "  unsigned marked : 1;\n");
     emit_raw(ctx, "} sp_gc_hdr;\n\n");
 
     emit_raw(ctx, "static sp_gc_hdr *sp_gc_heap = NULL;\n");
@@ -1755,49 +1755,49 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "#define SP_GC_RESTORE() sp_gc_nroots = _gc_saved\n\n");
 
     emit_raw(ctx, "static void sp_gc_mark(void *obj) {\n");
-    emit_raw(ctx, "    if (!obj) return;\n");
-    emit_raw(ctx, "    sp_gc_hdr *h = (sp_gc_hdr *)((char *)obj - sizeof(sp_gc_hdr));\n");
-    emit_raw(ctx, "    if (h->marked) return;\n");
-    emit_raw(ctx, "    h->marked = 1;\n");
-    emit_raw(ctx, "    if (h->scan) h->scan(obj);\n");
+    emit_raw(ctx, "  if (!obj) return;\n");
+    emit_raw(ctx, "  sp_gc_hdr *h = (sp_gc_hdr *)((char *)obj - sizeof(sp_gc_hdr));\n");
+    emit_raw(ctx, "  if (h->marked) return;\n");
+    emit_raw(ctx, "  h->marked = 1;\n");
+    emit_raw(ctx, "  if (h->scan) h->scan(obj);\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static void sp_gc_collect(void) {\n");
-    emit_raw(ctx, "    /* Mark phase: mark all roots */\n");
-    emit_raw(ctx, "    for (int i = 0; i < sp_gc_nroots; i++) {\n");
-    emit_raw(ctx, "        void *obj = *sp_gc_roots[i];\n");
-    emit_raw(ctx, "        if (obj) sp_gc_mark(obj);\n");
+    emit_raw(ctx, "  /* Mark phase: mark all roots */\n");
+    emit_raw(ctx, "  for (int i = 0; i < sp_gc_nroots; i++) {\n");
+    emit_raw(ctx, "    void *obj = *sp_gc_roots[i];\n");
+    emit_raw(ctx, "    if (obj) sp_gc_mark(obj);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  /* Sweep phase: free unmarked, reset marks */\n");
+    emit_raw(ctx, "  sp_gc_hdr **pp = &sp_gc_heap;\n");
+    emit_raw(ctx, "  sp_gc_bytes = 0;\n");
+    emit_raw(ctx, "  while (*pp) {\n");
+    emit_raw(ctx, "    sp_gc_hdr *h = *pp;\n");
+    emit_raw(ctx, "    if (!h->marked) {\n");
+    emit_raw(ctx, "      *pp = h->next;\n");
+    emit_raw(ctx, "      if (h->finalize) h->finalize((char *)h + sizeof(sp_gc_hdr));\n");
+    emit_raw(ctx, "      free(h);\n");
+    emit_raw(ctx, "    } else {\n");
+    emit_raw(ctx, "      h->marked = 0;\n");
+    emit_raw(ctx, "      sp_gc_bytes += sizeof(sp_gc_hdr); /* approximate */\n");
+    emit_raw(ctx, "      pp = &h->next;\n");
     emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    /* Sweep phase: free unmarked, reset marks */\n");
-    emit_raw(ctx, "    sp_gc_hdr **pp = &sp_gc_heap;\n");
-    emit_raw(ctx, "    sp_gc_bytes = 0;\n");
-    emit_raw(ctx, "    while (*pp) {\n");
-    emit_raw(ctx, "        sp_gc_hdr *h = *pp;\n");
-    emit_raw(ctx, "        if (!h->marked) {\n");
-    emit_raw(ctx, "            *pp = h->next;\n");
-    emit_raw(ctx, "            if (h->finalize) h->finalize((char *)h + sizeof(sp_gc_hdr));\n");
-    emit_raw(ctx, "            free(h);\n");
-    emit_raw(ctx, "        } else {\n");
-    emit_raw(ctx, "            h->marked = 0;\n");
-    emit_raw(ctx, "            sp_gc_bytes += sizeof(sp_gc_hdr); /* approximate */\n");
-    emit_raw(ctx, "            pp = &h->next;\n");
-    emit_raw(ctx, "        }\n");
-    emit_raw(ctx, "    }\n");
+    emit_raw(ctx, "  }\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static void *sp_gc_alloc(size_t sz, void (*finalize)(void *), void (*scan)(void *)) {\n");
-    emit_raw(ctx, "    if (sp_gc_bytes > sp_gc_threshold) {\n");
-    emit_raw(ctx, "        sp_gc_collect();\n");
-    emit_raw(ctx, "        if (sp_gc_bytes > sp_gc_threshold / 2)\n");
-    emit_raw(ctx, "            sp_gc_threshold *= 2;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    sp_gc_hdr *h = (sp_gc_hdr *)calloc(1, sizeof(sp_gc_hdr) + sz);\n");
-    emit_raw(ctx, "    h->finalize = finalize;\n");
-    emit_raw(ctx, "    h->scan = scan;\n");
-    emit_raw(ctx, "    h->next = sp_gc_heap;\n");
-    emit_raw(ctx, "    sp_gc_heap = h;\n");
-    emit_raw(ctx, "    sp_gc_bytes += sizeof(sp_gc_hdr) + sz;\n");
-    emit_raw(ctx, "    return (char *)h + sizeof(sp_gc_hdr);\n");
+    emit_raw(ctx, "  if (sp_gc_bytes > sp_gc_threshold) {\n");
+    emit_raw(ctx, "    sp_gc_collect();\n");
+    emit_raw(ctx, "    if (sp_gc_bytes > sp_gc_threshold / 2)\n");
+    emit_raw(ctx, "      sp_gc_threshold *= 2;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  sp_gc_hdr *h = (sp_gc_hdr *)calloc(1, sizeof(sp_gc_hdr) + sz);\n");
+    emit_raw(ctx, "  h->finalize = finalize;\n");
+    emit_raw(ctx, "  h->scan = scan;\n");
+    emit_raw(ctx, "  h->next = sp_gc_heap;\n");
+    emit_raw(ctx, "  sp_gc_heap = h;\n");
+    emit_raw(ctx, "  sp_gc_bytes += sizeof(sp_gc_hdr) + sz;\n");
+    emit_raw(ctx, "  return (char *)h + sizeof(sp_gc_hdr);\n");
     emit_raw(ctx, "}\n\n");
   }
 
@@ -1811,37 +1811,37 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "static const char *sp_exc_message = NULL;\n");
     emit_raw(ctx, "static const char *sp_exc_class = \"RuntimeError\";\n\n");
     emit_raw(ctx, "static void sp_raise(const char *msg) {\n");
-    emit_raw(ctx, "    sp_exc_message = msg; sp_exc_class = \"RuntimeError\";\n");
-    emit_raw(ctx, "    if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 1);\n");
-    emit_raw(ctx, "    fprintf(stderr, \"unhandled exception: %%s\\n\", msg); exit(1);\n");
+    emit_raw(ctx, "  sp_exc_message = msg; sp_exc_class = \"RuntimeError\";\n");
+    emit_raw(ctx, "  if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 1);\n");
+    emit_raw(ctx, "  fprintf(stderr, \"unhandled exception: %%s\\n\", msg); exit(1);\n");
     emit_raw(ctx, "}\n");
     emit_raw(ctx, "static void sp_raise_cls(const char *cls, const char *msg) {\n");
-    emit_raw(ctx, "    sp_exc_message = msg; sp_exc_class = cls;\n");
-    emit_raw(ctx, "    if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 1);\n");
-    emit_raw(ctx, "    fprintf(stderr, \"%%s: %%s\\n\", cls, msg); exit(1);\n");
+    emit_raw(ctx, "  sp_exc_message = msg; sp_exc_class = cls;\n");
+    emit_raw(ctx, "  if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 1);\n");
+    emit_raw(ctx, "  fprintf(stderr, \"%%s: %%s\\n\", cls, msg); exit(1);\n");
     emit_raw(ctx, "}\n");
     /* sp_exc_is_a checks class hierarchy — populated at codegen time */
     emit_raw(ctx, "static int sp_exc_is_a(const char *cls) {\n");
-    emit_raw(ctx, "    if (strcmp(sp_exc_class, cls) == 0) return 1;\n");
+    emit_raw(ctx, "  if (strcmp(sp_exc_class, cls) == 0) return 1;\n");
     /* Add inheritance checks for known exception classes */
     for (int ci = 0; ci < ctx->class_count; ci++) {
       class_info_t *c = &ctx->classes[ci];
       if (c->superclass[0]) {
         /* If raised class is c->name and cls is a parent, match */
-        emit_raw(ctx, "    if (strcmp(sp_exc_class, \"%s\") == 0 && strcmp(cls, \"%s\") == 0) return 1;\n",
+        emit_raw(ctx, "  if (strcmp(sp_exc_class, \"%s\") == 0 && strcmp(cls, \"%s\") == 0) return 1;\n",
              c->name, c->superclass);
         /* Walk further up the chain */
         class_info_t *p = find_class(ctx, c->superclass);
         while (p && p->superclass[0]) {
-          emit_raw(ctx, "    if (strcmp(sp_exc_class, \"%s\") == 0 && strcmp(cls, \"%s\") == 0) return 1;\n",
+          emit_raw(ctx, "  if (strcmp(sp_exc_class, \"%s\") == 0 && strcmp(cls, \"%s\") == 0) return 1;\n",
                c->name, p->superclass);
           p = find_class(ctx, p->superclass);
         }
       }
     }
-    emit_raw(ctx, "    /* RuntimeError base class matches */\n");
-    emit_raw(ctx, "    if (strcmp(cls, \"RuntimeError\") == 0) return 1;\n");
-    emit_raw(ctx, "    return 0;\n");
+    emit_raw(ctx, "  /* RuntimeError base class matches */\n");
+    emit_raw(ctx, "  if (strcmp(cls, \"RuntimeError\") == 0) return 1;\n");
+    emit_raw(ctx, "  return 0;\n");
     emit_raw(ctx, "}\n\n");
     /* catch/throw support */
     emit_raw(ctx, "static const char *sp_throw_tag = NULL;\n");
@@ -1849,14 +1849,14 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "static const char *sp_throw_value_s = NULL;\n");
     emit_raw(ctx, "static int sp_throw_is_str = 0;\n");
     emit_raw(ctx, "static void sp_throw_i(const char *tag, mrb_int val) {\n");
-    emit_raw(ctx, "    sp_throw_tag = tag; sp_throw_value_i = val; sp_throw_is_str = 0;\n");
-    emit_raw(ctx, "    if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 2);\n");
-    emit_raw(ctx, "    fprintf(stderr, \"uncaught throw :\\\"%%s\\\"\\n\", tag); exit(1);\n");
+    emit_raw(ctx, "  sp_throw_tag = tag; sp_throw_value_i = val; sp_throw_is_str = 0;\n");
+    emit_raw(ctx, "  if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 2);\n");
+    emit_raw(ctx, "  fprintf(stderr, \"uncaught throw :\\\"%%s\\\"\\n\", tag); exit(1);\n");
     emit_raw(ctx, "}\n");
     emit_raw(ctx, "static void sp_throw_s(const char *tag, const char *val) {\n");
-    emit_raw(ctx, "    sp_throw_tag = tag; sp_throw_value_s = val; sp_throw_is_str = 1;\n");
-    emit_raw(ctx, "    if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 2);\n");
-    emit_raw(ctx, "    fprintf(stderr, \"uncaught throw :\\\"%%s\\\"\\n\", tag); exit(1);\n");
+    emit_raw(ctx, "  sp_throw_tag = tag; sp_throw_value_s = val; sp_throw_is_str = 1;\n");
+    emit_raw(ctx, "  if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], 2);\n");
+    emit_raw(ctx, "  fprintf(stderr, \"uncaught throw :\\\"%%s\\\"\\n\", tag); exit(1);\n");
     emit_raw(ctx, "}\n\n");
   }
 
@@ -1871,12 +1871,12 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "/* ---- Built-in integer range ---- */\n");
     emit_raw(ctx, "typedef struct { mrb_int first; mrb_int last; } sp_Range;\n");
     emit_raw(ctx, "static sp_Range sp_Range_new(mrb_int first, mrb_int last) {\n");
-    emit_raw(ctx, "    sp_Range r; r.first = first; r.last = last; return r;\n}\n");
+    emit_raw(ctx, "  sp_Range r; r.first = first; r.last = last; return r;\n}\n");
     emit_raw(ctx, "static mrb_bool sp_Range_include_p(sp_Range r, mrb_int v) {\n");
-    emit_raw(ctx, "    return v >= r.first && v <= r.last;\n}\n");
+    emit_raw(ctx, "  return v >= r.first && v <= r.last;\n}\n");
     emit_raw(ctx, "static sp_IntArray *sp_IntArray_from_range(mrb_int, mrb_int);\n");
     emit_raw(ctx, "static sp_IntArray *sp_Range_to_a(sp_Range r) {\n");
-    emit_raw(ctx, "    return sp_IntArray_from_range(r.first, r.last);\n}\n\n");
+    emit_raw(ctx, "  return sp_IntArray_from_range(r.first, r.last);\n}\n\n");
   }
 
   /* Built-in sp_Time for Time support (only when needed) */
@@ -1894,137 +1894,137 @@ void emit_header(codegen_ctx_t *ctx) {
     if (ctx->needs_gc) {
     /* GC-managed IntArray: finalizer frees internal data pointer */
       emit_raw(ctx, "static void sp_IntArray_finalize(void *p) {\n");
-      emit_raw(ctx, "    sp_IntArray *a = (sp_IntArray *)p;\n");
-      emit_raw(ctx, "    free(a->data);\n");
+      emit_raw(ctx, "  sp_IntArray *a = (sp_IntArray *)p;\n");
+      emit_raw(ctx, "  free(a->data);\n");
       emit_raw(ctx, "}\n\n");
 
       emit_raw(ctx, "static sp_IntArray *sp_IntArray_new(void) {\n");
-      emit_raw(ctx, "    sp_IntArray *a = (sp_IntArray *)sp_gc_alloc(sizeof(sp_IntArray), sp_IntArray_finalize, NULL);\n");
-      emit_raw(ctx, "    a->cap = 16; a->data = (mrb_int *)malloc(sizeof(mrb_int) * a->cap);\n");
-      emit_raw(ctx, "    sp_gc_bytes += sizeof(mrb_int) * a->cap;\n");
-      emit_raw(ctx, "    return a;\n}\n\n");
+      emit_raw(ctx, "  sp_IntArray *a = (sp_IntArray *)sp_gc_alloc(sizeof(sp_IntArray), sp_IntArray_finalize, NULL);\n");
+      emit_raw(ctx, "  a->cap = 16; a->data = (mrb_int *)malloc(sizeof(mrb_int) * a->cap);\n");
+      emit_raw(ctx, "  sp_gc_bytes += sizeof(mrb_int) * a->cap;\n");
+      emit_raw(ctx, "  return a;\n}\n\n");
     }
     else {
       emit_raw(ctx, "static sp_IntArray *sp_IntArray_new(void) {\n");
-      emit_raw(ctx, "    sp_IntArray *a = (sp_IntArray *)calloc(1, sizeof(sp_IntArray));\n");
-      emit_raw(ctx, "    a->cap = 16; a->data = (mrb_int *)malloc(sizeof(mrb_int) * a->cap);\n");
-      emit_raw(ctx, "    return a;\n}\n\n");
+      emit_raw(ctx, "  sp_IntArray *a = (sp_IntArray *)calloc(1, sizeof(sp_IntArray));\n");
+      emit_raw(ctx, "  a->cap = 16; a->data = (mrb_int *)malloc(sizeof(mrb_int) * a->cap);\n");
+      emit_raw(ctx, "  return a;\n}\n\n");
     } /* needs_gc if/else */
 
     emit_raw(ctx, "static sp_IntArray *sp_IntArray_from_range(mrb_int start, mrb_int end) {\n");
-    emit_raw(ctx, "    sp_IntArray *a = sp_IntArray_new();\n");
-    emit_raw(ctx, "    mrb_int n = end - start + 1; if (n < 0) n = 0;\n");
+    emit_raw(ctx, "  sp_IntArray *a = sp_IntArray_new();\n");
+    emit_raw(ctx, "  mrb_int n = end - start + 1; if (n < 0) n = 0;\n");
     if (ctx->needs_gc)
-    emit_raw(ctx, "    if (n > a->cap) { sp_gc_bytes += sizeof(mrb_int) * (n - a->cap); a->cap = n; a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap); }\n");
+    emit_raw(ctx, "  if (n > a->cap) { sp_gc_bytes += sizeof(mrb_int) * (n - a->cap); a->cap = n; a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap); }\n");
     else
-    emit_raw(ctx, "    if (n > a->cap) { a->cap = n; a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap); }\n");
-    emit_raw(ctx, "    for (mrb_int i = 0; i < n; i++) a->data[i] = start + i;\n");
-    emit_raw(ctx, "    a->len = n; return a;\n}\n\n");
+    emit_raw(ctx, "  if (n > a->cap) { a->cap = n; a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap); }\n");
+    emit_raw(ctx, "  for (mrb_int i = 0; i < n; i++) a->data[i] = start + i;\n");
+    emit_raw(ctx, "  a->len = n; return a;\n}\n\n");
 
     emit_raw(ctx, "static sp_IntArray *sp_IntArray_dup(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    sp_IntArray *b = sp_IntArray_new();\n");
+    emit_raw(ctx, "  sp_IntArray *b = sp_IntArray_new();\n");
     if (ctx->needs_gc)
-    emit_raw(ctx, "    if (a->len > b->cap) { sp_gc_bytes += sizeof(mrb_int) * (a->len - b->cap); b->cap = a->len; b->data = (mrb_int *)realloc(b->data, sizeof(mrb_int) * b->cap); }\n");
+    emit_raw(ctx, "  if (a->len > b->cap) { sp_gc_bytes += sizeof(mrb_int) * (a->len - b->cap); b->cap = a->len; b->data = (mrb_int *)realloc(b->data, sizeof(mrb_int) * b->cap); }\n");
     else
-    emit_raw(ctx, "    if (a->len > b->cap) { b->cap = a->len; b->data = (mrb_int *)realloc(b->data, sizeof(mrb_int) * b->cap); }\n");
-    emit_raw(ctx, "    memcpy(b->data, a->data + a->start, sizeof(mrb_int) * a->len);\n");
-    emit_raw(ctx, "    b->len = a->len; return b;\n}\n\n");
+    emit_raw(ctx, "  if (a->len > b->cap) { b->cap = a->len; b->data = (mrb_int *)realloc(b->data, sizeof(mrb_int) * b->cap); }\n");
+    emit_raw(ctx, "  memcpy(b->data, a->data + a->start, sizeof(mrb_int) * a->len);\n");
+    emit_raw(ctx, "  b->len = a->len; return b;\n}\n\n");
 
     emit_raw(ctx, "static void sp_IntArray_push(sp_IntArray *a, mrb_int val) {\n");
-    emit_raw(ctx, "    mrb_int end = a->start + a->len;\n");
-    emit_raw(ctx, "    if (end >= a->cap) {\n");
-    emit_raw(ctx, "        if (a->start > 0) { memmove(a->data, a->data + a->start, sizeof(mrb_int) * a->len); a->start = 0; end = a->len; }\n");
-    emit_raw(ctx, "        if (end >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap); }\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    a->data[end] = val; a->len++;\n}\n\n");
+    emit_raw(ctx, "  mrb_int end = a->start + a->len;\n");
+    emit_raw(ctx, "  if (end >= a->cap) {\n");
+    emit_raw(ctx, "    if (a->start > 0) { memmove(a->data, a->data + a->start, sizeof(mrb_int) * a->len); a->start = 0; end = a->len; }\n");
+    emit_raw(ctx, "    if (end >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap); }\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  a->data[end] = val; a->len++;\n}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_IntArray_unshift(sp_IntArray *a, mrb_int val) {\n");
-    emit_raw(ctx, "    if (a->start > 0) { a->data[--a->start] = val; a->len++; return val; }\n");
-    emit_raw(ctx, "    mrb_int end = a->start + a->len;\n");
-    emit_raw(ctx, "    if (end >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap); }\n");
-    emit_raw(ctx, "    for (mrb_int i = end; i > a->start; i--) a->data[i] = a->data[i-1];\n");
-    emit_raw(ctx, "    a->data[a->start] = val; a->len++;\n");
-    emit_raw(ctx, "    return val;\n}\n\n");
+    emit_raw(ctx, "  if (a->start > 0) { a->data[--a->start] = val; a->len++; return val; }\n");
+    emit_raw(ctx, "  mrb_int end = a->start + a->len;\n");
+    emit_raw(ctx, "  if (end >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap); }\n");
+    emit_raw(ctx, "  for (mrb_int i = end; i > a->start; i--) a->data[i] = a->data[i-1];\n");
+    emit_raw(ctx, "  a->data[a->start] = val; a->len++;\n");
+    emit_raw(ctx, "  return val;\n}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_IntArray_shift(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    mrb_int v = a->data[a->start++]; a->len--; return v;\n}\n\n");
+    emit_raw(ctx, "  mrb_int v = a->data[a->start++]; a->len--; return v;\n}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_IntArray_pop(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    return a->data[a->start + --a->len];\n}\n\n");
+    emit_raw(ctx, "  return a->data[a->start + --a->len];\n}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_IntArray_empty(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    return a->len == 0;\n}\n\n");
+    emit_raw(ctx, "  return a->len == 0;\n}\n\n");
 
     emit_raw(ctx, "static void sp_IntArray_reverse_bang(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    for (mrb_int i = 0, j = a->len - 1; i < j; i++, j--) {\n");
-    emit_raw(ctx, "        mrb_int t = a->data[a->start+i]; a->data[a->start+i] = a->data[a->start+j]; a->data[a->start+j] = t;\n");
-    emit_raw(ctx, "    }\n}\n\n");
+    emit_raw(ctx, "  for (mrb_int i = 0, j = a->len - 1; i < j; i++, j--) {\n");
+    emit_raw(ctx, "    mrb_int t = a->data[a->start+i]; a->data[a->start+i] = a->data[a->start+j]; a->data[a->start+j] = t;\n");
+    emit_raw(ctx, "  }\n}\n\n");
 
     emit_raw(ctx, "static int _sp_int_cmp(const void *a, const void *b) {\n");
-    emit_raw(ctx, "    mrb_int va = *(const mrb_int *)a, vb = *(const mrb_int *)b;\n");
-    emit_raw(ctx, "    return (va > vb) - (va < vb);\n}\n");
+    emit_raw(ctx, "  mrb_int va = *(const mrb_int *)a, vb = *(const mrb_int *)b;\n");
+    emit_raw(ctx, "  return (va > vb) - (va < vb);\n}\n");
     emit_raw(ctx, "static sp_IntArray *sp_IntArray_sort(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    sp_IntArray *b = sp_IntArray_dup(a);\n");
-    emit_raw(ctx, "    qsort(b->data + b->start, b->len, sizeof(mrb_int), _sp_int_cmp);\n");
-    emit_raw(ctx, "    return b;\n}\n");
+    emit_raw(ctx, "  sp_IntArray *b = sp_IntArray_dup(a);\n");
+    emit_raw(ctx, "  qsort(b->data + b->start, b->len, sizeof(mrb_int), _sp_int_cmp);\n");
+    emit_raw(ctx, "  return b;\n}\n");
     emit_raw(ctx, "static void sp_IntArray_sort_bang(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    qsort(a->data + a->start, a->len, sizeof(mrb_int), _sp_int_cmp);\n}\n\n");
+    emit_raw(ctx, "  qsort(a->data + a->start, a->len, sizeof(mrb_int), _sp_int_cmp);\n}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_IntArray_length(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    return a->len;\n}\n\n");
+    emit_raw(ctx, "  return a->len;\n}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_IntArray_get(sp_IntArray *a, mrb_int idx) {\n");
-    emit_raw(ctx, "    if (idx < 0) idx += a->len;\n");
-    emit_raw(ctx, "    return a->data[a->start + idx];\n}\n\n");
+    emit_raw(ctx, "  if (idx < 0) idx += a->len;\n");
+    emit_raw(ctx, "  return a->data[a->start + idx];\n}\n\n");
 
     emit_raw(ctx, "static void sp_IntArray_set(sp_IntArray *a, mrb_int idx, mrb_int val) {\n");
-    emit_raw(ctx, "    if (idx < 0) idx += a->len;\n");
-    emit_raw(ctx, "    if (idx >= 0 && idx < a->len) a->data[a->start + idx] = val;\n}\n\n");
+    emit_raw(ctx, "  if (idx < 0) idx += a->len;\n");
+    emit_raw(ctx, "  if (idx >= 0 && idx < a->len) a->data[a->start + idx] = val;\n}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_IntArray_neq(sp_IntArray *a, sp_IntArray *b) {\n");
-    emit_raw(ctx, "    if (a->len != b->len) return TRUE;\n");
-    emit_raw(ctx, "    return memcmp(a->data + a->start, b->data + b->start, sizeof(mrb_int) * a->len) != 0;\n}\n\n");
+    emit_raw(ctx, "  if (a->len != b->len) return TRUE;\n");
+    emit_raw(ctx, "  return memcmp(a->data + a->start, b->data + b->start, sizeof(mrb_int) * a->len) != 0;\n}\n\n");
 
     emit_raw(ctx, "static void sp_IntArray_free(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    if (a) { free(a->data); free(a); }\n}\n\n");
+    emit_raw(ctx, "  if (a) { free(a->data); free(a); }\n}\n\n");
 
     /* ---- IntArray join ---- */
     emit_raw(ctx, "static const char *sp_IntArray_join(sp_IntArray *a, const char *sep) {\n");
-    emit_raw(ctx, "    if (a->len == 0) { char *r = (char *)malloc(1); r[0] = '\\0'; return r; }\n");
-    emit_raw(ctx, "    size_t sl = strlen(sep);\n");
-    emit_raw(ctx, "    size_t cap = a->len * 24 + (a->len - 1) * sl + 1;\n");
-    emit_raw(ctx, "    char *r = (char *)malloc(cap); size_t pos = 0;\n");
-    emit_raw(ctx, "    for (mrb_int i = 0; i < a->len; i++) {\n");
-    emit_raw(ctx, "        if (i > 0) { memcpy(r + pos, sep, sl); pos += sl; }\n");
-    emit_raw(ctx, "        pos += snprintf(r + pos, cap - pos, \"%%lld\", (long long)a->data[a->start + i]);\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    return r;\n}\n\n");
+    emit_raw(ctx, "  if (a->len == 0) { char *r = (char *)malloc(1); r[0] = '\\0'; return r; }\n");
+    emit_raw(ctx, "  size_t sl = strlen(sep);\n");
+    emit_raw(ctx, "  size_t cap = a->len * 24 + (a->len - 1) * sl + 1;\n");
+    emit_raw(ctx, "  char *r = (char *)malloc(cap); size_t pos = 0;\n");
+    emit_raw(ctx, "  for (mrb_int i = 0; i < a->len; i++) {\n");
+    emit_raw(ctx, "    if (i > 0) { memcpy(r + pos, sep, sl); pos += sl; }\n");
+    emit_raw(ctx, "    pos += snprintf(r + pos, cap - pos, \"%%lld\", (long long)a->data[a->start + i]);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  return r;\n}\n\n");
 
     /* ---- IntArray uniq ---- */
     emit_raw(ctx, "static sp_IntArray *sp_IntArray_uniq(sp_IntArray *a) {\n");
-    emit_raw(ctx, "    sp_IntArray *r = sp_IntArray_new();\n");
-    emit_raw(ctx, "    for (mrb_int i = 0; i < a->len; i++) {\n");
-    emit_raw(ctx, "        mrb_int v = a->data[a->start + i];\n");
-    emit_raw(ctx, "        mrb_bool found = FALSE;\n");
-    emit_raw(ctx, "        for (mrb_int j = 0; j < r->len; j++)\n");
-    emit_raw(ctx, "            if (r->data[r->start + j] == v) { found = TRUE; break; }\n");
-    emit_raw(ctx, "        if (!found) sp_IntArray_push(r, v);\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    return r;\n}\n\n");
+    emit_raw(ctx, "  sp_IntArray *r = sp_IntArray_new();\n");
+    emit_raw(ctx, "  for (mrb_int i = 0; i < a->len; i++) {\n");
+    emit_raw(ctx, "    mrb_int v = a->data[a->start + i];\n");
+    emit_raw(ctx, "    mrb_bool found = FALSE;\n");
+    emit_raw(ctx, "    for (mrb_int j = 0; j < r->len; j++)\n");
+    emit_raw(ctx, "      if (r->data[r->start + j] == v) { found = TRUE; break; }\n");
+    emit_raw(ctx, "    if (!found) sp_IntArray_push(r, v);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  return r;\n}\n\n");
 
     /* ---- IntArray insert ---- */
     emit_raw(ctx, "static void sp_IntArray_insert(sp_IntArray *a, mrb_int idx, mrb_int val) {\n");
-    emit_raw(ctx, "    if (idx < 0) idx += a->len;\n");
-    emit_raw(ctx, "    if (idx < 0) idx = 0;\n");
-    emit_raw(ctx, "    if (idx > a->len) idx = a->len;\n");
-    emit_raw(ctx, "    if (a->start + a->len >= a->cap) {\n");
-    emit_raw(ctx, "        a->cap = (a->cap < 16) ? 16 : a->cap * 2;\n");
-    emit_raw(ctx, "        a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap);\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    memmove(a->data + a->start + idx + 1, a->data + a->start + idx,\n");
-    emit_raw(ctx, "            sizeof(mrb_int) * (a->len - idx));\n");
-    emit_raw(ctx, "    a->data[a->start + idx] = val;\n");
-    emit_raw(ctx, "    a->len++;\n");
+    emit_raw(ctx, "  if (idx < 0) idx += a->len;\n");
+    emit_raw(ctx, "  if (idx < 0) idx = 0;\n");
+    emit_raw(ctx, "  if (idx > a->len) idx = a->len;\n");
+    emit_raw(ctx, "  if (a->start + a->len >= a->cap) {\n");
+    emit_raw(ctx, "    a->cap = (a->cap < 16) ? 16 : a->cap * 2;\n");
+    emit_raw(ctx, "    a->data = (mrb_int *)realloc(a->data, sizeof(mrb_int) * a->cap);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  memmove(a->data + a->start + idx + 1, a->data + a->start + idx,\n");
+    emit_raw(ctx, "      sizeof(mrb_int) * (a->len - idx));\n");
+    emit_raw(ctx, "  a->data[a->start + idx] = val;\n");
+    emit_raw(ctx, "  a->len++;\n");
     emit_raw(ctx, "}\n\n");
   } /* needs_intarray || needs_range */
 
@@ -2035,50 +2035,50 @@ void emit_header(codegen_ctx_t *ctx) {
 
     if (ctx->needs_gc) {
       emit_raw(ctx, "static void sp_FloatArray_finalize(void *p) {\n");
-      emit_raw(ctx, "    sp_FloatArray *a = (sp_FloatArray *)p;\n");
-      emit_raw(ctx, "    free(a->data);\n");
+      emit_raw(ctx, "  sp_FloatArray *a = (sp_FloatArray *)p;\n");
+      emit_raw(ctx, "  free(a->data);\n");
       emit_raw(ctx, "}\n\n");
 
       emit_raw(ctx, "static sp_FloatArray *sp_FloatArray_new(void) {\n");
-      emit_raw(ctx, "    sp_FloatArray *a = (sp_FloatArray *)sp_gc_alloc(sizeof(sp_FloatArray), sp_FloatArray_finalize, NULL);\n");
-      emit_raw(ctx, "    a->cap = 16; a->data = (mrb_float *)malloc(sizeof(mrb_float) * a->cap);\n");
-      emit_raw(ctx, "    sp_gc_bytes += sizeof(mrb_float) * a->cap;\n");
-      emit_raw(ctx, "    return a;\n}\n\n");
+      emit_raw(ctx, "  sp_FloatArray *a = (sp_FloatArray *)sp_gc_alloc(sizeof(sp_FloatArray), sp_FloatArray_finalize, NULL);\n");
+      emit_raw(ctx, "  a->cap = 16; a->data = (mrb_float *)malloc(sizeof(mrb_float) * a->cap);\n");
+      emit_raw(ctx, "  sp_gc_bytes += sizeof(mrb_float) * a->cap;\n");
+      emit_raw(ctx, "  return a;\n}\n\n");
     }
     else {
       emit_raw(ctx, "static sp_FloatArray *sp_FloatArray_new(void) {\n");
-      emit_raw(ctx, "    sp_FloatArray *a = (sp_FloatArray *)calloc(1, sizeof(sp_FloatArray));\n");
-      emit_raw(ctx, "    a->cap = 16; a->data = (mrb_float *)malloc(sizeof(mrb_float) * a->cap);\n");
-      emit_raw(ctx, "    return a;\n}\n\n");
+      emit_raw(ctx, "  sp_FloatArray *a = (sp_FloatArray *)calloc(1, sizeof(sp_FloatArray));\n");
+      emit_raw(ctx, "  a->cap = 16; a->data = (mrb_float *)malloc(sizeof(mrb_float) * a->cap);\n");
+      emit_raw(ctx, "  return a;\n}\n\n");
     }
 
     emit_raw(ctx, "static sp_FloatArray *sp_FloatArray_dup(sp_FloatArray *a) {\n");
-    emit_raw(ctx, "    sp_FloatArray *b = sp_FloatArray_new();\n");
+    emit_raw(ctx, "  sp_FloatArray *b = sp_FloatArray_new();\n");
     if (ctx->needs_gc)
-    emit_raw(ctx, "    if (a->len > b->cap) { sp_gc_bytes += sizeof(mrb_float) * (a->len - b->cap); b->cap = a->len; b->data = (mrb_float *)realloc(b->data, sizeof(mrb_float) * b->cap); }\n");
+    emit_raw(ctx, "  if (a->len > b->cap) { sp_gc_bytes += sizeof(mrb_float) * (a->len - b->cap); b->cap = a->len; b->data = (mrb_float *)realloc(b->data, sizeof(mrb_float) * b->cap); }\n");
     else
-    emit_raw(ctx, "    if (a->len > b->cap) { b->cap = a->len; b->data = (mrb_float *)realloc(b->data, sizeof(mrb_float) * b->cap); }\n");
-    emit_raw(ctx, "    memcpy(b->data, a->data + a->start, sizeof(mrb_float) * a->len);\n");
-    emit_raw(ctx, "    b->len = a->len; return b;\n}\n\n");
+    emit_raw(ctx, "  if (a->len > b->cap) { b->cap = a->len; b->data = (mrb_float *)realloc(b->data, sizeof(mrb_float) * b->cap); }\n");
+    emit_raw(ctx, "  memcpy(b->data, a->data + a->start, sizeof(mrb_float) * a->len);\n");
+    emit_raw(ctx, "  b->len = a->len; return b;\n}\n\n");
 
     emit_raw(ctx, "static void sp_FloatArray_push(sp_FloatArray *a, mrb_float val) {\n");
-    emit_raw(ctx, "    mrb_int end = a->start + a->len;\n");
-    emit_raw(ctx, "    if (end >= a->cap) {\n");
-    emit_raw(ctx, "        if (a->start > 0) { memmove(a->data, a->data + a->start, sizeof(mrb_float) * a->len); a->start = 0; end = a->len; }\n");
-    emit_raw(ctx, "        if (end >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (mrb_float *)realloc(a->data, sizeof(mrb_float) * a->cap); }\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    a->data[end] = val; a->len++;\n}\n\n");
+    emit_raw(ctx, "  mrb_int end = a->start + a->len;\n");
+    emit_raw(ctx, "  if (end >= a->cap) {\n");
+    emit_raw(ctx, "    if (a->start > 0) { memmove(a->data, a->data + a->start, sizeof(mrb_float) * a->len); a->start = 0; end = a->len; }\n");
+    emit_raw(ctx, "    if (end >= a->cap) { a->cap = a->cap * 2 + 1; a->data = (mrb_float *)realloc(a->data, sizeof(mrb_float) * a->cap); }\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  a->data[end] = val; a->len++;\n}\n\n");
 
     emit_raw(ctx, "static mrb_float sp_FloatArray_get(sp_FloatArray *a, mrb_int idx) {\n");
-    emit_raw(ctx, "    if (idx < 0) idx += a->len;\n");
-    emit_raw(ctx, "    return a->data[a->start + idx];\n}\n\n");
+    emit_raw(ctx, "  if (idx < 0) idx += a->len;\n");
+    emit_raw(ctx, "  return a->data[a->start + idx];\n}\n\n");
 
     emit_raw(ctx, "static void sp_FloatArray_set(sp_FloatArray *a, mrb_int idx, mrb_float val) {\n");
-    emit_raw(ctx, "    if (idx < 0) idx += a->len;\n");
-    emit_raw(ctx, "    if (idx >= 0 && idx < a->len) a->data[a->start + idx] = val;\n}\n\n");
+    emit_raw(ctx, "  if (idx < 0) idx += a->len;\n");
+    emit_raw(ctx, "  if (idx >= 0 && idx < a->len) a->data[a->start + idx] = val;\n}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_FloatArray_length(sp_FloatArray *a) {\n");
-    emit_raw(ctx, "    return a->len;\n}\n\n");
+    emit_raw(ctx, "  return a->len;\n}\n\n");
   } /* needs_floatarray */
 
   /* Built-in sp_StrArray for string split support (only when needed) */
@@ -2086,223 +2086,223 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "/* ---- Built-in string array ---- */\n");
     emit_raw(ctx, "typedef struct { const char **data; mrb_int len; mrb_int cap; } sp_StrArray;\n\n");
     emit_raw(ctx, "static sp_StrArray *sp_StrArray_new(void) {\n");
-    emit_raw(ctx, "    sp_StrArray *a = (sp_StrArray *)calloc(1, sizeof(sp_StrArray));\n");
-    emit_raw(ctx, "    a->cap = 16; a->data = (const char **)malloc(sizeof(const char *) * a->cap);\n");
-    emit_raw(ctx, "    return a;\n}\n\n");
+    emit_raw(ctx, "  sp_StrArray *a = (sp_StrArray *)calloc(1, sizeof(sp_StrArray));\n");
+    emit_raw(ctx, "  a->cap = 16; a->data = (const char **)malloc(sizeof(const char *) * a->cap);\n");
+    emit_raw(ctx, "  return a;\n}\n\n");
     emit_raw(ctx, "static void sp_StrArray_push(sp_StrArray *a, const char *s) {\n");
-    emit_raw(ctx, "    if (a->len >= a->cap) { a->cap *= 2; a->data = (const char **)realloc(a->data, sizeof(const char *) * a->cap); }\n");
-    emit_raw(ctx, "    a->data[a->len++] = s;\n}\n\n");
+    emit_raw(ctx, "  if (a->len >= a->cap) { a->cap *= 2; a->data = (const char **)realloc(a->data, sizeof(const char *) * a->cap); }\n");
+    emit_raw(ctx, "  a->data[a->len++] = s;\n}\n\n");
     emit_raw(ctx, "static mrb_int sp_StrArray_length(sp_StrArray *a) {\n");
-    emit_raw(ctx, "    return a->len;\n}\n\n");
+    emit_raw(ctx, "  return a->len;\n}\n\n");
   }
 
   /* sp_str_split depends on sp_StrArray being defined */
   if (ctx->needs_str_split) {
     emit_raw(ctx, "static sp_StrArray *sp_str_split(const char *s, const char *delim) {\n");
-    emit_raw(ctx, "    sp_StrArray *a = sp_StrArray_new();\n");
-    emit_raw(ctx, "    size_t dl = strlen(delim);\n");
-    emit_raw(ctx, "    while (*s) {\n");
-    emit_raw(ctx, "        const char *p = strstr(s, delim);\n");
-    emit_raw(ctx, "        if (!p) { size_t n = strlen(s); char *t = (char *)malloc(n+1); memcpy(t,s,n+1); sp_StrArray_push(a, t); break; }\n");
-    emit_raw(ctx, "        size_t n = p - s; char *t = (char *)malloc(n+1); memcpy(t,s,n); t[n]='\\0'; sp_StrArray_push(a, t); s = p + dl;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    return a;\n}\n\n");
+    emit_raw(ctx, "  sp_StrArray *a = sp_StrArray_new();\n");
+    emit_raw(ctx, "  size_t dl = strlen(delim);\n");
+    emit_raw(ctx, "  while (*s) {\n");
+    emit_raw(ctx, "    const char *p = strstr(s, delim);\n");
+    emit_raw(ctx, "    if (!p) { size_t n = strlen(s); char *t = (char *)malloc(n+1); memcpy(t,s,n+1); sp_StrArray_push(a, t); break; }\n");
+    emit_raw(ctx, "    size_t n = p - s; char *t = (char *)malloc(n+1); memcpy(t,s,n); t[n]='\\0'; sp_StrArray_push(a, t); s = p + dl;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  return a;\n}\n\n");
 
     /* chars → sp_StrArray (depends on sp_StrArray being defined) */
     emit_raw(ctx, "static sp_StrArray *sp_str_chars(const char *s) {\n");
-    emit_raw(ctx, "    sp_StrArray *a = sp_StrArray_new();\n");
-    emit_raw(ctx, "    for (size_t i = 0; s[i]; i++) {\n");
-    emit_raw(ctx, "        char *c = (char *)malloc(2); c[0] = s[i]; c[1] = '\\0';\n");
-    emit_raw(ctx, "        sp_StrArray_push(a, c);\n");
-    emit_raw(ctx, "    } return a;\n}\n\n");
+    emit_raw(ctx, "  sp_StrArray *a = sp_StrArray_new();\n");
+    emit_raw(ctx, "  for (size_t i = 0; s[i]; i++) {\n");
+    emit_raw(ctx, "    char *c = (char *)malloc(2); c[0] = s[i]; c[1] = '\\0';\n");
+    emit_raw(ctx, "    sp_StrArray_push(a, c);\n");
+    emit_raw(ctx, "  } return a;\n}\n\n");
   }
 
   /* bytes → sp_IntArray (depends on sp_IntArray being defined) */
   if (ctx->needs_intarray) {
     emit_raw(ctx, "static sp_IntArray *sp_str_bytes(const char *s) {\n");
-    emit_raw(ctx, "    sp_IntArray *a = sp_IntArray_new();\n");
-    emit_raw(ctx, "    for (size_t i = 0; s[i]; i++) sp_IntArray_push(a, (unsigned char)s[i]);\n");
-    emit_raw(ctx, "    return a;\n}\n\n");
+    emit_raw(ctx, "  sp_IntArray *a = sp_IntArray_new();\n");
+    emit_raw(ctx, "  for (size_t i = 0; s[i]; i++) sp_IntArray_push(a, (unsigned char)s[i]);\n");
+    emit_raw(ctx, "  return a;\n}\n\n");
   }
 
   /* sp_re_split — split string by regexp (depends on sp_StrArray) */
   if (ctx->needs_regexp && ctx->needs_str_split) {
     emit_raw(ctx, "static sp_StrArray *sp_re_split(regex_t *re, const char *s) {\n");
-    emit_raw(ctx, "    sp_StrArray *a = sp_StrArray_new();\n");
-    emit_raw(ctx, "    size_t slen = strlen(s);\n");
-    emit_raw(ctx, "    OnigRegion *region = onig_region_new();\n");
-    emit_raw(ctx, "    const OnigUChar *end = (const OnigUChar *)s + slen;\n");
-    emit_raw(ctx, "    int pos = 0;\n");
-    emit_raw(ctx, "    while (pos <= (int)slen) {\n");
-    emit_raw(ctx, "        int r = onig_search(re, (const OnigUChar *)s, end,\n");
-    emit_raw(ctx, "            (const OnigUChar *)s + pos, end, region, ONIG_OPTION_NONE);\n");
-    emit_raw(ctx, "        if (r < 0) break;\n");
-    emit_raw(ctx, "        int mbeg = region->beg[0], mend = region->end[0];\n");
-    emit_raw(ctx, "        int plen = mbeg - pos;\n");
-    emit_raw(ctx, "        char *part = (char *)malloc(plen + 1);\n");
-    emit_raw(ctx, "        memcpy(part, s + pos, plen); part[plen] = '\\0';\n");
-    emit_raw(ctx, "        sp_StrArray_push(a, part);\n");
-    emit_raw(ctx, "        pos = mend;\n");
-    emit_raw(ctx, "        if (mend == mbeg) pos++;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    if (pos <= (int)slen) {\n");
-    emit_raw(ctx, "        int rlen = (int)slen - pos;\n");
-    emit_raw(ctx, "        char *part = (char *)malloc(rlen + 1);\n");
-    emit_raw(ctx, "        memcpy(part, s + pos, rlen); part[rlen] = '\\0';\n");
-    emit_raw(ctx, "        sp_StrArray_push(a, part);\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    onig_region_free(region, 1);\n");
-    emit_raw(ctx, "    return a;\n");
+    emit_raw(ctx, "  sp_StrArray *a = sp_StrArray_new();\n");
+    emit_raw(ctx, "  size_t slen = strlen(s);\n");
+    emit_raw(ctx, "  OnigRegion *region = onig_region_new();\n");
+    emit_raw(ctx, "  const OnigUChar *end = (const OnigUChar *)s + slen;\n");
+    emit_raw(ctx, "  int pos = 0;\n");
+    emit_raw(ctx, "  while (pos <= (int)slen) {\n");
+    emit_raw(ctx, "    int r = onig_search(re, (const OnigUChar *)s, end,\n");
+    emit_raw(ctx, "      (const OnigUChar *)s + pos, end, region, ONIG_OPTION_NONE);\n");
+    emit_raw(ctx, "    if (r < 0) break;\n");
+    emit_raw(ctx, "    int mbeg = region->beg[0], mend = region->end[0];\n");
+    emit_raw(ctx, "    int plen = mbeg - pos;\n");
+    emit_raw(ctx, "    char *part = (char *)malloc(plen + 1);\n");
+    emit_raw(ctx, "    memcpy(part, s + pos, plen); part[plen] = '\\0';\n");
+    emit_raw(ctx, "    sp_StrArray_push(a, part);\n");
+    emit_raw(ctx, "    pos = mend;\n");
+    emit_raw(ctx, "    if (mend == mbeg) pos++;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  if (pos <= (int)slen) {\n");
+    emit_raw(ctx, "    int rlen = (int)slen - pos;\n");
+    emit_raw(ctx, "    char *part = (char *)malloc(rlen + 1);\n");
+    emit_raw(ctx, "    memcpy(part, s + pos, rlen); part[rlen] = '\\0';\n");
+    emit_raw(ctx, "    sp_StrArray_push(a, part);\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  onig_region_free(region, 1);\n");
+    emit_raw(ctx, "  return a;\n");
     emit_raw(ctx, "}\n\n");
   }
 
   /* sp_Dir_glob depends on sp_StrArray */
   if (ctx->needs_str_split) {
     emit_raw(ctx, "static sp_StrArray *sp_Dir_glob(const char *pattern) {\n");
-    emit_raw(ctx, "    sp_StrArray *a = sp_StrArray_new();\n");
-    emit_raw(ctx, "    glob_t g; if (glob(pattern, 0, NULL, &g) == 0) {\n");
-    emit_raw(ctx, "        for (size_t i = 0; i < g.gl_pathc; i++) {\n");
-    emit_raw(ctx, "            char *s = (char *)malloc(strlen(g.gl_pathv[i]) + 1);\n");
-    emit_raw(ctx, "            strcpy(s, g.gl_pathv[i]); sp_StrArray_push(a, s);\n");
-    emit_raw(ctx, "        } globfree(&g); } return a;\n}\n\n");
+    emit_raw(ctx, "  sp_StrArray *a = sp_StrArray_new();\n");
+    emit_raw(ctx, "  glob_t g; if (glob(pattern, 0, NULL, &g) == 0) {\n");
+    emit_raw(ctx, "    for (size_t i = 0; i < g.gl_pathc; i++) {\n");
+    emit_raw(ctx, "      char *s = (char *)malloc(strlen(g.gl_pathv[i]) + 1);\n");
+    emit_raw(ctx, "      strcpy(s, g.gl_pathv[i]); sp_StrArray_push(a, s);\n");
+    emit_raw(ctx, "    } globfree(&g); } return a;\n}\n\n");
   }
 
   /* Built-in sp_StrIntHash for Hash support (only when hashes are used) */
   if (ctx->needs_hash) {
     emit_raw(ctx, "/* ---- Built-in string→integer hash table (insertion-ordered) ---- */\n");
     emit_raw(ctx, "typedef struct sp_HashEntry {\n");
-    emit_raw(ctx, "    char *key;\n");
-    emit_raw(ctx, "    mrb_int value;\n");
-    emit_raw(ctx, "    struct sp_HashEntry *next;       /* bucket chain */\n");
-    emit_raw(ctx, "    struct sp_HashEntry *order_next; /* insertion order */\n");
-    emit_raw(ctx, "    struct sp_HashEntry *order_prev;\n");
+    emit_raw(ctx, "  char *key;\n");
+    emit_raw(ctx, "  mrb_int value;\n");
+    emit_raw(ctx, "  struct sp_HashEntry *next;       /* bucket chain */\n");
+    emit_raw(ctx, "  struct sp_HashEntry *order_next; /* insertion order */\n");
+    emit_raw(ctx, "  struct sp_HashEntry *order_prev;\n");
     emit_raw(ctx, "} sp_HashEntry;\n\n");
 
     emit_raw(ctx, "typedef struct {\n");
-    emit_raw(ctx, "    sp_HashEntry **buckets;\n");
-    emit_raw(ctx, "    mrb_int size;\n");
-    emit_raw(ctx, "    mrb_int cap;\n");
-    emit_raw(ctx, "    sp_HashEntry *first; /* insertion-order head */\n");
-    emit_raw(ctx, "    sp_HashEntry *last;  /* insertion-order tail */\n");
-    emit_raw(ctx, "    mrb_int default_value; /* Hash.new(val) default */\n");
-    emit_raw(ctx, "    mrb_bool has_default;\n");
+    emit_raw(ctx, "  sp_HashEntry **buckets;\n");
+    emit_raw(ctx, "  mrb_int size;\n");
+    emit_raw(ctx, "  mrb_int cap;\n");
+    emit_raw(ctx, "  sp_HashEntry *first; /* insertion-order head */\n");
+    emit_raw(ctx, "  sp_HashEntry *last;  /* insertion-order tail */\n");
+    emit_raw(ctx, "  mrb_int default_value; /* Hash.new(val) default */\n");
+    emit_raw(ctx, "  mrb_bool has_default;\n");
     emit_raw(ctx, "} sp_StrIntHash;\n\n");
 
     emit_raw(ctx, "static unsigned sp_hash_str(const char *s) {\n");
-    emit_raw(ctx, "    unsigned h = 5381;\n");
-    emit_raw(ctx, "    while (*s) h = h * 33 + (unsigned char)*s++;\n");
-    emit_raw(ctx, "    return h;\n");
+    emit_raw(ctx, "  unsigned h = 5381;\n");
+    emit_raw(ctx, "  while (*s) h = h * 33 + (unsigned char)*s++;\n");
+    emit_raw(ctx, "  return h;\n");
     emit_raw(ctx, "}\n\n");
 
     if (ctx->needs_gc) {
       emit_raw(ctx, "static void sp_StrIntHash_finalize(void *p) {\n");
-      emit_raw(ctx, "    sp_StrIntHash *h = (sp_StrIntHash *)p;\n");
-      emit_raw(ctx, "    sp_HashEntry *e = h->first;\n");
-      emit_raw(ctx, "    while (e) { sp_HashEntry *n = e->order_next; free(e->key); free(e); e = n; }\n");
-      emit_raw(ctx, "    free(h->buckets);\n");
+      emit_raw(ctx, "  sp_StrIntHash *h = (sp_StrIntHash *)p;\n");
+      emit_raw(ctx, "  sp_HashEntry *e = h->first;\n");
+      emit_raw(ctx, "  while (e) { sp_HashEntry *n = e->order_next; free(e->key); free(e); e = n; }\n");
+      emit_raw(ctx, "  free(h->buckets);\n");
       emit_raw(ctx, "}\n\n");
 
       emit_raw(ctx, "static sp_StrIntHash *sp_StrIntHash_new(void) {\n");
-      emit_raw(ctx, "    sp_StrIntHash *h = (sp_StrIntHash *)sp_gc_alloc(sizeof(sp_StrIntHash), sp_StrIntHash_finalize, NULL);\n");
-      emit_raw(ctx, "    h->cap = 16; h->size = 0; h->first = NULL; h->last = NULL;\n");
-      emit_raw(ctx, "    h->buckets = (sp_HashEntry **)calloc(h->cap, sizeof(sp_HashEntry *));\n");
-      emit_raw(ctx, "    return h;\n}\n\n");
+      emit_raw(ctx, "  sp_StrIntHash *h = (sp_StrIntHash *)sp_gc_alloc(sizeof(sp_StrIntHash), sp_StrIntHash_finalize, NULL);\n");
+      emit_raw(ctx, "  h->cap = 16; h->size = 0; h->first = NULL; h->last = NULL;\n");
+      emit_raw(ctx, "  h->buckets = (sp_HashEntry **)calloc(h->cap, sizeof(sp_HashEntry *));\n");
+      emit_raw(ctx, "  return h;\n}\n\n");
     }
     else {
       emit_raw(ctx, "static sp_StrIntHash *sp_StrIntHash_new(void) {\n");
-      emit_raw(ctx, "    sp_StrIntHash *h = (sp_StrIntHash *)calloc(1, sizeof(sp_StrIntHash));\n");
-      emit_raw(ctx, "    h->cap = 16; h->size = 0; h->first = NULL; h->last = NULL;\n");
-      emit_raw(ctx, "    h->buckets = (sp_HashEntry **)calloc(h->cap, sizeof(sp_HashEntry *));\n");
-      emit_raw(ctx, "    return h;\n}\n\n");
+      emit_raw(ctx, "  sp_StrIntHash *h = (sp_StrIntHash *)calloc(1, sizeof(sp_StrIntHash));\n");
+      emit_raw(ctx, "  h->cap = 16; h->size = 0; h->first = NULL; h->last = NULL;\n");
+      emit_raw(ctx, "  h->buckets = (sp_HashEntry **)calloc(h->cap, sizeof(sp_HashEntry *));\n");
+      emit_raw(ctx, "  return h;\n}\n\n");
     }
 
     emit_raw(ctx, "static mrb_int sp_StrIntHash_set(sp_StrIntHash *h, const char *key, mrb_int value) {\n");
-    emit_raw(ctx, "    unsigned idx = sp_hash_str(key) %% h->cap;\n");
-    emit_raw(ctx, "    sp_HashEntry *e = h->buckets[idx];\n");
-    emit_raw(ctx, "    while (e) {\n");
-    emit_raw(ctx, "        if (strcmp(e->key, key) == 0) { e->value = value; return value; }\n");
-    emit_raw(ctx, "        e = e->next;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    e = (sp_HashEntry *)malloc(sizeof(sp_HashEntry));\n");
-    emit_raw(ctx, "    e->key = (char *)malloc(strlen(key) + 1); strcpy(e->key, key);\n");
-    emit_raw(ctx, "    e->value = value;\n");
-    emit_raw(ctx, "    e->next = h->buckets[idx];\n");
-    emit_raw(ctx, "    h->buckets[idx] = e;\n");
-    emit_raw(ctx, "    /* Append to insertion-order list */\n");
-    emit_raw(ctx, "    e->order_next = NULL;\n");
-    emit_raw(ctx, "    e->order_prev = h->last;\n");
-    emit_raw(ctx, "    if (h->last) h->last->order_next = e; else h->first = e;\n");
-    emit_raw(ctx, "    h->last = e;\n");
-    emit_raw(ctx, "    h->size++;\n");
-    emit_raw(ctx, "    return value;\n");
+    emit_raw(ctx, "  unsigned idx = sp_hash_str(key) %% h->cap;\n");
+    emit_raw(ctx, "  sp_HashEntry *e = h->buckets[idx];\n");
+    emit_raw(ctx, "  while (e) {\n");
+    emit_raw(ctx, "    if (strcmp(e->key, key) == 0) { e->value = value; return value; }\n");
+    emit_raw(ctx, "    e = e->next;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  e = (sp_HashEntry *)malloc(sizeof(sp_HashEntry));\n");
+    emit_raw(ctx, "  e->key = (char *)malloc(strlen(key) + 1); strcpy(e->key, key);\n");
+    emit_raw(ctx, "  e->value = value;\n");
+    emit_raw(ctx, "  e->next = h->buckets[idx];\n");
+    emit_raw(ctx, "  h->buckets[idx] = e;\n");
+    emit_raw(ctx, "  /* Append to insertion-order list */\n");
+    emit_raw(ctx, "  e->order_next = NULL;\n");
+    emit_raw(ctx, "  e->order_prev = h->last;\n");
+    emit_raw(ctx, "  if (h->last) h->last->order_next = e; else h->first = e;\n");
+    emit_raw(ctx, "  h->last = e;\n");
+    emit_raw(ctx, "  h->size++;\n");
+    emit_raw(ctx, "  return value;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_StrIntHash_get(sp_StrIntHash *h, const char *key) {\n");
-    emit_raw(ctx, "    unsigned idx = sp_hash_str(key) %% h->cap;\n");
-    emit_raw(ctx, "    sp_HashEntry *e = h->buckets[idx];\n");
-    emit_raw(ctx, "    while (e) {\n");
-    emit_raw(ctx, "        if (strcmp(e->key, key) == 0) return e->value;\n");
-    emit_raw(ctx, "        e = e->next;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    return h->has_default ? h->default_value : 0;\n");
+    emit_raw(ctx, "  unsigned idx = sp_hash_str(key) %% h->cap;\n");
+    emit_raw(ctx, "  sp_HashEntry *e = h->buckets[idx];\n");
+    emit_raw(ctx, "  while (e) {\n");
+    emit_raw(ctx, "    if (strcmp(e->key, key) == 0) return e->value;\n");
+    emit_raw(ctx, "    e = e->next;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  return h->has_default ? h->default_value : 0;\n");
     emit_raw(ctx, "}\n\n");
 
     /* Hash.new(default_value) constructor */
     emit_raw(ctx, "static sp_StrIntHash *sp_StrIntHash_new_with_default(mrb_int val) {\n");
-    emit_raw(ctx, "    sp_StrIntHash *h = sp_StrIntHash_new();\n");
-    emit_raw(ctx, "    h->default_value = val; h->has_default = TRUE;\n");
-    emit_raw(ctx, "    return h;\n}\n\n");
+    emit_raw(ctx, "  sp_StrIntHash *h = sp_StrIntHash_new();\n");
+    emit_raw(ctx, "  h->default_value = val; h->has_default = TRUE;\n");
+    emit_raw(ctx, "  return h;\n}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_StrIntHash_length(sp_StrIntHash *h) {\n");
-    emit_raw(ctx, "    return h->size;\n}\n\n");
+    emit_raw(ctx, "  return h->size;\n}\n\n");
 
     emit_raw(ctx, "static mrb_bool sp_StrIntHash_has_key(sp_StrIntHash *h, const char *key) {\n");
-    emit_raw(ctx, "    unsigned idx = sp_hash_str(key) %% h->cap;\n");
-    emit_raw(ctx, "    sp_HashEntry *e = h->buckets[idx];\n");
-    emit_raw(ctx, "    while (e) {\n");
-    emit_raw(ctx, "        if (strcmp(e->key, key) == 0) return TRUE;\n");
-    emit_raw(ctx, "        e = e->next;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    return FALSE;\n");
+    emit_raw(ctx, "  unsigned idx = sp_hash_str(key) %% h->cap;\n");
+    emit_raw(ctx, "  sp_HashEntry *e = h->buckets[idx];\n");
+    emit_raw(ctx, "  while (e) {\n");
+    emit_raw(ctx, "    if (strcmp(e->key, key) == 0) return TRUE;\n");
+    emit_raw(ctx, "    e = e->next;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  return FALSE;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_StrIntHash_delete(sp_StrIntHash *h, const char *key) {\n");
-    emit_raw(ctx, "    unsigned idx = sp_hash_str(key) %% h->cap;\n");
-    emit_raw(ctx, "    sp_HashEntry **pp = &h->buckets[idx];\n");
-    emit_raw(ctx, "    while (*pp) {\n");
-    emit_raw(ctx, "        if (strcmp((*pp)->key, key) == 0) {\n");
-    emit_raw(ctx, "            sp_HashEntry *e = *pp;\n");
-    emit_raw(ctx, "            mrb_int val = e->value;\n");
-    emit_raw(ctx, "            *pp = e->next;\n");
-    emit_raw(ctx, "            /* Remove from insertion-order list */\n");
-    emit_raw(ctx, "            if (e->order_prev) e->order_prev->order_next = e->order_next;\n");
-    emit_raw(ctx, "            else h->first = e->order_next;\n");
-    emit_raw(ctx, "            if (e->order_next) e->order_next->order_prev = e->order_prev;\n");
-    emit_raw(ctx, "            else h->last = e->order_prev;\n");
-    emit_raw(ctx, "            free(e->key); free(e);\n");
-    emit_raw(ctx, "            h->size--;\n");
-    emit_raw(ctx, "            return val;\n");
-    emit_raw(ctx, "        }\n");
-    emit_raw(ctx, "        pp = &(*pp)->next;\n");
+    emit_raw(ctx, "  unsigned idx = sp_hash_str(key) %% h->cap;\n");
+    emit_raw(ctx, "  sp_HashEntry **pp = &h->buckets[idx];\n");
+    emit_raw(ctx, "  while (*pp) {\n");
+    emit_raw(ctx, "    if (strcmp((*pp)->key, key) == 0) {\n");
+    emit_raw(ctx, "      sp_HashEntry *e = *pp;\n");
+    emit_raw(ctx, "      mrb_int val = e->value;\n");
+    emit_raw(ctx, "      *pp = e->next;\n");
+    emit_raw(ctx, "      /* Remove from insertion-order list */\n");
+    emit_raw(ctx, "      if (e->order_prev) e->order_prev->order_next = e->order_next;\n");
+    emit_raw(ctx, "      else h->first = e->order_next;\n");
+    emit_raw(ctx, "      if (e->order_next) e->order_next->order_prev = e->order_prev;\n");
+    emit_raw(ctx, "      else h->last = e->order_prev;\n");
+    emit_raw(ctx, "      free(e->key); free(e);\n");
+    emit_raw(ctx, "      h->size--;\n");
+    emit_raw(ctx, "      return val;\n");
     emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    return 0;\n");
+    emit_raw(ctx, "    pp = &(*pp)->next;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  return 0;\n");
     emit_raw(ctx, "}\n\n");
 
     /* StrIntHash: values → sp_IntArray, keys → sp_StrArray */
     emit_raw(ctx, "static sp_IntArray *sp_StrIntHash_values(sp_StrIntHash *h) {\n");
-    emit_raw(ctx, "    sp_IntArray *a = sp_IntArray_new();\n");
-    emit_raw(ctx, "    sp_HashEntry *e = h->first;\n");
-    emit_raw(ctx, "    while (e) { sp_IntArray_push(a, e->value); e = e->order_next; }\n");
-    emit_raw(ctx, "    return a;\n}\n\n");
+    emit_raw(ctx, "  sp_IntArray *a = sp_IntArray_new();\n");
+    emit_raw(ctx, "  sp_HashEntry *e = h->first;\n");
+    emit_raw(ctx, "  while (e) { sp_IntArray_push(a, e->value); e = e->order_next; }\n");
+    emit_raw(ctx, "  return a;\n}\n\n");
 
     /* StrIntHash: merge → new hash with entries from both */
     emit_raw(ctx, "static sp_StrIntHash *sp_StrIntHash_merge(sp_StrIntHash *h1, sp_StrIntHash *h2) {\n");
-    emit_raw(ctx, "    sp_StrIntHash *r = sp_StrIntHash_new();\n");
-    emit_raw(ctx, "    sp_HashEntry *e = h1->first;\n");
-    emit_raw(ctx, "    while (e) { sp_StrIntHash_set(r, e->key, e->value); e = e->order_next; }\n");
-    emit_raw(ctx, "    e = h2->first;\n");
-    emit_raw(ctx, "    while (e) { sp_StrIntHash_set(r, e->key, e->value); e = e->order_next; }\n");
-    emit_raw(ctx, "    return r;\n}\n\n");
+    emit_raw(ctx, "  sp_StrIntHash *r = sp_StrIntHash_new();\n");
+    emit_raw(ctx, "  sp_HashEntry *e = h1->first;\n");
+    emit_raw(ctx, "  while (e) { sp_StrIntHash_set(r, e->key, e->value); e = e->order_next; }\n");
+    emit_raw(ctx, "  e = h2->first;\n");
+    emit_raw(ctx, "  while (e) { sp_StrIntHash_set(r, e->key, e->value); e = e->order_next; }\n");
+    emit_raw(ctx, "  return r;\n}\n\n");
   }
 
   /* Lambda/closure runtime (sp_Val) — emitted only when lambdas are used */
@@ -2311,13 +2311,13 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "typedef struct sp_Val sp_Val;\n");
     emit_raw(ctx, "typedef sp_Val *(*sp_fn_t)(sp_Val *self, sp_Val *arg);\n");
     emit_raw(ctx, "struct sp_Val {\n");
-    emit_raw(ctx, "    enum { SP_PROC, SP_INT, SP_BOOL, SP_NIL } tag;\n");
-    emit_raw(ctx, "    union {\n");
-    emit_raw(ctx, "        struct { sp_fn_t fn; int ncaptures; } proc;\n");
-    emit_raw(ctx, "        mrb_int ival;\n");
-    emit_raw(ctx, "        mrb_bool bval;\n");
-    emit_raw(ctx, "    } u;\n");
-    emit_raw(ctx, "    sp_Val *captures[];\n");
+    emit_raw(ctx, "  enum { SP_PROC, SP_INT, SP_BOOL, SP_NIL } tag;\n");
+    emit_raw(ctx, "  union {\n");
+    emit_raw(ctx, "    struct { sp_fn_t fn; int ncaptures; } proc;\n");
+    emit_raw(ctx, "    mrb_int ival;\n");
+    emit_raw(ctx, "    mrb_bool bval;\n");
+    emit_raw(ctx, "  } u;\n");
+    emit_raw(ctx, "  sp_Val *captures[];\n");
     emit_raw(ctx, "};\n\n");
 
     emit_raw(ctx, "#include <sys/mman.h>\n");
@@ -2326,73 +2326,73 @@ void emit_header(codegen_ctx_t *ctx) {
     emit_raw(ctx, "static size_t sp_arena_pos;\n\n");
 
     emit_raw(ctx, "static void *sp_alloc(size_t sz) {\n");
-    emit_raw(ctx, "    sz = (sz + 7) & ~(size_t)7;\n");
-    emit_raw(ctx, "    if (!sp_arena) {\n");
-    emit_raw(ctx, "        sp_arena = (char *)mmap(NULL, SP_ARENA_SIZE, PROT_READ|PROT_WRITE,\n");
-    emit_raw(ctx, "                                MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0);\n");
-    emit_raw(ctx, "        if (sp_arena == MAP_FAILED) { perror(\"mmap\"); exit(1); }\n");
-    emit_raw(ctx, "        sp_arena_pos = 0;\n");
-    emit_raw(ctx, "    }\n");
-    emit_raw(ctx, "    if (sp_arena_pos + sz > SP_ARENA_SIZE) { fprintf(stderr, \"sp_arena exhausted (%%zu used)\\n\", sp_arena_pos); exit(1); }\n");
-    emit_raw(ctx, "    void *p = sp_arena + sp_arena_pos;\n");
-    emit_raw(ctx, "    sp_arena_pos += sz;\n");
-    emit_raw(ctx, "    return p;\n");
+    emit_raw(ctx, "  sz = (sz + 7) & ~(size_t)7;\n");
+    emit_raw(ctx, "  if (!sp_arena) {\n");
+    emit_raw(ctx, "    sp_arena = (char *)mmap(NULL, SP_ARENA_SIZE, PROT_READ|PROT_WRITE,\n");
+    emit_raw(ctx, "                MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0);\n");
+    emit_raw(ctx, "    if (sp_arena == MAP_FAILED) { perror(\"mmap\"); exit(1); }\n");
+    emit_raw(ctx, "    sp_arena_pos = 0;\n");
+    emit_raw(ctx, "  }\n");
+    emit_raw(ctx, "  if (sp_arena_pos + sz > SP_ARENA_SIZE) { fprintf(stderr, \"sp_arena exhausted (%%zu used)\\n\", sp_arena_pos); exit(1); }\n");
+    emit_raw(ctx, "  void *p = sp_arena + sp_arena_pos;\n");
+    emit_raw(ctx, "  sp_arena_pos += sz;\n");
+    emit_raw(ctx, "  return p;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static sp_Val *sp_proc(sp_fn_t fn, int ncap) {\n");
-    emit_raw(ctx, "    sp_Val *v = (sp_Val *)sp_alloc(sizeof(sp_Val) + sizeof(sp_Val *) * ncap);\n");
-    emit_raw(ctx, "    v->tag = SP_PROC;\n");
-    emit_raw(ctx, "    v->u.proc.fn = fn;\n");
-    emit_raw(ctx, "    v->u.proc.ncaptures = ncap;\n");
-    emit_raw(ctx, "    return v;\n");
+    emit_raw(ctx, "  sp_Val *v = (sp_Val *)sp_alloc(sizeof(sp_Val) + sizeof(sp_Val *) * ncap);\n");
+    emit_raw(ctx, "  v->tag = SP_PROC;\n");
+    emit_raw(ctx, "  v->u.proc.fn = fn;\n");
+    emit_raw(ctx, "  v->u.proc.ncaptures = ncap;\n");
+    emit_raw(ctx, "  return v;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static sp_Val *sp_int(mrb_int n) {\n");
-    emit_raw(ctx, "    sp_Val *v = (sp_Val *)sp_alloc(sizeof(sp_Val));\n");
-    emit_raw(ctx, "    v->tag = SP_INT;\n");
-    emit_raw(ctx, "    v->u.ival = n;\n");
-    emit_raw(ctx, "    return v;\n");
+    emit_raw(ctx, "  sp_Val *v = (sp_Val *)sp_alloc(sizeof(sp_Val));\n");
+    emit_raw(ctx, "  v->tag = SP_INT;\n");
+    emit_raw(ctx, "  v->u.ival = n;\n");
+    emit_raw(ctx, "  return v;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static sp_Val *sp_bool(mrb_bool b) {\n");
-    emit_raw(ctx, "    sp_Val *v = (sp_Val *)sp_alloc(sizeof(sp_Val));\n");
-    emit_raw(ctx, "    v->tag = SP_BOOL;\n");
-    emit_raw(ctx, "    v->u.bval = b;\n");
-    emit_raw(ctx, "    return v;\n");
+    emit_raw(ctx, "  sp_Val *v = (sp_Val *)sp_alloc(sizeof(sp_Val));\n");
+    emit_raw(ctx, "  v->tag = SP_BOOL;\n");
+    emit_raw(ctx, "  v->u.bval = b;\n");
+    emit_raw(ctx, "  return v;\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static sp_Val sp_nil_val = { .tag = SP_NIL };\n\n");
 
     emit_raw(ctx, "static sp_Val *sp_call(sp_Val *f, sp_Val *arg) {\n");
-    emit_raw(ctx, "    return f->u.proc.fn(f, arg);\n");
+    emit_raw(ctx, "  return f->u.proc.fn(f, arg);\n");
     emit_raw(ctx, "}\n\n");
 
     emit_raw(ctx, "static mrb_int sp_to_int(sp_Val *v) {\n");
-    emit_raw(ctx, "    return v->u.ival;\n");
+    emit_raw(ctx, "  return v->u.ival;\n");
     emit_raw(ctx, "}\n\n");
 
     /* sp_StrArray for to_array/to_string results */
     emit_raw(ctx, "/* ---- String array for lambda FizzBuzz ---- */\n");
     emit_raw(ctx, "typedef struct { char **data; int len; int cap; } sp_StrArray;\n\n");
     emit_raw(ctx, "static sp_StrArray *sp_StrArray_new(void) {\n");
-    emit_raw(ctx, "    sp_StrArray *a = (sp_StrArray *)calloc(1, sizeof(sp_StrArray));\n");
-    emit_raw(ctx, "    a->cap = 16; a->data = (char **)malloc(sizeof(char *) * a->cap);\n");
-    emit_raw(ctx, "    return a;\n}\n\n");
+    emit_raw(ctx, "  sp_StrArray *a = (sp_StrArray *)calloc(1, sizeof(sp_StrArray));\n");
+    emit_raw(ctx, "  a->cap = 16; a->data = (char **)malloc(sizeof(char *) * a->cap);\n");
+    emit_raw(ctx, "  return a;\n}\n\n");
 
     emit_raw(ctx, "static void sp_StrArray_push(sp_StrArray *a, char *s) {\n");
-    emit_raw(ctx, "    if (a->len >= a->cap) { a->cap *= 2; a->data = (char **)realloc(a->data, sizeof(char *) * a->cap); }\n");
-    emit_raw(ctx, "    a->data[a->len++] = s;\n}\n\n");
+    emit_raw(ctx, "  if (a->len >= a->cap) { a->cap *= 2; a->data = (char **)realloc(a->data, sizeof(char *) * a->cap); }\n");
+    emit_raw(ctx, "  a->data[a->len++] = s;\n}\n\n");
 
     /* sp_ValArray for to_array returning sp_Val* elements */
     emit_raw(ctx, "typedef struct { sp_Val **data; int len; int cap; } sp_ValArray;\n\n");
     emit_raw(ctx, "static sp_ValArray *sp_ValArray_new(void) {\n");
-    emit_raw(ctx, "    sp_ValArray *a = (sp_ValArray *)calloc(1, sizeof(sp_ValArray));\n");
-    emit_raw(ctx, "    a->cap = 16; a->data = (sp_Val **)malloc(sizeof(sp_Val *) * a->cap);\n");
-    emit_raw(ctx, "    return a;\n}\n\n");
+    emit_raw(ctx, "  sp_ValArray *a = (sp_ValArray *)calloc(1, sizeof(sp_ValArray));\n");
+    emit_raw(ctx, "  a->cap = 16; a->data = (sp_Val **)malloc(sizeof(sp_Val *) * a->cap);\n");
+    emit_raw(ctx, "  return a;\n}\n\n");
 
     emit_raw(ctx, "static void sp_ValArray_push(sp_ValArray *a, sp_Val *v) {\n");
-    emit_raw(ctx, "    if (a->len >= a->cap) { a->cap *= 2; a->data = (sp_Val **)realloc(a->data, sizeof(sp_Val *) * a->cap); }\n");
-    emit_raw(ctx, "    a->data[a->len++] = v;\n}\n\n");
+    emit_raw(ctx, "  if (a->len >= a->cap) { a->cap *= 2; a->data = (sp_Val **)realloc(a->data, sizeof(sp_Val *) * a->cap); }\n");
+    emit_raw(ctx, "  a->data[a->len++] = v;\n}\n\n");
   }
 
   #undef SRC_HAS
@@ -2403,60 +2403,60 @@ void emit_header(codegen_ctx_t *ctx) {
 void emit_lambda_fizzbuzz_funcs(codegen_ctx_t *ctx) {
   /* to_integer: proc[-> n { n + 1 }][0] */
   emit_raw(ctx, "static sp_Val *_lam_incr(sp_Val *self, sp_Val *arg) {\n");
-  emit_raw(ctx, "    (void)self;\n");
-  emit_raw(ctx, "    return sp_int(sp_to_int(arg) + 1);\n");
+  emit_raw(ctx, "  (void)self;\n");
+  emit_raw(ctx, "  return sp_int(sp_to_int(arg) + 1);\n");
   emit_raw(ctx, "}\n\n");
 
   emit_raw(ctx, "static mrb_int sp_to_integer(sp_Val *lv_proc) {\n");
-  emit_raw(ctx, "    sp_Val *incr = sp_proc(_lam_incr, 0);\n");
-  emit_raw(ctx, "    sp_Val *result = sp_call(sp_call(lv_proc, incr), sp_int(0));\n");
-  emit_raw(ctx, "    return sp_to_int(result);\n");
+  emit_raw(ctx, "  sp_Val *incr = sp_proc(_lam_incr, 0);\n");
+  emit_raw(ctx, "  sp_Val *result = sp_call(sp_call(lv_proc, incr), sp_int(0));\n");
+  emit_raw(ctx, "  return sp_to_int(result);\n");
   emit_raw(ctx, "}\n\n");
 
   /* to_boolean: IF[proc][true][false] */
   emit_raw(ctx, "static mrb_bool sp_to_boolean(sp_Val *lv_proc) {\n");
-  emit_raw(ctx, "    sp_Val *result = sp_call(sp_call(sp_call(cv_IF, lv_proc), sp_bool(TRUE)), sp_bool(FALSE));\n");
-  emit_raw(ctx, "    return result->u.bval;\n");
+  emit_raw(ctx, "  sp_Val *result = sp_call(sp_call(sp_call(cv_IF, lv_proc), sp_bool(TRUE)), sp_bool(FALSE));\n");
+  emit_raw(ctx, "  return result->u.bval;\n");
   emit_raw(ctx, "}\n\n");
 
   /* to_array: iterate church-encoded list */
   emit_raw(ctx, "static sp_ValArray *sp_to_array(sp_Val *lv_proc) {\n");
-  emit_raw(ctx, "    sp_ValArray *lv_array = sp_ValArray_new();\n");
-  emit_raw(ctx, "    while (!sp_to_boolean(sp_call(cv_IS_EMPTY, lv_proc))) {\n");
-  emit_raw(ctx, "        sp_ValArray_push(lv_array, sp_call(cv_FIRST, lv_proc));\n");
-  emit_raw(ctx, "        lv_proc = sp_call(cv_REST, lv_proc);\n");
-  emit_raw(ctx, "    }\n");
-  emit_raw(ctx, "    return lv_array;\n");
+  emit_raw(ctx, "  sp_ValArray *lv_array = sp_ValArray_new();\n");
+  emit_raw(ctx, "  while (!sp_to_boolean(sp_call(cv_IS_EMPTY, lv_proc))) {\n");
+  emit_raw(ctx, "    sp_ValArray_push(lv_array, sp_call(cv_FIRST, lv_proc));\n");
+  emit_raw(ctx, "    lv_proc = sp_call(cv_REST, lv_proc);\n");
+  emit_raw(ctx, "  }\n");
+  emit_raw(ctx, "  return lv_array;\n");
   emit_raw(ctx, "}\n\n");
 
   /* to_char: '0123456789BFiuz'.slice(to_integer(c)) */
   emit_raw(ctx, "static char *sp_to_char(sp_Val *lv_c) {\n");
-  emit_raw(ctx, "    static const char *chars = \"0123456789BFiuz\";\n");
-  emit_raw(ctx, "    mrb_int idx = sp_to_integer(lv_c);\n");
-  emit_raw(ctx, "    char *buf = (char *)malloc(2);\n");
-  emit_raw(ctx, "    buf[0] = chars[idx]; buf[1] = '\\0';\n");
-  emit_raw(ctx, "    return buf;\n");
+  emit_raw(ctx, "  static const char *chars = \"0123456789BFiuz\";\n");
+  emit_raw(ctx, "  mrb_int idx = sp_to_integer(lv_c);\n");
+  emit_raw(ctx, "  char *buf = (char *)malloc(2);\n");
+  emit_raw(ctx, "  buf[0] = chars[idx]; buf[1] = '\\0';\n");
+  emit_raw(ctx, "  return buf;\n");
   emit_raw(ctx, "}\n\n");
 
   /* to_string: to_array(s).map { |c| to_char(c) }.join */
   emit_raw(ctx, "static char *sp_to_string(sp_Val *lv_s) {\n");
-  emit_raw(ctx, "    sp_ValArray *arr = sp_to_array(lv_s);\n");
-  emit_raw(ctx, "    size_t total = 0;\n");
-  emit_raw(ctx, "    char **parts = (char **)malloc(sizeof(char *) * arr->len);\n");
-  emit_raw(ctx, "    for (int i = 0; i < arr->len; i++) {\n");
-  emit_raw(ctx, "        parts[i] = sp_to_char(arr->data[i]);\n");
-  emit_raw(ctx, "        total += strlen(parts[i]);\n");
-  emit_raw(ctx, "    }\n");
-  emit_raw(ctx, "    char *result = (char *)malloc(total + 1);\n");
-  emit_raw(ctx, "    result[0] = '\\0';\n");
-  emit_raw(ctx, "    for (int i = 0; i < arr->len; i++) {\n");
-  emit_raw(ctx, "        strcat(result, parts[i]);\n");
-  emit_raw(ctx, "        free(parts[i]);\n");
-  emit_raw(ctx, "    }\n");
-  emit_raw(ctx, "    free(parts);\n");
-  emit_raw(ctx, "    free(arr->data);\n");
-  emit_raw(ctx, "    free(arr);\n");
-  emit_raw(ctx, "    return result;\n");
+  emit_raw(ctx, "  sp_ValArray *arr = sp_to_array(lv_s);\n");
+  emit_raw(ctx, "  size_t total = 0;\n");
+  emit_raw(ctx, "  char **parts = (char **)malloc(sizeof(char *) * arr->len);\n");
+  emit_raw(ctx, "  for (int i = 0; i < arr->len; i++) {\n");
+  emit_raw(ctx, "    parts[i] = sp_to_char(arr->data[i]);\n");
+  emit_raw(ctx, "    total += strlen(parts[i]);\n");
+  emit_raw(ctx, "  }\n");
+  emit_raw(ctx, "  char *result = (char *)malloc(total + 1);\n");
+  emit_raw(ctx, "  result[0] = '\\0';\n");
+  emit_raw(ctx, "  for (int i = 0; i < arr->len; i++) {\n");
+  emit_raw(ctx, "    strcat(result, parts[i]);\n");
+  emit_raw(ctx, "    free(parts[i]);\n");
+  emit_raw(ctx, "  }\n");
+  emit_raw(ctx, "  free(parts);\n");
+  emit_raw(ctx, "  free(arr->data);\n");
+  emit_raw(ctx, "  free(arr);\n");
+  emit_raw(ctx, "  return result;\n");
   emit_raw(ctx, "}\n\n");
 }
 
@@ -2472,18 +2472,18 @@ void emit_mega_dispatch_funcs(codegen_ctx_t *ctx) {
 
     if (returns_string) {
       emit_raw(ctx, "static const char *sp_dispatch_%s(sp_RbValue obj) {\n", mname);
-      emit_raw(ctx, "    uint16_t t = SP_TAG(obj);\n");
+      emit_raw(ctx, "  uint16_t t = SP_TAG(obj);\n");
       for (int ci = 0; ci < nc; ci++) {
         const char *cn = ctx->mega_dispatch[i].class_names[ci];
-        emit_raw(ctx, "    %s (t == SP_TAG_%s) return sp_%s_%s((sp_%s *)sp_unbox_obj(obj));\n",
+        emit_raw(ctx, "  %s (t == SP_TAG_%s) return sp_%s_%s((sp_%s *)sp_unbox_obj(obj));\n",
              ci == 0 ? "if" : "else if", cn, cn, mname, cn);
       }
-      emit_raw(ctx, "    return \"\";\n");
+      emit_raw(ctx, "  return \"\";\n");
       emit_raw(ctx, "}\n\n");
     }
     else {
       emit_raw(ctx, "static sp_RbValue sp_dispatch_%s(sp_RbValue obj) {\n", mname);
-      emit_raw(ctx, "    uint16_t t = SP_TAG(obj);\n");
+      emit_raw(ctx, "  uint16_t t = SP_TAG(obj);\n");
       for (int ci = 0; ci < nc; ci++) {
         const char *cn = ctx->mega_dispatch[i].class_names[ci];
         class_info_t *cls = find_class(ctx, cn);
@@ -2491,17 +2491,17 @@ void emit_mega_dispatch_funcs(codegen_ctx_t *ctx) {
         char *call_expr = sfmt("sp_%s_%s((sp_%s *)sp_unbox_obj(obj))", cn, mname, cn);
         if (mi) {
           char *boxed = poly_box_expr_vt(ctx, mi->return_type, call_expr);
-          emit_raw(ctx, "    %s (t == SP_TAG_%s) return %s;\n",
+          emit_raw(ctx, "  %s (t == SP_TAG_%s) return %s;\n",
                ci == 0 ? "if" : "else if", cn, boxed);
           free(boxed);
         }
         else {
-          emit_raw(ctx, "    %s (t == SP_TAG_%s) return sp_box_nil();\n",
+          emit_raw(ctx, "  %s (t == SP_TAG_%s) return sp_box_nil();\n",
                ci == 0 ? "if" : "else if", cn);
         }
         free(call_expr);
       }
-      emit_raw(ctx, "    return sp_box_nil();\n");
+      emit_raw(ctx, "  return sp_box_nil();\n");
       emit_raw(ctx, "}\n\n");
     }
   }

@@ -1269,7 +1269,7 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         int tmp = ctx->temp_counter++;
         emit(ctx, "sp_IntArray *_rev_%d = sp_IntArray_new();\n", tmp);
         emit(ctx, "for (mrb_int _ri_%d = sp_IntArray_length(%s) - 1; _ri_%d >= 0; _ri_%d--)\n", tmp, recv, tmp, tmp);
-        emit(ctx, "  sp_IntArray_push(_rev_%d, sp_IntArray_get(%s, _ri_%d));\n", tmp, recv, tmp);
+        emit(ctx, " sp_IntArray_push(_rev_%d, sp_IntArray_get(%s, _ri_%d));\n", tmp, recv, tmp);
         r = sfmt("_rev_%d", tmp);
       }
       else if (strcmp(method, "compact") == 0)
@@ -1290,13 +1290,13 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         /* In-place unique: O(n^2) remove duplicates */
         int tmp = ctx->temp_counter++;
         emit(ctx, "{ mrb_int _uw_%d = 0;\n", tmp);
-        emit(ctx, "  for (mrb_int _ui_%d = 0; _ui_%d < sp_IntArray_length(%s); _ui_%d++) {\n", tmp, tmp, recv, tmp);
-        emit(ctx, "    mrb_int _uv_%d = sp_IntArray_get(%s, _ui_%d); mrb_bool _dup_%d = FALSE;\n", tmp, recv, tmp, tmp);
-        emit(ctx, "    for (mrb_int _uj_%d = 0; _uj_%d < _uw_%d; _uj_%d++)\n", tmp, tmp, tmp, tmp);
-        emit(ctx, "      if (%s->data[%s->start + _uj_%d] == _uv_%d) { _dup_%d = TRUE; break; }\n", recv, recv, tmp, tmp, tmp);
-        emit(ctx, "    if (!_dup_%d) %s->data[%s->start + _uw_%d++] = _uv_%d;\n", tmp, recv, recv, tmp, tmp);
-        emit(ctx, "  }\n");
-        emit(ctx, "  %s->len = _uw_%d;\n", recv, tmp);
+        emit(ctx, " for (mrb_int _ui_%d = 0; _ui_%d < sp_IntArray_length(%s); _ui_%d++) {\n", tmp, tmp, recv, tmp);
+        emit(ctx, "  mrb_int _uv_%d = sp_IntArray_get(%s, _ui_%d); mrb_bool _dup_%d = FALSE;\n", tmp, recv, tmp, tmp);
+        emit(ctx, "  for (mrb_int _uj_%d = 0; _uj_%d < _uw_%d; _uj_%d++)\n", tmp, tmp, tmp, tmp);
+        emit(ctx, "   if (%s->data[%s->start + _uj_%d] == _uv_%d) { _dup_%d = TRUE; break; }\n", recv, recv, tmp, tmp, tmp);
+        emit(ctx, "  if (!_dup_%d) %s->data[%s->start + _uw_%d++] = _uv_%d;\n", tmp, recv, recv, tmp, tmp);
+        emit(ctx, " }\n");
+        emit(ctx, " %s->len = _uw_%d;\n", recv, tmp);
         emit(ctx, "}\n");
         r = sfmt("%s", recv);
       }
@@ -1306,8 +1306,8 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         int tmp = ctx->temp_counter++;
         emit(ctx, "mrb_int _min_%d = sp_IntArray_get(%s, 0);\n", tmp, recv);
         emit(ctx, "for (mrb_int _mi_%d = 1; _mi_%d < sp_IntArray_length(%s); _mi_%d++) {\n", tmp, tmp, recv, tmp);
-        emit(ctx, "  mrb_int _v_%d = sp_IntArray_get(%s, _mi_%d);\n", tmp, recv, tmp);
-        emit(ctx, "  if (_v_%d < _min_%d) _min_%d = _v_%d;\n", tmp, tmp, tmp, tmp);
+        emit(ctx, " mrb_int _v_%d = sp_IntArray_get(%s, _mi_%d);\n", tmp, recv, tmp);
+        emit(ctx, " if (_v_%d < _min_%d) _min_%d = _v_%d;\n", tmp, tmp, tmp, tmp);
         emit(ctx, "}\n");
         r = sfmt("_min_%d", tmp);
       }
@@ -1315,8 +1315,8 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         int tmp = ctx->temp_counter++;
         emit(ctx, "mrb_int _max_%d = sp_IntArray_get(%s, 0);\n", tmp, recv);
         emit(ctx, "for (mrb_int _mi_%d = 1; _mi_%d < sp_IntArray_length(%s); _mi_%d++) {\n", tmp, tmp, recv, tmp);
-        emit(ctx, "  mrb_int _v_%d = sp_IntArray_get(%s, _mi_%d);\n", tmp, recv, tmp);
-        emit(ctx, "  if (_v_%d > _max_%d) _max_%d = _v_%d;\n", tmp, tmp, tmp, tmp);
+        emit(ctx, " mrb_int _v_%d = sp_IntArray_get(%s, _mi_%d);\n", tmp, recv, tmp);
+        emit(ctx, " if (_v_%d > _max_%d) _max_%d = _v_%d;\n", tmp, tmp, tmp, tmp);
         emit(ctx, "}\n");
         r = sfmt("_max_%d", tmp);
       }
@@ -1324,7 +1324,7 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         int tmp = ctx->temp_counter++;
         emit(ctx, "mrb_int _sum_%d = 0;\n", tmp);
         emit(ctx, "for (mrb_int _si_%d = 0; _si_%d < sp_IntArray_length(%s); _si_%d++)\n", tmp, tmp, recv, tmp);
-        emit(ctx, "  _sum_%d += sp_IntArray_get(%s, _si_%d);\n", tmp, recv, tmp);
+        emit(ctx, " _sum_%d += sp_IntArray_get(%s, _si_%d);\n", tmp, recv, tmp);
         r = sfmt("_sum_%d", tmp);
       }
       else if (strcmp(method, "first") == 0)
@@ -1336,8 +1336,8 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         char *arg = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
         int tmp = ctx->temp_counter++;
         emit(ctx, "mrb_bool _incl_%d = FALSE; { mrb_int _ii_%d;\n", tmp, tmp);
-        emit(ctx, "  for (_ii_%d = 0; _ii_%d < sp_IntArray_length(%s); _ii_%d++)\n", tmp, tmp, recv, tmp);
-        emit(ctx, "    if (sp_IntArray_get(%s, _ii_%d) == %s) { _incl_%d = TRUE; break; }\n", recv, tmp, arg, tmp);
+        emit(ctx, " for (_ii_%d = 0; _ii_%d < sp_IntArray_length(%s); _ii_%d++)\n", tmp, tmp, recv, tmp);
+        emit(ctx, "  if (sp_IntArray_get(%s, _ii_%d) == %s) { _incl_%d = TRUE; break; }\n", recv, tmp, arg, tmp);
         emit(ctx, "}\n");
         free(arg);
         r = sfmt("_incl_%d", tmp);
@@ -1482,9 +1482,9 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
             /* Append all elements from the inner array */
             int inner = ctx->temp_counter++;
             emit(ctx, "{ sp_IntArray *_inner_%d = %s;\n", inner, val);
-            emit(ctx, "  for (mrb_int _j_%d = 0; _j_%d < sp_IntArray_length(_inner_%d); _j_%d++)\n",
+            emit(ctx, " for (mrb_int _j_%d = 0; _j_%d < sp_IntArray_length(_inner_%d); _j_%d++)\n",
                inner, inner, inner, inner);
-            emit(ctx, "    sp_IntArray_push(_flatm_%d, sp_IntArray_get(_inner_%d, _j_%d));\n",
+            emit(ctx, "  sp_IntArray_push(_flatm_%d, sp_IntArray_get(_inner_%d, _j_%d));\n",
                tmp, inner, inner);
             emit(ctx, "}\n");
             free(val);
@@ -1694,9 +1694,9 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
           var_declare(ctx, acc_name, vt_prim(SPINEL_TYPE_INTEGER), false);
           var_declare(ctx, elem_name, vt_prim(SPINEL_TYPE_INTEGER), false);
           emit(ctx, "mrb_int _red_%d; { mrb_int %s = %s;\n", tmp, acc_cn, init_val);
-          emit(ctx, "  for (mrb_int _ri_%d = 0; _ri_%d < sp_IntArray_length(%s); _ri_%d++) {\n",
+          emit(ctx, " for (mrb_int _ri_%d = 0; _ri_%d < sp_IntArray_length(%s); _ri_%d++) {\n",
              tmp, tmp, recv, tmp);
-          emit(ctx, "    mrb_int %s = sp_IntArray_get(%s, _ri_%d);\n", elem_cn, recv, tmp);
+          emit(ctx, "  mrb_int %s = sp_IntArray_get(%s, _ri_%d);\n", elem_cn, recv, tmp);
           /* Block body expression */
           if (blk->body) {
             pm_node_t *body = (pm_node_t *)blk->body;
@@ -1708,10 +1708,10 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
             else {
               body_expr = codegen_expr(ctx, body);
             }
-            emit(ctx, "    %s = %s;\n", acc_cn, body_expr);
+            emit(ctx, "  %s = %s;\n", acc_cn, body_expr);
             free(body_expr);
           }
-          emit(ctx, "  } _red_%d = %s; }\n", tmp, acc_cn);
+          emit(ctx, " } _red_%d = %s; }\n", tmp, acc_cn);
           ctx->var_count = sv; /* restore var table */
           for (int ci = sv; ci < MAX_VARS && ctx->vars[ci].name[0]; ci++)
             ctx->vars[ci].name[0] = '\0';
@@ -1796,34 +1796,34 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         int tmp = ctx->temp_counter++;
         emit(ctx, "sp_IntArray *_sb_%d = sp_IntArray_dup(%s);\n", tmp, recv);
         emit(ctx, "{ mrb_int _n_%d = sp_IntArray_length(_sb_%d);\n", tmp, tmp);
-        emit(ctx, "  mrb_int *_keys_%d = (mrb_int *)malloc(sizeof(mrb_int) * _n_%d);\n", tmp, tmp);
-        emit(ctx, "  for (mrb_int _si_%d = 0; _si_%d < _n_%d; _si_%d++) {\n", tmp, tmp, tmp, tmp);
+        emit(ctx, " mrb_int *_keys_%d = (mrb_int *)malloc(sizeof(mrb_int) * _n_%d);\n", tmp, tmp);
+        emit(ctx, " for (mrb_int _si_%d = 0; _si_%d < _n_%d; _si_%d++) {\n", tmp, tmp, tmp, tmp);
         char *cn = bpname ? make_cname(bpname, false) : xstrdup("_x");
-        emit(ctx, "    mrb_int %s = sp_IntArray_get(_sb_%d, _si_%d);\n", cn, tmp, tmp);
+        emit(ctx, "  mrb_int %s = sp_IntArray_get(_sb_%d, _si_%d);\n", cn, tmp, tmp);
         if (blk->body) {
           pm_statements_node_t *stmts = (pm_statements_node_t *)blk->body;
           if (stmts->body.size > 0) {
             char *key = codegen_expr(ctx, stmts->body.nodes[stmts->body.size - 1]);
-            emit(ctx, "    _keys_%d[_si_%d] = %s;\n", tmp, tmp, key);
+            emit(ctx, "  _keys_%d[_si_%d] = %s;\n", tmp, tmp, key);
             free(key);
           }
         }
-        emit(ctx, "  }\n");
+        emit(ctx, " }\n");
         /* Simple insertion sort by key */
-        emit(ctx, "  for (mrb_int _i_%d = 1; _i_%d < _n_%d; _i_%d++) {\n", tmp, tmp, tmp, tmp);
-        emit(ctx, "    mrb_int _kv_%d = _keys_%d[_i_%d]; mrb_int _dv_%d = _sb_%d->data[_sb_%d->start + _i_%d];\n",
+        emit(ctx, " for (mrb_int _i_%d = 1; _i_%d < _n_%d; _i_%d++) {\n", tmp, tmp, tmp, tmp);
+        emit(ctx, "  mrb_int _kv_%d = _keys_%d[_i_%d]; mrb_int _dv_%d = _sb_%d->data[_sb_%d->start + _i_%d];\n",
            tmp, tmp, tmp, tmp, tmp, tmp, tmp);
-        emit(ctx, "    mrb_int _j_%d = _i_%d - 1;\n", tmp, tmp);
-        emit(ctx, "    while (_j_%d >= 0 && _keys_%d[_j_%d] > _kv_%d) {\n", tmp, tmp, tmp, tmp);
-        emit(ctx, "      _keys_%d[_j_%d+1] = _keys_%d[_j_%d];\n", tmp, tmp, tmp, tmp);
-        emit(ctx, "      _sb_%d->data[_sb_%d->start + _j_%d+1] = _sb_%d->data[_sb_%d->start + _j_%d];\n",
+        emit(ctx, "  mrb_int _j_%d = _i_%d - 1;\n", tmp, tmp);
+        emit(ctx, "  while (_j_%d >= 0 && _keys_%d[_j_%d] > _kv_%d) {\n", tmp, tmp, tmp, tmp);
+        emit(ctx, "   _keys_%d[_j_%d+1] = _keys_%d[_j_%d];\n", tmp, tmp, tmp, tmp);
+        emit(ctx, "   _sb_%d->data[_sb_%d->start + _j_%d+1] = _sb_%d->data[_sb_%d->start + _j_%d];\n",
            tmp, tmp, tmp, tmp, tmp, tmp);
-        emit(ctx, "      _j_%d--;\n", tmp);
-        emit(ctx, "    }\n");
-        emit(ctx, "    _keys_%d[_j_%d+1] = _kv_%d; _sb_%d->data[_sb_%d->start + _j_%d+1] = _dv_%d;\n",
-           tmp, tmp, tmp, tmp, tmp, tmp, tmp);
+        emit(ctx, "   _j_%d--;\n", tmp);
         emit(ctx, "  }\n");
-        emit(ctx, "  free(_keys_%d);\n", tmp);
+        emit(ctx, "  _keys_%d[_j_%d+1] = _kv_%d; _sb_%d->data[_sb_%d->start + _j_%d+1] = _dv_%d;\n",
+           tmp, tmp, tmp, tmp, tmp, tmp, tmp);
+        emit(ctx, " }\n");
+        emit(ctx, " free(_keys_%d);\n", tmp);
         emit(ctx, "}\n");
         free(cn); free(bpname);
         free(recv); free(method);
@@ -1837,34 +1837,34 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         char *bpname = extract_block_param(ctx, blk);
         int tmp = ctx->temp_counter++;
         emit(ctx, "{ mrb_int _n_%d = sp_IntArray_length(%s);\n", tmp, recv);
-        emit(ctx, "  mrb_int *_keys_%d = (mrb_int *)malloc(sizeof(mrb_int) * _n_%d);\n", tmp, tmp);
-        emit(ctx, "  for (mrb_int _si_%d = 0; _si_%d < _n_%d; _si_%d++) {\n", tmp, tmp, tmp, tmp);
+        emit(ctx, " mrb_int *_keys_%d = (mrb_int *)malloc(sizeof(mrb_int) * _n_%d);\n", tmp, tmp);
+        emit(ctx, " for (mrb_int _si_%d = 0; _si_%d < _n_%d; _si_%d++) {\n", tmp, tmp, tmp, tmp);
         char *cn = bpname ? make_cname(bpname, false) : xstrdup("_x");
-        emit(ctx, "    mrb_int %s = sp_IntArray_get(%s, _si_%d);\n", cn, recv, tmp);
+        emit(ctx, "  mrb_int %s = sp_IntArray_get(%s, _si_%d);\n", cn, recv, tmp);
         if (blk->body) {
           pm_statements_node_t *stmts = (pm_statements_node_t *)blk->body;
           if (stmts->body.size > 0) {
             char *key = codegen_expr(ctx, stmts->body.nodes[stmts->body.size - 1]);
-            emit(ctx, "    _keys_%d[_si_%d] = %s;\n", tmp, tmp, key);
+            emit(ctx, "  _keys_%d[_si_%d] = %s;\n", tmp, tmp, key);
             free(key);
           }
         }
-        emit(ctx, "  }\n");
+        emit(ctx, " }\n");
         /* Insertion sort by key, modifying original array in place */
-        emit(ctx, "  for (mrb_int _i_%d = 1; _i_%d < _n_%d; _i_%d++) {\n", tmp, tmp, tmp, tmp);
-        emit(ctx, "    mrb_int _kv_%d = _keys_%d[_i_%d]; mrb_int _dv_%d = %s->data[%s->start + _i_%d];\n",
+        emit(ctx, " for (mrb_int _i_%d = 1; _i_%d < _n_%d; _i_%d++) {\n", tmp, tmp, tmp, tmp);
+        emit(ctx, "  mrb_int _kv_%d = _keys_%d[_i_%d]; mrb_int _dv_%d = %s->data[%s->start + _i_%d];\n",
            tmp, tmp, tmp, tmp, recv, recv, tmp);
-        emit(ctx, "    mrb_int _j_%d = _i_%d - 1;\n", tmp, tmp);
-        emit(ctx, "    while (_j_%d >= 0 && _keys_%d[_j_%d] > _kv_%d) {\n", tmp, tmp, tmp, tmp);
-        emit(ctx, "      _keys_%d[_j_%d+1] = _keys_%d[_j_%d];\n", tmp, tmp, tmp, tmp);
-        emit(ctx, "      %s->data[%s->start + _j_%d+1] = %s->data[%s->start + _j_%d];\n",
+        emit(ctx, "  mrb_int _j_%d = _i_%d - 1;\n", tmp, tmp);
+        emit(ctx, "  while (_j_%d >= 0 && _keys_%d[_j_%d] > _kv_%d) {\n", tmp, tmp, tmp, tmp);
+        emit(ctx, "   _keys_%d[_j_%d+1] = _keys_%d[_j_%d];\n", tmp, tmp, tmp, tmp);
+        emit(ctx, "   %s->data[%s->start + _j_%d+1] = %s->data[%s->start + _j_%d];\n",
            recv, recv, tmp, recv, recv, tmp);
-        emit(ctx, "      _j_%d--;\n", tmp);
-        emit(ctx, "    }\n");
-        emit(ctx, "    _keys_%d[_j_%d+1] = _kv_%d; %s->data[%s->start + _j_%d+1] = _dv_%d;\n",
-           tmp, tmp, tmp, recv, recv, tmp, tmp);
+        emit(ctx, "   _j_%d--;\n", tmp);
         emit(ctx, "  }\n");
-        emit(ctx, "  free(_keys_%d);\n", tmp);
+        emit(ctx, "  _keys_%d[_j_%d+1] = _kv_%d; %s->data[%s->start + _j_%d+1] = _dv_%d;\n",
+           tmp, tmp, tmp, recv, recv, tmp, tmp);
+        emit(ctx, " }\n");
+        emit(ctx, " free(_keys_%d);\n", tmp);
         emit(ctx, "}\n");
         free(cn); free(bpname);
         free(method);
@@ -1880,17 +1880,17 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         int tmp = ctx->temp_counter++;
         emit(ctx, "sp_RbArray *_zip_%d = sp_RbArray_new();\n", tmp);
         emit(ctx, "{ mrb_int _za_%d = sp_IntArray_length(%s);\n", tmp, recv);
-        emit(ctx, "  mrb_int _zb_%d = sp_IntArray_length(%s);\n", tmp, arg);
-        emit(ctx, "  for (mrb_int _zi_%d = 0; _zi_%d < _za_%d; _zi_%d++) {\n",
+        emit(ctx, " mrb_int _zb_%d = sp_IntArray_length(%s);\n", tmp, arg);
+        emit(ctx, " for (mrb_int _zi_%d = 0; _zi_%d < _za_%d; _zi_%d++) {\n",
            tmp, tmp, tmp, tmp);
-        emit(ctx, "    sp_RbArray *_zp_%d = sp_RbArray_new();\n", tmp);
-        emit(ctx, "    sp_RbArray_push(_zp_%d, sp_box_int(sp_IntArray_get(%s, _zi_%d)));\n",
+        emit(ctx, "  sp_RbArray *_zp_%d = sp_RbArray_new();\n", tmp);
+        emit(ctx, "  sp_RbArray_push(_zp_%d, sp_box_int(sp_IntArray_get(%s, _zi_%d)));\n",
            tmp, recv, tmp);
-        emit(ctx, "    sp_RbArray_push(_zp_%d, _zi_%d < _zb_%d ? sp_box_int(sp_IntArray_get(%s, _zi_%d)) : sp_box_nil());\n",
+        emit(ctx, "  sp_RbArray_push(_zp_%d, _zi_%d < _zb_%d ? sp_box_int(sp_IntArray_get(%s, _zi_%d)) : sp_box_nil());\n",
            tmp, tmp, tmp, arg, tmp);
-        emit(ctx, "    sp_RbArray_push(_zip_%d, sp_box_obj(SP_T_OBJECT, _zp_%d));\n",
+        emit(ctx, "  sp_RbArray_push(_zip_%d, sp_box_obj(SP_T_OBJECT, _zp_%d));\n",
            tmp, tmp);
-        emit(ctx, "  }\n");
+        emit(ctx, " }\n");
         emit(ctx, "}\n");
         free(arg);
         free(recv); free(method);
@@ -2343,8 +2343,8 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
       else if (strcmp(method, "sum") == 0) {
         int tmp = ctx->temp_counter++;
         emit(ctx, "mrb_int _rsum_%d = 0; { mrb_int _ri_%d;\n", tmp, tmp);
-        emit(ctx, "  for (_ri_%d = (%s).first; _ri_%d <= (%s).last; _ri_%d++)\n", tmp, recv, tmp, recv, tmp);
-        emit(ctx, "    _rsum_%d += _ri_%d;\n", tmp, tmp);
+        emit(ctx, " for (_ri_%d = (%s).first; _ri_%d <= (%s).last; _ri_%d++)\n", tmp, recv, tmp, recv, tmp);
+        emit(ctx, "  _rsum_%d += _ri_%d;\n", tmp, tmp);
         emit(ctx, "}\n");
         r = sfmt("_rsum_%d", tmp);
       }
@@ -2848,14 +2848,14 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         char *sep = codegen_expr(ctx, call->arguments->arguments.nodes[0]);
         int tmp = ctx->temp_counter++;
         emit(ctx, "const char *_sj_%d; { size_t _total_%d = 0; size_t _sl_%d = strlen(%s);\n", tmp, tmp, tmp, sep);
-        emit(ctx, "  for (mrb_int _ji_%d = 0; _ji_%d < sp_StrArray_length(%s); _ji_%d++) _total_%d += strlen((%s)->data[_ji_%d]) + _sl_%d;\n",
+        emit(ctx, " for (mrb_int _ji_%d = 0; _ji_%d < sp_StrArray_length(%s); _ji_%d++) _total_%d += strlen((%s)->data[_ji_%d]) + _sl_%d;\n",
            tmp, tmp, recv, tmp, tmp, recv, tmp, tmp);
-        emit(ctx, "  char *_jbuf_%d = (char *)malloc(_total_%d + 1); size_t _jp_%d = 0;\n", tmp, tmp, tmp);
-        emit(ctx, "  for (mrb_int _ji_%d = 0; _ji_%d < sp_StrArray_length(%s); _ji_%d++) {\n", tmp, tmp, recv, tmp);
-        emit(ctx, "    if (_ji_%d > 0) { memcpy(_jbuf_%d + _jp_%d, %s, _sl_%d); _jp_%d += _sl_%d; }\n", tmp, tmp, tmp, sep, tmp, tmp, tmp);
-        emit(ctx, "    size_t _el_%d = strlen((%s)->data[_ji_%d]); memcpy(_jbuf_%d + _jp_%d, (%s)->data[_ji_%d], _el_%d); _jp_%d += _el_%d;\n",
+        emit(ctx, " char *_jbuf_%d = (char *)malloc(_total_%d + 1); size_t _jp_%d = 0;\n", tmp, tmp, tmp);
+        emit(ctx, " for (mrb_int _ji_%d = 0; _ji_%d < sp_StrArray_length(%s); _ji_%d++) {\n", tmp, tmp, recv, tmp);
+        emit(ctx, "  if (_ji_%d > 0) { memcpy(_jbuf_%d + _jp_%d, %s, _sl_%d); _jp_%d += _sl_%d; }\n", tmp, tmp, tmp, sep, tmp, tmp, tmp);
+        emit(ctx, "  size_t _el_%d = strlen((%s)->data[_ji_%d]); memcpy(_jbuf_%d + _jp_%d, (%s)->data[_ji_%d], _el_%d); _jp_%d += _el_%d;\n",
            tmp, recv, tmp, tmp, tmp, recv, tmp, tmp, tmp, tmp);
-        emit(ctx, "  } _jbuf_%d[_jp_%d] = '\\0'; _sj_%d = _jbuf_%d; }\n", tmp, tmp, tmp, tmp);
+        emit(ctx, " } _jbuf_%d[_jp_%d] = '\\0'; _sj_%d = _jbuf_%d; }\n", tmp, tmp, tmp, tmp);
         free(sep);
         r = sfmt("_sj_%d", tmp);
       }
@@ -3374,11 +3374,11 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
                             classes[ci], c_mname, classes[ci], recv, args);
                 if (mi) {
                   char *boxed = poly_box_expr_vt(ctx, mi->return_type, call_expr);
-                  emit(ctx, "    _poly_%d = %s;\n", tmp, boxed);
+                  emit(ctx, "  _poly_%d = %s;\n", tmp, boxed);
                   free(boxed);
                 }
                 else {
-                  emit(ctx, "    _poly_%d = sp_box_nil();\n", tmp);
+                  emit(ctx, "  _poly_%d = sp_box_nil();\n", tmp);
                 }
                 free(call_expr);
                 emit(ctx, "}\n");
@@ -3606,7 +3606,8 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
     }
     emit(ctx, "sp_exc_depth--;\n");
     ctx->indent--;
-    emit(ctx, "} else if (_cj_%d == 2 && sp_throw_tag && strcmp(sp_throw_tag, %s) == 0) {\n", tmp, tag);
+    emit(ctx, "}\n");
+    emit(ctx, "else if (_cj_%d == 2 && sp_throw_tag && strcmp(sp_throw_tag, %s) == 0) {\n", tmp, tag);
     ctx->indent++;
     emit(ctx, "sp_exc_depth--;\n");
     if (rt.kind == SPINEL_TYPE_STRING)
@@ -3615,7 +3616,8 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
       emit(ctx, "_catch_%d = sp_throw_is_str ? 0 : sp_throw_value_i;\n", tmp);
     emit(ctx, "sp_throw_tag = NULL;\n");
     ctx->indent--;
-    emit(ctx, "} else {\n");
+    emit(ctx, "}\n");
+    emit(ctx, "else {\n");
     ctx->indent++;
     emit(ctx, "sp_exc_depth--;\n");
     emit(ctx, "if (sp_exc_depth > 0) longjmp(sp_exc_stack[sp_exc_depth - 1], _cj_%d);\n", tmp);
@@ -4218,7 +4220,8 @@ static char *codegen_expr_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node
         emit(ctx, "_nlr_%d = sp_%s(%s);\n", tmp, fn->name, args);
         emit(ctx, "sp_exc_depth--;\n");
         ctx->indent--;
-        emit(ctx, "} else {\n");
+        emit(ctx, "}\n");
+        emit(ctx, "else {\n");
         ctx->indent++;
         emit(ctx, "sp_exc_depth--;\n");
         emit(ctx, "_nlr_%d = _blk_ret_val_%d;\n", tmp, _yield_blk_id);
@@ -4625,7 +4628,8 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
     }
     ctx->indent--;
     if (n->else_clause) {
-      emit(ctx, "} else {\n");
+      emit(ctx, "}\n");
+      emit(ctx, "else {\n");
       ctx->indent++;
       pm_else_node_t *el = (pm_else_node_t *)n->else_clause;
       if (el->statements) {
@@ -4726,7 +4730,8 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
       pm_node_t *cn = n->conditions.nodes[i];
       if (PM_NODE_TYPE(cn) != PM_WHEN_NODE) continue;
       pm_when_node_t *w = (pm_when_node_t *)cn;
-      emit(ctx, "%sif (", i == 0 ? "" : "} else ");
+      if (i > 0) emit(ctx, "}\n");
+      emit(ctx, i == 0 ? "if (" : "else if (");
       for (size_t j = 0; j < w->conditions.size; j++) {
         if (j > 0) emit_raw(ctx, " || ");
         pm_node_t *wc = w->conditions.nodes[j];
@@ -4763,7 +4768,8 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
       ctx->indent--;
     }
     if (n->else_clause) {
-      emit(ctx, "} else {\n");
+      emit(ctx, "}\n");
+      emit(ctx, "else {\n");
       ctx->indent++;
       pm_else_node_t *el = (pm_else_node_t *)n->else_clause;
       if (el->statements && el->statements->body.size > 0) {
@@ -4812,7 +4818,8 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
       pm_node_t *cn = n->conditions.nodes[i];
       if (PM_NODE_TYPE(cn) != PM_IN_NODE) continue;
       pm_in_node_t *in = (pm_in_node_t *)cn;
-      emit(ctx, "%sif (", i == 0 ? "" : "} else ");
+      if (i > 0) emit(ctx, "}\n");
+      emit(ctx, i == 0 ? "if (" : "else if (");
       codegen_pattern_cond(ctx, in->pattern, cid);
       emit_raw(ctx, ") {\n");
       ctx->indent++;
@@ -4829,7 +4836,8 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
       ctx->indent--;
     }
     if (n->else_clause) {
-      emit(ctx, "} else {\n");
+      emit(ctx, "}\n");
+      emit(ctx, "else {\n");
       ctx->indent++;
       pm_else_node_t *el = (pm_else_node_t *)n->else_clause;
       if (el->statements && el->statements->body.size > 0) {
@@ -5197,8 +5205,9 @@ char *codegen_expr(codegen_ctx_t *ctx, pm_node_t *node) {
     emit(ctx, "_resc_%d = %s;\n", tmp, expr);
     free(expr);
     ctx->indent--;
-    emit(ctx, "    sp_exc_depth--;\n");
-    emit(ctx, "} else {\n");
+    emit(ctx, "  sp_exc_depth--;\n");
+    emit(ctx, "}\n");
+    emit(ctx, "else {\n");
     ctx->indent++;
     emit(ctx, "sp_exc_depth--;\n");
     char *defval = codegen_expr(ctx, rm->rescue_expression);

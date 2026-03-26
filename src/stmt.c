@@ -221,7 +221,7 @@ static void codegen_stmt_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node_
         /* Emit: cast to sp_StrArray* and print each element */
         int tmp = ctx->temp_counter++;
         emit(ctx, "{ sp_StrArray *_pa_%d = (sp_StrArray *)%s;\n", tmp, ae);
-        emit(ctx, "  for (int _pi_%d = 0; _pi_%d < _pa_%d->len; _pi_%d++) puts(_pa_%d->data[_pi_%d]); }\n",
+        emit(ctx, " for (int _pi_%d = 0; _pi_%d < _pa_%d->len; _pi_%d++) puts(_pa_%d->data[_pi_%d]); }\n",
            tmp, tmp, tmp, tmp, tmp, tmp);
         free(ae);
         free(method);
@@ -951,12 +951,12 @@ static void codegen_stmt_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node_
           emit_raw(ctx, "} _blk_env_%d_t;\n", blk_id);
 
           emit_raw(ctx, "static mrb_int _blk_%d(void *_e, mrb_int _arg) {\n", blk_id);
-          emit_raw(ctx, "    _blk_env_%d_t *_env = (_blk_env_%d_t *)_e;\n", blk_id, blk_id);
+          emit_raw(ctx, "  _blk_env_%d_t *_env = (_blk_env_%d_t *)_e;\n", blk_id, blk_id);
 
           /* Block parameter from _arg */
           if (bpname) {
             char *cn = make_cname(bpname, false);
-            emit_raw(ctx, "    mrb_int %s = _arg;\n", cn);
+            emit_raw(ctx, "  mrb_int %s = _arg;\n", cn);
             free(cn);
           }
 
@@ -965,13 +965,13 @@ static void codegen_stmt_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node_
             var_entry_t *v = var_lookup(ctx, captures.names[ci]);
             if (!v) continue;
             char *cn = make_cname(v->name, false);
-            emit_raw(ctx, "    #define %s (*_env->%s)\n", cn, cn);
+            emit_raw(ctx, "  #define %s (*_env->%s)\n", cn, cn);
             free(cn);
           }
 
           /* For non-local return, alias _e for the return macros */
           if (has_nonlocal_return) {
-            emit_raw(ctx, "    #define _e _env\n");
+            emit_raw(ctx, "  #define _e _env\n");
           }
 
           /* Generate block body */
@@ -989,7 +989,7 @@ static void codegen_stmt_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node_
           ctx->indent = saved_indent;
 
           if (has_nonlocal_return) {
-            emit_raw(ctx, "    #undef _e\n");
+            emit_raw(ctx, "  #undef _e\n");
           }
 
           /* Undefine aliases */
@@ -997,11 +997,11 @@ static void codegen_stmt_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node_
             var_entry_t *v = var_lookup(ctx, captures.names[ci]);
             if (!v) continue;
             char *cn = make_cname(v->name, false);
-            emit_raw(ctx, "    #undef %s\n", cn);
+            emit_raw(ctx, "  #undef %s\n", cn);
             free(cn);
           }
 
-          emit_raw(ctx, "    return 0;\n");
+          emit_raw(ctx, "  return 0;\n");
           emit_raw(ctx, "}\n");
 
           ctx->out = saved_out;
@@ -1030,7 +1030,8 @@ static void codegen_stmt_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node_
                def_cls->name, c_mname, recv, blk_id, blk_id);
             emit(ctx, "sp_exc_depth--;\n");
             ctx->indent--;
-            emit(ctx, "} else {\n");
+            emit(ctx, "}\n");
+            emit(ctx, "else {\n");
             ctx->indent++;
             emit(ctx, "sp_exc_depth--;\n");
             emit(ctx, "return _blk_ret_val_%d;\n", blk_id);
@@ -1163,7 +1164,7 @@ static void codegen_stmt_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node_
       emit(ctx, "while (_sp_%d >= 0) {\n", tmp);
       ctx->indent++;
       emit(ctx, "_sp_%d = onig_search(%s, (const OnigUChar *)_ss_%d, _se_%d,\n", tmp, pat, tmp, tmp);
-      emit(ctx, "    (const OnigUChar *)_ss_%d + _sp_%d, _se_%d, _sr_%d, ONIG_OPTION_NONE);\n", tmp, tmp, tmp, tmp);
+      emit(ctx, "  (const OnigUChar *)_ss_%d + _sp_%d, _se_%d, _sr_%d, ONIG_OPTION_NONE);\n", tmp, tmp, tmp, tmp);
       emit(ctx, "if (_sp_%d >= 0) {\n", tmp);
       ctx->indent++;
       if (bpname) {
@@ -1333,7 +1334,8 @@ static void codegen_stmt_call(codegen_ctx_t *ctx, pm_call_node_t *call, pm_node_
         free(args);
 
         ctx->indent--;
-        emit(ctx, "} else {\n");
+        emit(ctx, "}\n");
+        emit(ctx, "else {\n");
         ctx->indent++;
         emit(ctx, "sp_exc_depth--;\n");
         emit(ctx, "return _blk_ret_val_%d;\n", blk_id);
@@ -1800,13 +1802,15 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
       if (PM_NODE_TYPE(n->subsequent) == PM_IF_NODE) {
         pm_if_node_t *ei = (pm_if_node_t *)n->subsequent;
         char *ec = codegen_expr(ctx, ei->predicate);
-        emit(ctx, "} else if (%s) {\n", ec);
+        emit(ctx, "}\n");
+        emit(ctx, "else if (%s) {\n", ec);
         free(ec);
         ctx->indent++;
         if (ei->statements) codegen_stmts(ctx, (pm_node_t *)ei->statements);
         ctx->indent--;
         if (ei->subsequent) {
-          emit(ctx, "} else {\n");
+          emit(ctx, "}\n");
+          emit(ctx, "else {\n");
           ctx->indent++;
           codegen_stmt(ctx, (pm_node_t *)ei->subsequent);
           ctx->indent--;
@@ -1814,7 +1818,8 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
         emit(ctx, "}\n");
       }
       else if (PM_NODE_TYPE(n->subsequent) == PM_ELSE_NODE) {
-        emit(ctx, "} else {\n");
+        emit(ctx, "}\n");
+        emit(ctx, "else {\n");
         ctx->indent++;
         pm_else_node_t *el = (pm_else_node_t *)n->subsequent;
         if (el->statements) codegen_stmts(ctx, (pm_node_t *)el->statements);
@@ -1848,7 +1853,8 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
     if (n->statements) codegen_stmts(ctx, (pm_node_t *)n->statements);
     ctx->indent--;
     if (n->else_clause) {
-      emit(ctx, "} else {\n");
+      emit(ctx, "}\n");
+      emit(ctx, "else {\n");
       ctx->indent++;
       codegen_stmt(ctx, (pm_node_t *)n->else_clause);
       ctx->indent--;
@@ -1875,7 +1881,8 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
       if (PM_NODE_TYPE(cond_node) != PM_WHEN_NODE) continue;
       pm_when_node_t *when = (pm_when_node_t *)cond_node;
 
-      emit(ctx, "%sif (", i == 0 ? "" : "} else ");
+      if (i > 0) emit(ctx, "}\n");
+      emit(ctx, i == 0 ? "if (" : "else if (");
 
       /* Each when can have multiple conditions: when 2, 3 */
       for (size_t j = 0; j < when->conditions.size; j++) {
@@ -1910,7 +1917,8 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
     }
 
     if (n->else_clause) {
-      emit(ctx, "} else {\n");
+      emit(ctx, "}\n");
+      emit(ctx, "else {\n");
       ctx->indent++;
       pm_else_node_t *el = (pm_else_node_t *)n->else_clause;
       if (el->statements) codegen_stmts(ctx, (pm_node_t *)el->statements);
@@ -1946,7 +1954,8 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
       if (PM_NODE_TYPE(cn) != PM_IN_NODE) continue;
       pm_in_node_t *in = (pm_in_node_t *)cn;
 
-      emit(ctx, "%sif (", i == 0 ? "" : "} else ");
+      if (i > 0) emit(ctx, "}\n");
+      emit(ctx, i == 0 ? "if (" : "else if (");
       codegen_pattern_cond(ctx, in->pattern, case_id);
       emit_raw(ctx, ") {\n");
       ctx->indent++;
@@ -1955,7 +1964,8 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
     }
 
     if (n->else_clause) {
-      emit(ctx, "} else {\n");
+      emit(ctx, "}\n");
+      emit(ctx, "else {\n");
       ctx->indent++;
       pm_else_node_t *el = (pm_else_node_t *)n->else_clause;
       if (el->statements) codegen_stmts(ctx, (pm_node_t *)el->statements);
@@ -2067,8 +2077,9 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
       if (bn->statements) codegen_stmts(ctx, (pm_node_t *)bn->statements);
 
       ctx->indent--;
-      emit(ctx, "    sp_exc_depth--;\n");
-      emit(ctx, "} else {\n");
+      emit(ctx, "  sp_exc_depth--;\n");
+      emit(ctx, "}\n");
+      emit(ctx, "else {\n");
       ctx->indent++;
       emit(ctx, "sp_exc_depth--;\n");
 
@@ -2080,7 +2091,8 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
         bool has_class_filter = (rc->exceptions.size > 0);
 
         if (has_class_filter) {
-          emit(ctx, "%sif (", first_rc ? "" : "} else ");
+          if (!first_rc) emit(ctx, "}\n");
+          emit(ctx, first_rc ? "if (" : "else if (");
           for (size_t ei = 0; ei < rc->exceptions.size; ei++) {
             if (ei > 0) emit_raw(ctx, " || ");
             pm_node_t *exc = rc->exceptions.nodes[ei];
@@ -2095,7 +2107,8 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
           ctx->indent++;
         }
         else if (!first_rc) {
-          emit(ctx, "} else {\n");
+          emit(ctx, "}\n");
+          emit(ctx, "else {\n");
           ctx->indent++;
         }
 
@@ -2154,8 +2167,9 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
     ctx->indent++;
     codegen_stmt(ctx, rm->expression);
     ctx->indent--;
-    emit(ctx, "    sp_exc_depth--;\n");
-    emit(ctx, "} else {\n");
+    emit(ctx, "  sp_exc_depth--;\n");
+    emit(ctx, "}\n");
+    emit(ctx, "else {\n");
     ctx->indent++;
     emit(ctx, "sp_exc_depth--;\n");
     codegen_stmt(ctx, rm->rescue_expression);
@@ -2234,10 +2248,10 @@ void codegen_stmt(codegen_ctx_t *ctx, pm_node_t *node) {
           char *cn = make_cname(vn, false);
           int tmp = ctx->temp_counter++;
           emit(ctx, "{ %s *_rest_%d = %s_new();\n", arr_type, tmp, arr_type);
-          emit(ctx, "  for (mrb_int _ri_%d = %d; _ri_%d < %s(_mv_%d); _ri_%d++)\n",
+          emit(ctx, " for (mrb_int _ri_%d = %d; _ri_%d < %s(_mv_%d); _ri_%d++)\n",
              tmp, (int)n->lefts.size, tmp, len_fn, mv_id, tmp);
-          emit(ctx, "    %s_push(_rest_%d, %s(_mv_%d, _ri_%d));\n", arr_type, tmp, get_fn, mv_id, tmp);
-          emit(ctx, "  %s = _rest_%d; }\n", cn, tmp);
+          emit(ctx, "  %s_push(_rest_%d, %s(_mv_%d, _ri_%d));\n", arr_type, tmp, get_fn, mv_id, tmp);
+          emit(ctx, " %s = _rest_%d; }\n", cn, tmp);
           free(vn); free(cn);
         }
       }

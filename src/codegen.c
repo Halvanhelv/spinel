@@ -88,7 +88,7 @@ bool ceq(codegen_ctx_t *ctx, pm_constant_id_t id, const char *s) {
 /* ------------------------------------------------------------------ */
 
 void emit(codegen_ctx_t *ctx, const char *fmt, ...) {
-  for (int i = 0; i < ctx->indent; i++) fprintf(ctx->out, "    ");
+  for (int i = 0; i < ctx->indent; i++) fprintf(ctx->out, "  ");
   va_list ap;
   va_start(ap, fmt);
   vfprintf(ctx->out, fmt, ap);
@@ -2947,16 +2947,16 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
       if (!has_gc_fields) continue;
 
       emit_raw(ctx, "static void sp_%s_gc_scan(void *obj) {\n", cls->name);
-      emit_raw(ctx, "    sp_%s *o = (sp_%s *)obj;\n", cls->name, cls->name);
+      emit_raw(ctx, "  sp_%s *o = (sp_%s *)obj;\n", cls->name, cls->name);
       for (int j = 0; j < cls->ivar_count; j++) {
         ivar_info_t *iv = &cls->ivars[j];
         /* Special: Scene.spheres array */
         if (strcmp(cls->name, "Scene") == 0 && strcmp(iv->name, "spheres") == 0) {
-          emit_raw(ctx, "    for (int _i = 0; _i < 3; _i++) sp_gc_mark(o->spheres[_i]);\n");
+          emit_raw(ctx, "  for (int _i = 0; _i < 3; _i++) sp_gc_mark(o->spheres[_i]);\n");
           continue;
         }
         if (is_gc_type(ctx, iv->type))
-          emit_raw(ctx, "    sp_gc_mark(o->%s);\n", iv->name);
+          emit_raw(ctx, "  sp_gc_mark(o->%s);\n", iv->name);
       }
       emit_raw(ctx, "}\n\n");
     }
@@ -2992,12 +2992,12 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
     emit_raw(ctx, "/* ---- sp_Proc runtime ---- */\n");
     emit_raw(ctx, "typedef struct { sp_block_fn fn; void *env; } sp_Proc;\n");
     emit_raw(ctx, "static sp_Proc *sp_Proc_new(sp_block_fn fn, void *env) {\n");
-    emit_raw(ctx, "    sp_Proc *p = (sp_Proc *)malloc(sizeof(sp_Proc));\n");
-    emit_raw(ctx, "    p->fn = fn; p->env = env;\n");
-    emit_raw(ctx, "    return p;\n");
+    emit_raw(ctx, "  sp_Proc *p = (sp_Proc *)malloc(sizeof(sp_Proc));\n");
+    emit_raw(ctx, "  p->fn = fn; p->env = env;\n");
+    emit_raw(ctx, "  return p;\n");
     emit_raw(ctx, "}\n");
     emit_raw(ctx, "static mrb_int sp_Proc_call(sp_Proc *p, mrb_int arg) {\n");
-    emit_raw(ctx, "    return p->fn(p->env, arg);\n");
+    emit_raw(ctx, "  return p->fn(p->env, arg);\n");
     emit_raw(ctx, "}\n\n");
   }
 
@@ -3246,8 +3246,8 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
 
     emit_raw(ctx, "static const char *sp_program_name = \"\";\n");
     emit_raw(ctx, "int main(int argc, char **argv) {\n");
-    emit_raw(ctx, "    (void)argc; (void)argv;\n");
-    emit_raw(ctx, "    sp_program_name = argv[0];\n");
+    emit_raw(ctx, "  (void)argc; (void)argv;\n");
+    emit_raw(ctx, "  sp_program_name = argv[0];\n");
 
     /* Variable declarations for top-level */
     for (int i = 0; i < ctx->var_count; i++) {
@@ -3256,43 +3256,43 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
       char *ct = vt_ctype(ctx, v->type, false);
       char *cn = make_cname(v->name, v->is_constant);
       if (v->type.kind == SPINEL_TYPE_POLY) {
-        emit_raw(ctx, "    sp_RbValue %s = sp_box_nil();\n", cn);
+        emit_raw(ctx, "  sp_RbValue %s = sp_box_nil();\n", cn);
       }
       else if (v->type.kind == SPINEL_TYPE_RB_ARRAY) {
-        emit_raw(ctx, "    sp_RbArray *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_RbArray *%s = NULL;\n", cn);
       }
       else if (v->type.kind == SPINEL_TYPE_RB_HASH) {
-        emit_raw(ctx, "    sp_RbHash *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_RbHash *%s = NULL;\n", cn);
       }
       else if (v->type.kind == SPINEL_TYPE_PROC) {
-        emit_raw(ctx, "    sp_Val *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_Val *%s = NULL;\n", cn);
       }
       else if (v->type.kind == SPINEL_TYPE_ARRAY) {
-        emit_raw(ctx, "    sp_IntArray *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_IntArray *%s = NULL;\n", cn);
       }
       else if (v->type.kind == SPINEL_TYPE_FLOAT_ARRAY) {
-        emit_raw(ctx, "    sp_FloatArray *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_FloatArray *%s = NULL;\n", cn);
       }
       else if (v->type.kind == SPINEL_TYPE_SP_STRING) {
-        emit_raw(ctx, "    sp_String *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_String *%s = NULL;\n", cn);
       }
       else if (v->type.kind == SPINEL_TYPE_VALUE || v->type.kind == SPINEL_TYPE_UNKNOWN) {
         /* In lambda mode, VALUE vars might hold sp_StrArray* or other pointers */
-        emit_raw(ctx, "    void *%s = NULL;\n", cn);
+        emit_raw(ctx, "  void *%s = NULL;\n", cn);
       }
       else {
-        emit_raw(ctx, "    %s %s%s;\n", ct, cn, default_init_for_type(v->type.kind));
+        emit_raw(ctx, "  %s %s%s;\n", ct, cn, default_init_for_type(v->type.kind));
       }
       free(ct); free(cn);
     }
     emit_raw(ctx, "\n");
 
     if (ctx->needs_regexp)
-      emit_raw(ctx, "    sp_regexp_init();\n\n");
+      emit_raw(ctx, "  sp_regexp_init();\n\n");
     /* Generate top-level code (this will collect lambda functions into lambda_buf) */
     codegen_stmts(ctx, (pm_node_t *)prog->statements);
 
-    emit_raw(ctx, "\n    return 0;\n");
+    emit_raw(ctx, "\n  return 0;\n");
     emit_raw(ctx, "}\n");
     fclose(main_buf);
 
@@ -3396,8 +3396,8 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
 
     emit_raw(ctx, "static const char *sp_program_name = \"\";\n");
     emit_raw(ctx, "int main(int argc, char **argv) {\n");
-    emit_raw(ctx, "    sp_program_name = argv[0];\n");
-    emit_raw(ctx, "    sp_argv.data = (const char **)(argv + 1); sp_argv.len = argc - 1;\n");
+    emit_raw(ctx, "  sp_program_name = argv[0];\n");
+    emit_raw(ctx, "  sp_argv.data = (const char **)(argv + 1); sp_argv.len = argc - 1;\n");
 
     /* Variable declarations for top-level (skip constants — they're global statics) */
     const char *vol = ctx->needs_exc ? "volatile " : "";
@@ -3408,78 +3408,78 @@ void codegen_program(codegen_ctx_t *ctx, pm_node_t *root) {
       char *cn = make_cname(v->name, v->is_constant);
       const char *init = default_init_for_type(v->type.kind);
       if (v->type.kind == SPINEL_TYPE_ARRAY) {
-        emit_raw(ctx, "    sp_IntArray *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_IntArray *%s = NULL;\n", cn);
         if (ctx->needs_gc)
-          emit_raw(ctx, "    SP_GC_ROOT(%s);\n", cn);
+          emit_raw(ctx, "  SP_GC_ROOT(%s);\n", cn);
         free(ct); free(cn);
         continue;
       }
       else if (v->type.kind == SPINEL_TYPE_FLOAT_ARRAY) {
-        emit_raw(ctx, "    sp_FloatArray *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_FloatArray *%s = NULL;\n", cn);
         if (ctx->needs_gc)
-          emit_raw(ctx, "    SP_GC_ROOT(%s);\n", cn);
+          emit_raw(ctx, "  SP_GC_ROOT(%s);\n", cn);
         free(ct); free(cn);
         continue;
       }
       else if (v->type.kind == SPINEL_TYPE_HASH) {
-        emit_raw(ctx, "    sp_StrIntHash *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_StrIntHash *%s = NULL;\n", cn);
         if (ctx->needs_gc)
-          emit_raw(ctx, "    SP_GC_ROOT(%s);\n", cn);
+          emit_raw(ctx, "  SP_GC_ROOT(%s);\n", cn);
         free(ct); free(cn);
         continue;
       }
       else if (v->type.kind == SPINEL_TYPE_POLY) {
-        emit_raw(ctx, "    sp_RbValue %s%s = sp_box_nil();\n", vol, cn);
+        emit_raw(ctx, "  sp_RbValue %s%s = sp_box_nil();\n", vol, cn);
         free(ct); free(cn);
         continue;
       }
       else if (v->type.kind == SPINEL_TYPE_RB_ARRAY) {
-        emit_raw(ctx, "    sp_RbArray *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_RbArray *%s = NULL;\n", cn);
         free(ct); free(cn);
         continue;
       }
       else if (v->type.kind == SPINEL_TYPE_RB_HASH) {
-        emit_raw(ctx, "    sp_RbHash *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_RbHash *%s = NULL;\n", cn);
         free(ct); free(cn);
         continue;
       }
       else if (v->type.kind == SPINEL_TYPE_PROC && !ctx->lambda_mode) {
-        emit_raw(ctx, "    sp_Proc *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_Proc *%s = NULL;\n", cn);
         free(ct); free(cn);
         continue;
       }
       else if (v->type.kind == SPINEL_TYPE_SP_STRING) {
-        emit_raw(ctx, "    sp_String *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_String *%s = NULL;\n", cn);
         free(ct); free(cn);
         continue;
       }
       else if (v->type.kind == SPINEL_TYPE_FILE) {
-        emit_raw(ctx, "    sp_File *%s = NULL;\n", cn);
+        emit_raw(ctx, "  sp_File *%s = NULL;\n", cn);
         free(ct); free(cn);
         continue;
       }
       else if (v->type.kind == SPINEL_TYPE_OBJECT) {
         class_info_t *vc = find_class(ctx, v->type.klass);
         if (vc && !vc->is_value_type) {
-          emit_raw(ctx, "    %s *%s = NULL;\n", ct, cn);
+          emit_raw(ctx, "  %s *%s = NULL;\n", ct, cn);
           if (ctx->needs_gc)
-            emit_raw(ctx, "    SP_GC_ROOT(%s);\n", cn);
+            emit_raw(ctx, "  SP_GC_ROOT(%s);\n", cn);
           free(ct); free(cn);
           continue;
         }
         init = "";
       }
-      emit_raw(ctx, "    %s%s %s%s;\n", vol, ct, cn, init);
+      emit_raw(ctx, "  %s%s %s%s;\n", vol, ct, cn, init);
       free(ct); free(cn);
     }
     emit_raw(ctx, "\n");
 
     if (ctx->needs_regexp)
-      emit_raw(ctx, "    sp_regexp_init();\n\n");
+      emit_raw(ctx, "  sp_regexp_init();\n\n");
     /* Top-level code */
     codegen_stmts(ctx, (pm_node_t *)prog->statements);
 
-    emit_raw(ctx, "\n    return 0;\n");
+    emit_raw(ctx, "\n  return 0;\n");
     emit_raw(ctx, "}\n");
 
     fclose(code_buf);
