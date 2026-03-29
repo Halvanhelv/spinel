@@ -791,6 +791,23 @@ class Compiler
       end
       return "void"
     end
+    if t == "CaseMatchNode"
+      # Infer from first in branch
+      conds = parse_id_list(@nd_conditions[nid])
+      if conds.length > 0
+        inid = conds[0]
+        if @nd_type[inid] == "InNode"
+          ibody = @nd_body[inid]
+          if ibody >= 0
+            is = get_stmts(ibody)
+            if is.length > 0
+              return infer_type(is[is.length - 1])
+            end
+          end
+        end
+      end
+      return "int"
+    end
     if t == "CaseNode"
       # Infer from first when branch
       conds = parse_id_list(@nd_conditions[nid])
@@ -1838,14 +1855,98 @@ class Compiler
   end
 
   def collect_constant(nid)
-    @const_names.push(@nd_name[nid])
+    # Check for Struct.new(:x, :y)
     expr_id = @nd_expression[nid]
+    if expr_id >= 0
+      if @nd_type[expr_id] == "CallNode"
+        if @nd_name[expr_id] == "new"
+          sr = @nd_receiver[expr_id]
+          if sr >= 0
+            if @nd_type[sr] == "ConstantReadNode"
+              if @nd_name[sr] == "Struct"
+                collect_struct_class(@nd_name[nid], expr_id)
+                return
+              end
+            end
+          end
+        end
+      end
+    end
+    @const_names.push(@nd_name[nid])
     ct = "int"
     if expr_id >= 0
       ct = infer_type(expr_id)
     end
     @const_types.push(ct)
     @const_expr_ids.push(expr_id)
+  end
+
+  def collect_struct_class(cname, call_nid)
+    # Generate a synthetic class from Struct.new(:field1, :field2, ...)
+    ci = @cls_names.length
+    @cls_names.push(cname)
+    @cls_parents.push("")
+    @cls_ivar_names.push("")
+    @cls_ivar_types.push("")
+    @cls_meth_names.push("")
+    @cls_meth_params.push("")
+    @cls_meth_ptypes.push("")
+    @cls_meth_returns.push("")
+    @cls_meth_bodies.push("")
+    @cls_meth_defaults.push("")
+    @cls_attr_readers.push("")
+    @cls_attr_writers.push("")
+    @cls_cmeth_names.push("")
+    @cls_cmeth_params.push("")
+    @cls_cmeth_ptypes.push("")
+    @cls_cmeth_returns.push("")
+    @cls_cmeth_bodies.push("")
+    @cls_meth_has_yield.push("")
+    @needs_gc = 1
+
+    # Get field names from symbol args
+    args_id = @nd_arguments[call_nid]
+    field_names = "".split(",")
+    if args_id >= 0
+      aids = get_args(args_id)
+      k = 0
+      while k < aids.length
+        fname = @nd_content[aids[k]]
+        field_names.push(fname)
+        # Add ivar
+        iname = "@" + fname
+        add_ivar(ci, iname, "int")
+        # Add reader/writer
+        append_attr_reader(ci, fname)
+        append_attr_writer(ci, fname)
+        k = k + 1
+      end
+    end
+
+    # Generate initialize method with params matching fields
+    init_params = join_sep(field_names, ",")
+    init_ptypes = ""
+    k = 0
+    while k < field_names.length
+      if k > 0
+        init_ptypes = init_ptypes + ","
+      end
+      init_ptypes = init_ptypes + "int"
+      k = k + 1
+    end
+    # For struct, we don't have a body node - the constructor is synthetic
+    # We'll handle this specially in emit_constructor
+    append_cls_meth(ci, "initialize", init_params, init_ptypes, "void", -1, "")
+    # Mark yield info
+    @cls_meth_has_yield[ci] = "0"
+
+    # Store struct info for synthetic constructor generation
+    # We'll use a special marker in the body id (-2 = synthetic struct)
+    bodies = @cls_meth_bodies[ci].split(";")
+    if bodies.length > 0
+      bodies[0] = "-2"
+      @cls_meth_bodies[ci] = join_sep(bodies, ";")
+    end
   end
 
   # ---- Yield detection ----
@@ -2409,6 +2510,22 @@ class Compiler
         return scan_return_type_list(stmts)
       end
     end
+    if @nd_type[nid] == "CaseMatchNode"
+      conds = parse_id_list(@nd_conditions[nid])
+      if conds.length > 0
+        inid = conds[0]
+        if @nd_type[inid] == "InNode"
+          ibody = @nd_body[inid]
+          if ibody >= 0
+            is = get_stmts(ibody)
+            rt = scan_return_type_list(is)
+            if rt != ""
+              return rt
+            end
+          end
+        end
+      end
+    end
     ""
   end
 
@@ -2878,6 +2995,8 @@ class Compiler
     emit_raw("static mrb_int sp_str_index(const char*s,const char*sub){const char*f=strstr(s,sub);if(!f)return -1;return(mrb_int)(f-s);}")
     emit_raw("static const char*sp_str_sub_range(const char*s,mrb_int start,mrb_int len){mrb_int sl=(mrb_int)strlen(s);if(start<0)start+=sl;if(start<0)start=0;if(start>=sl)return\"\";if(len<0)len=0;if(start+len>sl)len=sl-start;char*r=(char*)malloc(len+1);memcpy(r,s+start,len);r[len]=0;return r;}")
     emit_raw("static const char*sp_sprintf(const char*fmt,...){char*b=(char*)malloc(4096);va_list ap;va_start(ap,fmt);vsnprintf(b,4096,fmt,ap);va_end(ap);return b;}")
+    emit_raw("static const char*sp_str_reverse(const char*s){size_t l=strlen(s);char*r=(char*)malloc(l+1);for(size_t i=0;i<l;i++)r[i]=s[l-1-i];r[l]=0;return r;}")
+    emit_raw("static const char*sp_str_sub(const char*s,const char*pat,const char*rep){const char*f=strstr(s,pat);if(!f)return s;size_t pl=strlen(pat),rl=strlen(rep),sl=strlen(s);char*r=(char*)malloc(sl-pl+rl+1);size_t n=f-s;memcpy(r,s,n);memcpy(r+n,rep,rl);memcpy(r+n+rl,f+pl,sl-n-pl+1);return r;}")
     emit_raw("")
   end
 
@@ -3351,6 +3470,19 @@ class Compiler
       if init_idx < bodies.length
         bid = bodies[init_idx].to_i
       end
+      if bid == -2
+        # Synthetic struct constructor
+        all_params = @cls_meth_params[ci].split("|")
+        pnames2 = []
+        if init_idx < all_params.length
+          pnames2 = all_params[init_idx].split(",")
+        end
+        sk = 0
+        while sk < pnames2.length
+          emit_raw("  self->" + pnames2[sk] + " = lv_" + pnames2[sk] + ";")
+          sk = sk + 1
+        end
+      end
       if bid >= 0
         @current_class_idx = ci
         all_params = @cls_meth_params[ci].split("|")
@@ -3378,7 +3510,6 @@ class Compiler
         while k < stmts.length
           sid = stmts[k]
           if @nd_type[sid] == "SuperNode"
-            # Call parent initialize
             if @cls_parents[ci] != ""
               pi = find_class_idx(@cls_parents[ci])
               if pi >= 0
@@ -4401,6 +4532,11 @@ class Compiler
       return "(!" + compile_expr(recv) + ")"
     end
     if mname == "<<"
+      lt = infer_type(recv)
+      if lt == "string"
+        @needs_string_helpers = 1
+        return "sp_str_concat(" + compile_expr(recv) + ", " + compile_arg0(nid) + ")"
+      end
       return "(" + compile_expr(recv) + " << " + compile_arg0(nid) + ")"
     end
     if mname == ">>"
@@ -4486,6 +4622,10 @@ class Compiler
       end
       if mname == "[]"
         return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
+      end
+      if mname == "reverse"
+        @needs_string_helpers = 1
+        return "sp_str_reverse(" + rc + ")"
       end
       if mname == "freeze"
         return rc
@@ -5058,6 +5198,10 @@ class Compiler
       compile_case_stmt(nid)
       return
     end
+    if t == "CaseMatchNode"
+      compile_case_match_stmt(nid)
+      return
+    end
     if t == "ReturnNode"
       compile_return_stmt(nid)
       return
@@ -5287,6 +5431,95 @@ class Compiler
     result
   end
 
+  def compile_case_match_stmt(nid)
+    # case/in pattern matching
+    # For now, handle type patterns (Integer, String, Float, true, false, nil)
+    # and value patterns
+    pred = @nd_predicate[nid]
+    pred_type = infer_type(pred)
+    pred_val = compile_expr(pred)
+    tmp = new_temp
+    if pred_type == "string"
+      emit("  const char *" + tmp + " = " + pred_val + ";")
+    else
+      if pred_type == "float"
+        emit("  mrb_float " + tmp + " = " + pred_val + ";")
+      else
+        emit("  mrb_int " + tmp + " = " + pred_val + ";")
+      end
+    end
+    conds = parse_id_list(@nd_conditions[nid])
+    k = 0
+    while k < conds.length
+      inid = conds[k]
+      if @nd_type[inid] == "InNode"
+        kw = "if"
+        if k > 0
+          kw = "} else if"
+        end
+        pat = @nd_pattern[inid]
+        cond_str = compile_in_pattern(pat, tmp, pred_type)
+        emit("  " + kw + " (" + cond_str + ") {")
+        @indent = @indent + 1
+        compile_stmts_body(@nd_body[inid])
+        @indent = @indent - 1
+      end
+      k = k + 1
+    end
+    ec = @nd_else_clause[nid]
+    if ec >= 0
+      emit("  } else {")
+      @indent = @indent + 1
+      compile_stmts_body(@nd_body[ec])
+      @indent = @indent - 1
+    end
+    if conds.length > 0
+      emit("  }")
+    end
+  end
+
+  def compile_in_pattern(pat_id, tmp, pred_type)
+    if pat_id < 0
+      return "1"
+    end
+    pt = @nd_type[pat_id]
+    if pt == "ConstantReadNode"
+      cname = @nd_name[pat_id]
+      if cname == "Integer"
+        return "1"  # For monomorphic int, always true
+      end
+      if cname == "String"
+        return "1"  # For monomorphic string, always true
+      end
+      if cname == "Float"
+        return "1"  # For monomorphic float, always true
+      end
+      return "0"
+    end
+    if pt == "IntegerNode"
+      return tmp + " == " + @nd_value[pat_id].to_s
+    end
+    if pt == "StringNode"
+      return "strcmp(" + tmp + ", " + c_string_literal(@nd_content[pat_id]) + ") == 0"
+    end
+    if pt == "NilNode"
+      return tmp + " == 0"
+    end
+    if pt == "TrueNode"
+      return tmp + " != 0"
+    end
+    if pt == "FalseNode"
+      return tmp + " == 0"
+    end
+    if pt == "AlternationPatternNode"
+      # true | false pattern
+      left = compile_in_pattern(@nd_left[pat_id], tmp, pred_type)
+      right = compile_in_pattern(@nd_right[pat_id], tmp, pred_type)
+      return "(" + left + " || " + right + ")"
+    end
+    "1"
+  end
+
   def compile_return_stmt(nid)
     args_id = @nd_arguments[nid]
     if args_id >= 0
@@ -5344,6 +5577,27 @@ class Compiler
         if rt == "str_str_hash"
           emit("  sp_StrStrHash_delete(" + rc + ", " + compile_arg0(nid) + ");")
           return
+        end
+      end
+    end
+
+    # << on string (mutating append)
+    if mname == "<<"
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "string"
+          @needs_string_helpers = 1
+          rc = compile_expr(recv)
+          val = compile_arg0(nid)
+          # If receiver is a local variable, reassign
+          if @nd_type[recv] == "LocalVariableReadNode"
+            emit("  lv_" + @nd_name[recv] + " = sp_str_concat(lv_" + @nd_name[recv] + ", " + val + ");")
+            return
+          end
+          if @nd_type[recv] == "InstanceVariableReadNode"
+            emit("  self->" + sanitize_ivar(@nd_name[recv]) + " = sp_str_concat(self->" + sanitize_ivar(@nd_name[recv]) + ", " + val + ");")
+            return
+          end
         end
       end
     end
@@ -7002,6 +7256,10 @@ class Compiler
       end
       return
     end
+    if @nd_type[last] == "CaseMatchNode"
+      compile_case_match_return(last, return_type)
+      return
+    end
     # If last statement is a CallNode with a block, handle map/select as expressions
     if @nd_type[last] == "CallNode"
       if @nd_block[last] >= 0
@@ -7074,6 +7332,50 @@ class Compiler
       end
     end
     emit("  }")
+  end
+
+  def compile_case_match_return(nid, rt)
+    pred = @nd_predicate[nid]
+    pred_type = infer_type(pred)
+    pred_val = compile_expr(pred)
+    tmp = new_temp
+    if pred_type == "string"
+      emit("  const char *" + tmp + " = " + pred_val + ";")
+    else
+      if pred_type == "float"
+        emit("  mrb_float " + tmp + " = " + pred_val + ";")
+      else
+        emit("  mrb_int " + tmp + " = " + pred_val + ";")
+      end
+    end
+    conds = parse_id_list(@nd_conditions[nid])
+    k = 0
+    while k < conds.length
+      inid = conds[k]
+      if @nd_type[inid] == "InNode"
+        kw = "if"
+        if k > 0
+          kw = "} else if"
+        end
+        pat = @nd_pattern[inid]
+        cond_str = compile_in_pattern(pat, tmp, pred_type)
+        emit("  " + kw + " (" + cond_str + ") {")
+        @indent = @indent + 1
+        compile_body_return(@nd_body[inid], rt)
+        @indent = @indent - 1
+      end
+      k = k + 1
+    end
+    ec = @nd_else_clause[nid]
+    if ec >= 0
+      emit("  } else {")
+      @indent = @indent + 1
+      compile_body_return(@nd_body[ec], rt)
+      @indent = @indent - 1
+    end
+    if conds.length > 0
+      emit("  }")
+    end
   end
 
   def compile_case_return(nid, rt)
