@@ -782,6 +782,16 @@ class Compiler
       end
       return "int"
     end
+    if t == "ConstantPathNode"
+      if @nd_receiver[nid] >= 0
+        cpname = @nd_name[@nd_receiver[nid]] + "_" + @nd_name[nid]
+        ci = find_const_idx(cpname)
+        if ci >= 0
+          return @const_types[ci]
+        end
+      end
+      return "int"
+    end
     if t == "CallNode"
       return infer_call_type(nid)
     end
@@ -1105,7 +1115,14 @@ class Compiler
     if mname == "new"
       if recv >= 0
         if @nd_type[recv] == "ConstantReadNode"
-          return "obj_" + @nd_name[recv]
+          rn = @nd_name[recv]
+          if rn == "Array"
+            return "int_array"
+          end
+          if rn == "Hash"
+            return "str_int_hash"
+          end
+          return "obj_" + rn
         end
       end
     end
@@ -1219,6 +1236,46 @@ class Compiler
     "int"
   end
 
+  def is_operator_name(name)
+    if name == "+"
+      return 1
+    end
+    if name == "-"
+      return 1
+    end
+    if name == "*"
+      return 1
+    end
+    if name == "/"
+      return 1
+    end
+    if name == "%"
+      return 1
+    end
+    if name == "<"
+      return 1
+    end
+    if name == ">"
+      return 1
+    end
+    if name == "<="
+      return 1
+    end
+    if name == ">="
+      return 1
+    end
+    if name == "=="
+      return 1
+    end
+    if name == "!="
+      return 1
+    end
+    if name == "<=>"
+      return 1
+    end
+    0
+  end
+
   def is_obj_type(t)
     if t.length > 4
       if t[0] == "o"
@@ -1324,6 +1381,51 @@ class Compiler
   end
 
   def sanitize_name(name)
+    if name == "<=>"
+      return "_cmp"
+    end
+    if name == "<="
+      return "_le"
+    end
+    if name == ">="
+      return "_ge"
+    end
+    if name == "<<"
+      return "_lshift"
+    end
+    if name == ">>"
+      return "_rshift"
+    end
+    if name == "<"
+      return "_lt"
+    end
+    if name == ">"
+      return "_gt"
+    end
+    if name == "+"
+      return "_plus"
+    end
+    if name == "-"
+      return "_minus"
+    end
+    if name == "*"
+      return "_mul"
+    end
+    if name == "/"
+      return "_div"
+    end
+    if name == "=="
+      return "_eq_eq"
+    end
+    if name == "!="
+      return "_neq"
+    end
+    if name == "[]"
+      return "_aref"
+    end
+    if name == "[]="
+      return "_aset"
+    end
     result = ""
     i = 0
     while i < name.length
@@ -1373,7 +1475,7 @@ class Compiler
       i = i + 1
     end
 
-    # Pass 2: top-level methods and constants
+    # Pass 2: top-level methods, constants, and modules
     i = 0
     while i < stmts.length
       sid = stmts[i]
@@ -1382,6 +1484,9 @@ class Compiler
       end
       if @nd_type[sid] == "ConstantWriteNode"
         collect_constant(sid)
+      end
+      if @nd_type[sid] == "ModuleNode"
+        collect_module(sid)
       end
       i = i + 1
     end
@@ -1882,6 +1987,38 @@ class Compiler
     @meth_has_yield.push(body_has_yield(body_id))
   end
 
+  def collect_module(nid)
+    mname = ""
+    cp = @nd_constant_path[nid]
+    if cp >= 0
+      mname = @nd_name[cp]
+    end
+    body = @nd_body[nid]
+    if body < 0
+      return
+    end
+    body_stmts = get_stmts(body)
+    j = 0
+    while j < body_stmts.length
+      sid = body_stmts[j]
+      if @nd_type[sid] == "ConstantWriteNode"
+        cname = mname + "_" + @nd_name[sid]
+        expr_id = @nd_expression[sid]
+        ct = "int"
+        if expr_id >= 0
+          ct = infer_type(expr_id)
+        end
+        @const_names.push(cname)
+        @const_types.push(ct)
+        @const_expr_ids.push(expr_id)
+      end
+      if @nd_type[sid] == "DefNode"
+        collect_toplevel_method(sid)
+      end
+      j = j + 1
+    end
+  end
+
   def collect_constant(nid)
     # Check for Struct.new(:x, :y)
     expr_id = @nd_expression[nid]
@@ -2151,6 +2288,41 @@ class Compiler
           end
         end
       end
+      # Also infer method param types from method/operator calls on objects
+      if @nd_receiver[nid] >= 0
+        rt = infer_type(@nd_receiver[nid])
+        if is_obj_type(rt) == 1
+          cname = rt[4, rt.length - 4]
+          ci = find_class_idx(cname)
+          if ci >= 0
+            midx = cls_find_method_direct(ci, mname)
+            if midx >= 0
+              args_id = @nd_arguments[nid]
+              if args_id >= 0
+                arg_ids = get_args(args_id)
+                all_ptypes = @cls_meth_ptypes[ci].split("|")
+                if midx < all_ptypes.length
+                  ptypes = all_ptypes[midx].split(",")
+                  kk = 0
+                  while kk < arg_ids.length
+                    at = infer_type(arg_ids[kk])
+                    if kk < ptypes.length
+                      if ptypes[kk] == "int"
+                        if at != "int"
+                          ptypes[kk] = at
+                        end
+                      end
+                    end
+                    kk = kk + 1
+                  end
+                  all_ptypes[midx] = join_sep(ptypes, ",")
+                  @cls_meth_ptypes[ci] = join_sep(all_ptypes, "|")
+                end
+              end
+            end
+          end
+        end
+      end
     end
     # Recurse into children
     if @nd_body[nid] >= 0
@@ -2274,7 +2446,129 @@ class Compiler
     end
   end
 
+  def infer_cls_meth_param_from_body
+    # For each class method, if a param is used as param.attr_reader where attr_reader
+    # belongs to this class, infer param type as this class.
+    ci = 0
+    while ci < @cls_names.length
+      readers = @cls_attr_readers[ci].split(";")
+      if readers.length > 0
+        mnames = @cls_meth_names[ci].split(";")
+        all_params = @cls_meth_params[ci].split("|")
+        all_ptypes = @cls_meth_ptypes[ci].split("|")
+        bodies = @cls_meth_bodies[ci].split(";")
+        j = 0
+        while j < mnames.length
+          if mnames[j] != "initialize"
+            pnames = []
+            ptypes = []
+            if j < all_params.length
+              pnames = all_params[j].split(",")
+            end
+            if j < all_ptypes.length
+              ptypes = all_ptypes[j].split(",")
+            end
+            bid = -1
+            if j < bodies.length
+              bid = bodies[j].to_i
+            end
+            if bid >= 0
+              pk = 0
+              while pk < pnames.length
+                if pk < ptypes.length
+                  if ptypes[pk] == "int"
+                    if param_calls_reader(bid, pnames[pk], readers) == 1
+                      ptypes[pk] = "obj_" + @cls_names[ci]
+                      all_ptypes[j] = join_sep(ptypes, ",")
+                      @cls_meth_ptypes[ci] = join_sep(all_ptypes, "|")
+                    end
+                  end
+                end
+                pk = pk + 1
+              end
+            end
+          end
+          j = j + 1
+        end
+      end
+      ci = ci + 1
+    end
+  end
+
+  def param_calls_reader(nid, pname, readers)
+    if nid < 0
+      return 0
+    end
+    if @nd_type[nid] == "CallNode"
+      recv = @nd_receiver[nid]
+      if recv >= 0
+        if @nd_type[recv] == "LocalVariableReadNode"
+          if @nd_name[recv] == pname
+            mname = @nd_name[nid]
+            ri = 0
+            while ri < readers.length
+              if readers[ri] == mname
+                return 1
+              end
+              ri = ri + 1
+            end
+          end
+        end
+      end
+    end
+    # Recurse
+    if @nd_body[nid] >= 0
+      if param_calls_reader(@nd_body[nid], pname, readers) == 1
+        return 1
+      end
+    end
+    stmts = parse_id_list(@nd_stmts[nid])
+    k = 0
+    while k < stmts.length
+      if param_calls_reader(stmts[k], pname, readers) == 1
+        return 1
+      end
+      k = k + 1
+    end
+    if @nd_expression[nid] >= 0
+      if param_calls_reader(@nd_expression[nid], pname, readers) == 1
+        return 1
+      end
+    end
+    if @nd_left[nid] >= 0
+      if param_calls_reader(@nd_left[nid], pname, readers) == 1
+        return 1
+      end
+    end
+    if @nd_right[nid] >= 0
+      if param_calls_reader(@nd_right[nid], pname, readers) == 1
+        return 1
+      end
+    end
+    if @nd_arguments[nid] >= 0
+      if param_calls_reader(@nd_arguments[nid], pname, readers) == 1
+        return 1
+      end
+    end
+    args = parse_id_list(@nd_args[nid])
+    k = 0
+    while k < args.length
+      if param_calls_reader(args[k], pname, readers) == 1
+        return 1
+      end
+      k = k + 1
+    end
+    if @nd_receiver[nid] >= 0
+      if param_calls_reader(@nd_receiver[nid], pname, readers) == 1
+        return 1
+      end
+    end
+    0
+  end
+
   def infer_all_returns
+    # Pre-pass: infer class method param types from body usage
+    infer_cls_meth_param_from_body
     # Pre-pass: scan for .new calls to infer constructor param types
     infer_constructor_types
     # Update ivar types from constructor params
@@ -2656,6 +2950,13 @@ class Compiler
         if @nd_receiver[nid] >= 0
           if @nd_type[@nd_receiver[nid]] == "ConstantReadNode"
             @needs_gc = 1
+            rn = @nd_name[@nd_receiver[nid]]
+            if rn == "Array"
+              @needs_int_array = 1
+            end
+            if rn == "Hash"
+              @needs_str_int_hash = 1
+            end
           end
         end
       end
@@ -4058,6 +4359,27 @@ class Compiler
     if nid < 0
       return
     end
+    if @nd_type[nid] == "MultiWriteNode"
+      targets = parse_id_list(@nd_targets[nid])
+      k = 0
+      while k < targets.length
+        tid = targets[k]
+        if @nd_type[tid] == "LocalVariableTargetNode"
+          lname = @nd_name[tid]
+          if not_in(lname, names) == 1
+            if not_in(lname, params) == 1
+              names.push(lname)
+              types.push("int")
+            end
+          end
+        end
+        k = k + 1
+      end
+      if @nd_expression[nid] >= 0
+        scan_locals(@nd_expression[nid], names, types, params)
+      end
+      return
+    end
     if @nd_type[nid] == "LocalVariableWriteNode"
       lname = @nd_name[nid]
       if not_in(lname, names) == 1
@@ -4423,7 +4745,12 @@ class Compiler
     end
     if t == "ConstantPathNode"
       if @nd_receiver[nid] >= 0
-        return @nd_name[@nd_receiver[nid]] + "_" + @nd_name[nid]
+        cpname = @nd_name[@nd_receiver[nid]] + "_" + @nd_name[nid]
+        ci = find_const_idx(cpname)
+        if ci >= 0
+          return "cst_" + cpname
+        end
+        return cpname
       end
       return @nd_name[nid]
     end
@@ -4728,6 +5055,35 @@ class Compiler
       return "0"
     end
 
+    # Check if operator is on an object with custom method
+    if is_operator_name(mname) == 1
+      lt = infer_type(recv)
+      if is_obj_type(lt) == 1
+        cname = lt[4, lt.length - 4]
+        ci = find_class_idx(cname)
+        if ci >= 0
+          owner = find_method_owner(ci, mname)
+          if owner != ""
+            ca = compile_call_args(nid)
+            rc = compile_expr(recv)
+            if owner == cname
+              if ca != ""
+                return "sp_" + owner + "_" + sanitize_name(mname) + "(" + rc + ", " + ca + ")"
+              else
+                return "sp_" + owner + "_" + sanitize_name(mname) + "(" + rc + ")"
+              end
+            else
+              if ca != ""
+                return "sp_" + owner + "_" + sanitize_name(mname) + "((sp_" + owner + " *)" + rc + ", " + ca + ")"
+              else
+                return "sp_" + owner + "_" + sanitize_name(mname) + "((sp_" + owner + " *)" + rc + ")"
+              end
+            end
+          end
+        end
+      end
+    end
+
     # Operators
     if mname == "+"
       lt = infer_type(recv)
@@ -4806,6 +5162,16 @@ class Compiler
     if mname == "new"
       if @nd_type[recv] == "ConstantReadNode"
         cname = @nd_name[recv]
+        if cname == "Array"
+          @needs_int_array = 1
+          @needs_gc = 1
+          return "sp_IntArray_new()"
+        end
+        if cname == "Hash"
+          @needs_str_int_hash = 1
+          @needs_gc = 1
+          return "sp_StrIntHash_new()"
+        end
         ci = find_class_idx(cname)
         if ci >= 0
           return "sp_" + cname + "_new(" + compile_call_args(nid) + ")"
@@ -5444,6 +5810,10 @@ class Compiler
       return
     end
     t = @nd_type[nid]
+    if t == "MultiWriteNode"
+      compile_multi_write(nid)
+      return
+    end
     if t == "LocalVariableWriteNode"
       lname = @nd_name[nid]
       vt = find_var_type(lname)
@@ -5564,6 +5934,53 @@ class Compiler
       emit("  " + expr + ";")
     end
     return
+  end
+
+  def compile_multi_write(nid)
+    targets = parse_id_list(@nd_targets[nid])
+    val_id = @nd_expression[nid]
+    if val_id < 0
+      return
+    end
+    if @nd_type[val_id] == "ArrayNode"
+      # Direct array literal: a, b, c = [1, 2, 3] or a, b = b, a
+      elems = parse_id_list(@nd_elements[val_id])
+      # For swap safety, evaluate all RHS first into temps
+      tmps = "".split(",")
+      k = 0
+      while k < elems.length
+        tmp = new_temp
+        tmps.push(tmp)
+        emit("  mrb_int " + tmp + " = " + compile_expr(elems[k]) + ";")
+        k = k + 1
+      end
+      # Now assign
+      k = 0
+      while k < targets.length
+        if k < tmps.length
+          tid = targets[k]
+          if @nd_type[tid] == "LocalVariableTargetNode"
+            emit("  lv_" + @nd_name[tid] + " = " + tmps[k] + ";")
+          end
+        end
+        k = k + 1
+      end
+    else
+      # RHS is a function call returning int_array
+      @needs_int_array = 1
+      @needs_gc = 1
+      tmp = new_temp
+      emit("  sp_IntArray *" + tmp + " = " + compile_expr(val_id) + ";")
+      emit("  SP_GC_ROOT(" + tmp + ");")
+      k = 0
+      while k < targets.length
+        tid = targets[k]
+        if @nd_type[tid] == "LocalVariableTargetNode"
+          emit("  lv_" + @nd_name[tid] + " = sp_IntArray_get(" + tmp + ", " + k.to_s + ");")
+        end
+        k = k + 1
+      end
+    end
   end
 
   def compile_if_stmt(nid)
