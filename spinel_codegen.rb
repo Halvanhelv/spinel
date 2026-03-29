@@ -543,8 +543,8 @@ class Compiler
 
   def pop_scope
     while @scope_names.length > 0
-      last = @scope_names[@scope_names.length - 1]
-      if last == "---"
+      top_name = @scope_names[@scope_names.length - 1]
+      if top_name == "---"
         @scope_names.pop
         @scope_types.pop
         return
@@ -1360,6 +1360,7 @@ class Compiler
     ptypes_str = collect_ptypes_str(nid, ci)
     defaults_str = collect_defaults_str(nid)
     append_cls_meth(ci, mname, params_str, ptypes_str, "int", body_id, defaults_str)
+    return
   end
 
   def collect_params_str(nid)
@@ -2498,7 +2499,7 @@ class Compiler
     emit_forward_decls
     emit_class_methods
     emit_toplevel_methods
-    emit_main(stmts)
+    emit_main
   end
 
   def emit_header
@@ -3570,7 +3571,8 @@ class Compiler
   end
 
   # ---- Main emission ----
-  def emit_main(stmts)
+  def emit_main
+    stmts = get_body_stmts(@root_id)
     emit_raw("typedef struct{const char**data;mrb_int len;}sp_Argv;")
     emit_raw("static sp_Argv sp_argv;")
     emit_raw("")
@@ -4614,6 +4616,7 @@ class Compiler
     if expr != "0"
       emit("  " + expr + ";")
     end
+    return
   end
 
   def compile_if_stmt(nid)
@@ -5419,6 +5422,7 @@ class Compiler
     else
       compile_stmt(last)
     end
+    return
   end
 
   def compile_if_return(nid, rt)
