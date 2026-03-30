@@ -11120,6 +11120,7 @@ class Compiler
     emit("  return 0;")
   end
 
+
   def compile_call_stmt(nid)
     mname = @nd_name[nid]
     recv = @nd_receiver[nid]
@@ -11129,16 +11130,54 @@ class Compiler
       return
     end
 
+    # IO: puts, print, printf
+    if compile_io_call_stmt(nid, mname, recv) == 1
+      return
+    end
+
+    # File.open with block
+    if compile_file_open_call_stmt(nid, mname, recv) == 1
+      return
+    end
+
+    # Mutating operations: []=, delete, <<, replace, clear, push, reverse!, sort!
+    if compile_mutating_call_stmt(nid, mname, recv) == 1
+      return
+    end
+
+    # Block iteration: each, times, upto, downto, loop, reduce, inject, reject
+    if compile_block_iteration_stmt(nid, mname, recv) == 1
+      return
+    end
+
+    # Control flow: raise, system, trap, catch, throw, File ops, exit
+    if compile_control_call_stmt(nid, mname, recv) == 1
+      return
+    end
+
+    # attr_writer, map, select, yield method calls
+    if compile_writer_and_block_call_stmt(nid, mname, recv) == 1
+      return
+    end
+
+    # General
+    val = compile_expr(nid)
+    if val != "0"
+      emit("  " + val + ";")
+    end
+  end
+
+  def compile_io_call_stmt(nid, mname, recv)
     if mname == "puts"
       if recv < 0
         compile_puts(nid)
-        return
+        return 1
       end
       if recv >= 0
         if @nd_type[recv] == "GlobalVariableReadNode"
           if @nd_name[recv] == "$stderr"
             compile_stderr_puts(nid)
-            return
+            return 1
           end
         end
       end
@@ -11146,7 +11185,7 @@ class Compiler
     if mname == "print"
       if recv < 0
         compile_print(nid)
-        return
+        return 1
       end
     end
     if mname == "printf"
@@ -11169,12 +11208,15 @@ class Compiler
               k = k + 1
             end
             emit("  printf(" + fmt_expr + rest_args + ");")
-            return
+            return 1
           end
         end
       end
     end
+    0
+  end
 
+  def compile_file_open_call_stmt(nid, mname, recv)
     # File.open with block
     if mname == "open"
       if recv >= 0
@@ -11211,18 +11253,21 @@ class Compiler
               end
               emit("  fclose(" + ftmp + ");")
               emit("  } }")
-              return
+              return 1
             end
           end
         end
       end
     end
+    0
+  end
 
+  def compile_mutating_call_stmt(nid, mname, recv)
     # []=
     if mname == "[]="
       if recv >= 0
         compile_bracket_assign(nid)
-        return
+        return 1
       end
     end
 
@@ -11233,11 +11278,11 @@ class Compiler
         rc = compile_expr(recv)
         if rt == "str_int_hash"
           emit("  sp_StrIntHash_delete(" + rc + ", " + compile_arg0(nid) + ");")
-          return
+          return 1
         end
         if rt == "str_str_hash"
           emit("  sp_StrStrHash_delete(" + rc + ", " + compile_arg0(nid) + ");")
-          return
+          return 1
         end
       end
     end
@@ -11253,11 +11298,11 @@ class Compiler
           # If receiver is a local variable, reassign
           if @nd_type[recv] == "LocalVariableReadNode"
             emit("  lv_" + @nd_name[recv] + " = sp_str_concat(lv_" + @nd_name[recv] + ", " + val + ");")
-            return
+            return 1
           end
           if @nd_type[recv] == "InstanceVariableReadNode"
             emit("  self->" + sanitize_ivar(@nd_name[recv]) + " = sp_str_concat(self->" + sanitize_ivar(@nd_name[recv]) + ", " + val + ");")
-            return
+            return 1
           end
         end
       end
@@ -11271,11 +11316,11 @@ class Compiler
           val = compile_arg0(nid)
           if @nd_type[recv] == "LocalVariableReadNode"
             emit("  lv_" + @nd_name[recv] + " = " + val + ";")
-            return
+            return 1
           end
           if @nd_type[recv] == "InstanceVariableReadNode"
             emit("  self->" + sanitize_ivar(@nd_name[recv]) + " = " + val + ";")
-            return
+            return 1
           end
         end
       end
@@ -11288,11 +11333,11 @@ class Compiler
         if rt == "string"
           if @nd_type[recv] == "LocalVariableReadNode"
             emit("  lv_" + @nd_name[recv] + " = \"\";")
-            return
+            return 1
           end
           if @nd_type[recv] == "InstanceVariableReadNode"
             emit("  self->" + sanitize_ivar(@nd_name[recv]) + " = \"\";")
-            return
+            return 1
           end
         end
       end
@@ -11320,11 +11365,11 @@ class Compiler
             end
           end
           emit("  sp_IntArray_push(" + rc + ", " + av + ");")
-          return
+          return 1
         end
         if rt == "str_array"
           emit("  sp_StrArray_push(" + rc + ", " + compile_arg0(nid) + ");")
-          return
+          return 1
         end
       end
     end
@@ -11336,7 +11381,7 @@ class Compiler
         rc = compile_expr(recv)
         if rt == "int_array"
           emit("  sp_IntArray_reverse_bang(" + rc + ");")
-          return
+          return 1
         end
       end
     end
@@ -11346,11 +11391,14 @@ class Compiler
         rc = compile_expr(recv)
         if rt == "int_array"
           emit("  sp_IntArray_sort_bang(" + rc + ");")
-          return
+          return 1
         end
       end
     end
+    0
+  end
 
+  def compile_block_iteration_stmt(nid, mname, recv)
     # each with block
     if mname == "each"
       if @nd_block[nid] >= 0
@@ -11361,11 +11409,11 @@ class Compiler
             # Fall through to yield method handler below
           else
             compile_each_block(nid)
-            return
+            return 1
           end
         else
           compile_each_block(nid)
-          return
+          return 1
         end
       end
     end
@@ -11374,19 +11422,19 @@ class Compiler
     if mname == "times"
       if @nd_block[nid] >= 0
         compile_times_block(nid)
-        return
+        return 1
       end
     end
     if mname == "upto"
       if @nd_block[nid] >= 0
         compile_upto_block(nid)
-        return
+        return 1
       end
     end
     if mname == "downto"
       if @nd_block[nid] >= 0
         compile_downto_block(nid)
-        return
+        return 1
       end
     end
 
@@ -11394,13 +11442,13 @@ class Compiler
     if mname == "reduce"
       if @nd_block[nid] >= 0
         compile_reduce_block(nid)
-        return
+        return 1
       end
     end
     if mname == "inject"
       if @nd_block[nid] >= 0
         compile_reduce_block(nid)
-        return
+        return 1
       end
     end
 
@@ -11408,7 +11456,7 @@ class Compiler
     if mname == "reject"
       if @nd_block[nid] >= 0
         compile_reject_block(nid)
-        return
+        return 1
       end
     end
 
@@ -11423,10 +11471,13 @@ class Compiler
         @indent = @indent - 1
         emit("  }")
         @in_loop = old
-        return
+        return 1
       end
     end
+    0
+  end
 
+  def compile_control_call_stmt(nid, mname, recv)
     # raise
     if mname == "raise"
       if recv < 0
@@ -11456,7 +11507,7 @@ class Compiler
         else
           emit("  sp_raise(\"RuntimeError\");")
         end
-        return
+        return 1
       end
     end
 
@@ -11466,14 +11517,14 @@ class Compiler
         @needs_file_io = 1
         emit("  fflush(stdout);")
         emit("  sp_last_status = system(" + compile_arg0(nid) + ");")
-        return
+        return 1
       end
     end
 
     # trap (just ignore)
     if mname == "trap"
       if recv < 0
-        return
+        return 1
       end
     end
 
@@ -11482,14 +11533,14 @@ class Compiler
       if recv < 0
         if @nd_block[nid] >= 0
           compile_catch_stmt(nid)
-          return
+          return 1
         end
       end
     end
     if mname == "throw"
       if recv < 0
         compile_throw_stmt(nid)
-        return
+        return 1
       end
     end
 
@@ -11514,12 +11565,12 @@ class Compiler
               a1 = compile_expr(arg_ids[1])
             end
             emit("  sp_file_write(" + a0 + ", " + a1 + ");")
-            return
+            return 1
           end
           if mname == "delete"
             @needs_file_io = 1
             emit("  sp_file_delete(" + compile_arg0(nid) + ");")
-            return
+            return 1
           end
         end
       end
@@ -11530,10 +11581,13 @@ class Compiler
       if recv < 0
         val = compile_arg0(nid)
         emit("  exit(" + val + ");")
-        return
+        return 1
       end
     end
+    0
+  end
 
+  def compile_writer_and_block_call_stmt(nid, mname, recv)
     # attr_writer: obj.x = val
     if recv >= 0
       if mname.length > 1
@@ -11543,7 +11597,7 @@ class Compiler
           if is_obj_type(rt) == 1
             rc = compile_expr(recv)
             emit("  " + rc + "->" + bname + " = " + compile_arg0(nid) + ";")
-            return
+            return 1
           end
         end
       end
@@ -11553,7 +11607,7 @@ class Compiler
     if mname == "map"
       if @nd_block[nid] >= 0
         compile_map_block(nid)
-        return
+        return 1
       end
     end
 
@@ -11561,7 +11615,7 @@ class Compiler
     if mname == "select"
       if @nd_block[nid] >= 0
         compile_select_block(nid)
-        return
+        return 1
       end
     end
 
@@ -11572,7 +11626,7 @@ class Compiler
         if mi >= 0
           if @meth_has_yield[mi] == 1
             compile_yield_call_stmt(nid, mi)
-            return
+            return 1
           end
         end
       end
@@ -11587,7 +11641,7 @@ class Compiler
             if midx >= 0
               if cls_method_has_yield(cci, midx) == 1
                 compile_yield_method_call_stmt(nid, cci, midx, mname)
-                return
+                return 1
               end
             end
             # Check parent
@@ -11598,7 +11652,7 @@ class Compiler
                 if pidx >= 0
                   if cls_method_has_yield(pci, pidx) == 1
                     compile_yield_method_call_stmt(nid, pci, pidx, mname)
-                    return
+                    return 1
                   end
                 end
               end
@@ -11607,13 +11661,9 @@ class Compiler
         end
       end
     end
-
-    # General
-    val = compile_expr(nid)
-    if val != "0"
-      emit("  " + val + ";")
-    end
+    0
   end
+
 
   def compile_file_block_stmt(nid, ftmp, bp)
     if nid < 0
