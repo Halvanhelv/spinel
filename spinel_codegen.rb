@@ -920,6 +920,9 @@ class Compiler
         if lt == "float"
           return "float"
         end
+        if lt == "string"
+          return "string"
+        end
       end
       return "int"
     end
@@ -1006,6 +1009,53 @@ class Compiler
     end
     if mname == "sub"
       return "string"
+    end
+    if mname == "capitalize"
+      return "string"
+    end
+    if mname == "tr"
+      return "string"
+    end
+    if mname == "delete"
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "string"
+          return "string"
+        end
+      end
+    end
+    if mname == "squeeze"
+      return "string"
+    end
+    if mname == "slice"
+      return "string"
+    end
+    if mname == "ljust"
+      return "string"
+    end
+    if mname == "rjust"
+      return "string"
+    end
+    if mname == "center"
+      return "string"
+    end
+    if mname == "chars"
+      return "str_array"
+    end
+    if mname == "bytes"
+      return "int_array"
+    end
+    if mname == "hex"
+      return "int"
+    end
+    if mname == "oct"
+      return "int"
+    end
+    if mname == "count"
+      return "int"
+    end
+    if mname == "size"
+      return "int"
     end
     if mname == "index"
       return "int"
@@ -1312,6 +1362,9 @@ class Compiler
 
   # ---- C type mapping ----
   def c_type(t)
+    if t == "range"
+      return "sp_Range"
+    end
     if t == "int"
       return "mrb_int"
     end
@@ -1353,6 +1406,9 @@ class Compiler
   end
 
   def c_default_val(t)
+    if t == "range"
+      return "((sp_Range){0,0})"
+    end
     if t == "int"
       return "0"
     end
@@ -1587,6 +1643,7 @@ class Compiler
     end
     reqs = parse_id_list(@nd_requireds[params])
     opts = parse_id_list(@nd_optionals[params])
+    kws = parse_id_list(@nd_keywords[params])
     result = ""
     k = 0
     while k < reqs.length
@@ -1604,6 +1661,24 @@ class Compiler
       result = result + @nd_name[opts[k]]
       k = k + 1
     end
+    k = 0
+    while k < kws.length
+      if result != ""
+        result = result + ","
+      end
+      result = result + @nd_name[kws[k]]
+      k = k + 1
+    end
+    # Rest param (splat)
+    rest = @nd_rest[params]
+    if rest >= 0
+      if @nd_type[rest] == "RestParameterNode"
+        if result != ""
+          result = result + ","
+        end
+        result = result + @nd_name[rest]
+      end
+    end
     result
   end
 
@@ -1614,6 +1689,7 @@ class Compiler
     end
     reqs = parse_id_list(@nd_requireds[params])
     opts = parse_id_list(@nd_optionals[params])
+    kws = parse_id_list(@nd_keywords[params])
     result = ""
     k = 0
     while k < reqs.length
@@ -1637,6 +1713,30 @@ class Compiler
       end
       k = k + 1
     end
+    k = 0
+    while k < kws.length
+      if result != ""
+        result = result + ","
+      end
+      # Infer from default value
+      def_id = @nd_expression[kws[k]]
+      if def_id >= 0
+        result = result + infer_type(def_id)
+      else
+        result = result + "int"
+      end
+      k = k + 1
+    end
+    # Rest param (splat)
+    rest = @nd_rest[params]
+    if rest >= 0
+      if @nd_type[rest] == "RestParameterNode"
+        if result != ""
+          result = result + ","
+        end
+        result = result + "int_array"
+      end
+    end
     result
   end
 
@@ -1647,6 +1747,7 @@ class Compiler
     end
     reqs = parse_id_list(@nd_requireds[params])
     opts = parse_id_list(@nd_optionals[params])
+    kws = parse_id_list(@nd_keywords[params])
     result = ""
     k = 0
     while k < reqs.length
@@ -1668,6 +1769,29 @@ class Compiler
         result = result + "-1"
       end
       k = k + 1
+    end
+    k = 0
+    while k < kws.length
+      if result != ""
+        result = result + ","
+      end
+      def_id = @nd_expression[kws[k]]
+      if def_id >= 0
+        result = result + def_id.to_s
+      else
+        result = result + "-1"
+      end
+      k = k + 1
+    end
+    # Rest param
+    rest = @nd_rest[params]
+    if rest >= 0
+      if @nd_type[rest] == "RestParameterNode"
+        if result != ""
+          result = result + ","
+        end
+        result = result + "-1"
+      end
     end
     result
   end
@@ -1955,6 +2079,7 @@ class Compiler
     if params >= 0
       reqs = parse_id_list(@nd_requireds[params])
       opts = parse_id_list(@nd_optionals[params])
+      kws = parse_id_list(@nd_keywords[params])
       k = 0
       while k < reqs.length
         if ptypes_str != ""
@@ -1975,6 +2100,29 @@ class Compiler
           ptypes_str = ptypes_str + "int"
         end
         k = k + 1
+      end
+      k = 0
+      while k < kws.length
+        if ptypes_str != ""
+          ptypes_str = ptypes_str + ","
+        end
+        def_id = @nd_expression[kws[k]]
+        if def_id >= 0
+          ptypes_str = ptypes_str + infer_type(def_id)
+        else
+          ptypes_str = ptypes_str + "int"
+        end
+        k = k + 1
+      end
+      # Rest param (splat)
+      rest = @nd_rest[params]
+      if rest >= 0
+        if @nd_type[rest] == "RestParameterNode"
+          if ptypes_str != ""
+            ptypes_str = ptypes_str + ","
+          end
+          ptypes_str = ptypes_str + "int_array"
+        end
       end
     end
 
@@ -2233,17 +2381,51 @@ class Compiler
           if args_id >= 0
             arg_ids = get_args(args_id)
             ptypes = @meth_param_types[mi].split(",")
-            k = 0
-            while k < arg_ids.length
-              at = infer_type(arg_ids[k])
-              if k < ptypes.length
-                if ptypes[k] == "int"
-                  if at != "int"
-                    ptypes[k] = at
+            pnames = @meth_param_names[mi].split(",")
+            # Handle keyword hash args
+            ak = 0
+            while ak < arg_ids.length
+              if @nd_type[arg_ids[ak]] == "KeywordHashNode"
+                elems = parse_id_list(@nd_elements[arg_ids[ak]])
+                ek = 0
+                while ek < elems.length
+                  if @nd_type[elems[ek]] == "AssocNode"
+                    key_id = @nd_key[elems[ek]]
+                    if key_id >= 0
+                      kname = ""
+                      if @nd_type[key_id] == "SymbolNode"
+                        kname = @nd_content[key_id]
+                      end
+                      at = infer_type(@nd_expression[elems[ek]])
+                      # Find matching param name
+                      pi = 0
+                      while pi < pnames.length
+                        if pnames[pi] == kname
+                          if pi < ptypes.length
+                            if ptypes[pi] == "int"
+                              if at != "int"
+                                ptypes[pi] = at
+                              end
+                            end
+                          end
+                        end
+                        pi = pi + 1
+                      end
+                    end
+                  end
+                  ek = ek + 1
+                end
+              else
+                at = infer_type(arg_ids[ak])
+                if ak < ptypes.length
+                  if ptypes[ak] == "int"
+                    if at != "int"
+                      ptypes[ak] = at
+                    end
                   end
                 end
               end
-              k = k + 1
+              ak = ak + 1
             end
             @meth_param_types[mi] = join_sep(ptypes, ",")
           end
@@ -2853,7 +3035,34 @@ class Compiler
 
   # ---- Feature detection ----
   def detect_features
+    # Set up a temporary scope with main-level locals so feature detection
+    # can infer types of local variables correctly
+    push_scope
+    stmts = get_body_stmts(@root_id)
+    lnames = "".split(",")
+    ltypes = "".split(",")
+    empty_p = "".split(",")
+    i = 0
+    while i < stmts.length
+      sid = stmts[i]
+      if @nd_type[sid] != "DefNode"
+        if @nd_type[sid] != "ClassNode"
+          if @nd_type[sid] != "ConstantWriteNode"
+            if @nd_type[sid] != "ModuleNode"
+              scan_locals(sid, lnames, ltypes, empty_p)
+            end
+          end
+        end
+      end
+      i = i + 1
+    end
+    k = 0
+    while k < lnames.length
+      declare_var(lnames[k], ltypes[k])
+      k = k + 1
+    end
     scan_features(@root_id)
+    pop_scope
   end
 
   def scan_features(nid)
@@ -2945,6 +3154,39 @@ class Compiler
       end
       if mname == "index"
         @needs_string_helpers = 1
+      end
+      if mname == "sub"
+        @needs_string_helpers = 1
+      end
+      if mname == "[]"
+        if @nd_receiver[nid] >= 0
+          rt = infer_type(@nd_receiver[nid])
+          if rt == "string"
+            @needs_string_helpers = 1
+          end
+        end
+      end
+      if mname == "reverse"
+        if @nd_receiver[nid] >= 0
+          rt = infer_type(@nd_receiver[nid])
+          if rt == "string"
+            @needs_string_helpers = 1
+          end
+        end
+      end
+      if mname == "capitalize"
+        @needs_string_helpers = 1
+      end
+      if mname == "count"
+        @needs_string_helpers = 1
+      end
+      if mname == "*"
+        if @nd_receiver[nid] >= 0
+          rt = infer_type(@nd_receiver[nid])
+          if rt == "string"
+            @needs_string_helpers = 1
+          end
+        end
       end
       if mname == "new"
         if @nd_receiver[nid] >= 0
@@ -3335,10 +3577,14 @@ class Compiler
       emit_str_str_hash_runtime
     end
     if @needs_string_helpers == 1
-      # String helpers need StrArray (for split) and GC
+      # String helpers need StrArray (for split), IntArray (for bytes), and GC
       if @needs_gc == 0
         @needs_gc = 1
         emit_gc_runtime
+      end
+      if @needs_int_array == 0
+        @needs_int_array = 1
+        emit_int_array_runtime
       end
       if @needs_str_array == 0
         @needs_str_array = 1
@@ -3394,6 +3640,8 @@ class Compiler
     emit_raw("  return r;")
     emit_raw("}")
     emit_raw("")
+    emit_raw("typedef struct{mrb_int first;mrb_int last;}sp_Range;")
+    emit_raw("static sp_Range sp_range_new(mrb_int f,mrb_int l){sp_Range r;r.first=f;r.last=l;return r;}")
     emit_raw("static int sp_last_status = 0;")
     emit_raw("")
   end
@@ -3492,6 +3740,16 @@ class Compiler
     emit_raw("static const char*sp_sprintf(const char*fmt,...){char*b=(char*)malloc(4096);va_list ap;va_start(ap,fmt);vsnprintf(b,4096,fmt,ap);va_end(ap);return b;}")
     emit_raw("static const char*sp_str_reverse(const char*s){size_t l=strlen(s);char*r=(char*)malloc(l+1);for(size_t i=0;i<l;i++)r[i]=s[l-1-i];r[l]=0;return r;}")
     emit_raw("static const char*sp_str_sub(const char*s,const char*pat,const char*rep){const char*f=strstr(s,pat);if(!f)return s;size_t pl=strlen(pat),rl=strlen(rep),sl=strlen(s);char*r=(char*)malloc(sl-pl+rl+1);size_t n=f-s;memcpy(r,s,n);memcpy(r+n,rep,rl);memcpy(r+n+rl,f+pl,sl-n-pl+1);return r;}")
+    emit_raw("static const char*sp_str_capitalize(const char*s){size_t l=strlen(s);char*r=(char*)malloc(l+1);for(size_t i=0;i<=l;i++)r[i]=tolower((unsigned char)s[i]);if(l>0)r[0]=toupper((unsigned char)r[0]);return r;}")
+    emit_raw("static mrb_int sp_str_count(const char*s,const char*chars){mrb_int c=0;for(size_t i=0;s[i];i++){for(size_t j=0;chars[j];j++){if(s[i]==chars[j]){c++;break;}}}return c;}")
+    emit_raw("static const char*sp_str_repeat(const char*s,mrb_int n){if(n<=0)return\"\";size_t l=strlen(s);char*r=(char*)malloc(l*n+1);for(mrb_int i=0;i<n;i++)memcpy(r+l*i,s,l);r[l*n]=0;return r;}")
+    emit_raw("static sp_IntArray*sp_str_bytes(const char*s){sp_IntArray*a=sp_IntArray_new();for(size_t i=0;s[i];i++)sp_IntArray_push(a,(mrb_int)(unsigned char)s[i]);return a;}")
+    emit_raw("static const char*sp_str_tr(const char*s,const char*from,const char*to){size_t l=strlen(s),fl=strlen(from),tl=strlen(to);char*r=(char*)malloc(l+1);for(size_t i=0;i<l;i++){r[i]=s[i];for(size_t j=0;j<fl;j++){if(s[i]==from[j]){if(j<tl)r[i]=to[j];else if(tl>0)r[i]=to[tl-1];break;}}}r[l]=0;return r;}")
+    emit_raw("static const char*sp_str_delete(const char*s,const char*chars){size_t l=strlen(s);char*r=(char*)malloc(l+1);size_t n=0;for(size_t i=0;i<l;i++){int found=0;for(size_t j=0;chars[j];j++){if(s[i]==chars[j]){found=1;break;}}if(!found)r[n++]=s[i];}r[n]=0;return r;}")
+    emit_raw("static const char*sp_str_squeeze(const char*s){size_t l=strlen(s);char*r=(char*)malloc(l+1);size_t n=0;for(size_t i=0;i<l;i++){if(i==0||s[i]!=s[i-1])r[n++]=s[i];}r[n]=0;return r;}")
+    emit_raw("static const char*sp_str_ljust(const char*s,mrb_int w){size_t l=strlen(s);if((mrb_int)l>=w)return s;char*r=(char*)malloc(w+1);memcpy(r,s,l);memset(r+l,' ',w-l);r[w]=0;return r;}")
+    emit_raw("static const char*sp_str_rjust(const char*s,mrb_int w){size_t l=strlen(s);if((mrb_int)l>=w)return s;char*r=(char*)malloc(w+1);memset(r,' ',w-l);memcpy(r+w-l,s,l+1);return r;}")
+    emit_raw("static const char*sp_str_center(const char*s,mrb_int w){size_t l=strlen(s);if((mrb_int)l>=w)return s;mrb_int pad=w-l;mrb_int left=pad/2;mrb_int right=pad-left;char*r=(char*)malloc(w+1);memset(r,' ',left);memcpy(r+left,s,l);memset(r+left+l,' ',right);r[w]=0;return r;}")
     emit_raw("")
   end
 
@@ -3532,7 +3790,11 @@ class Compiler
     emit_raw("static jmp_buf sp_exc_stack[SP_EXC_STACK_MAX];")
     emit_raw("static const char *sp_exc_msg[SP_EXC_STACK_MAX];")
     emit_raw("static volatile int sp_exc_top = 0;")
-    emit_raw("static void sp_raise(const char *msg) { if (sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg; longjmp(sp_exc_stack[sp_exc_top-1], 1); } fprintf(stderr, \"unhandled exception: %s\\n\", msg); exit(1); }")
+    emit_raw("static const char *sp_exc_cls[SP_EXC_STACK_MAX];")
+    emit_raw("static volatile const char *sp_last_exc_cls = \"\";")
+    emit_raw("static void sp_raise_cls(const char *cls, const char *msg) { if (sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg; sp_exc_cls[sp_exc_top-1] = cls; sp_last_exc_cls = cls; longjmp(sp_exc_stack[sp_exc_top-1], 1); } fprintf(stderr, \"unhandled exception: %s\\n\", msg); exit(1); }")
+    emit_raw("static void sp_raise(const char *msg) { sp_raise_cls(\"RuntimeError\", msg); }")
+    emit_raw("static mrb_bool sp_exc_is_a(const char *cls, const char *target) { return strcmp(cls, target) == 0; }")
     emit_raw("")
     # catch/throw support
     emit_raw("#define SP_CATCH_STACK_MAX 64")
@@ -4786,7 +5048,7 @@ class Compiler
       return compile_hash_literal(nid)
     end
     if t == "RangeNode"
-      return compile_expr(@nd_left[nid])
+      return "sp_range_new(" + compile_expr(@nd_left[nid]) + ", " + compile_expr(@nd_right[nid]) + ")"
     end
     if t == "DefinedNode"
       return "\"expression\""
@@ -5101,6 +5363,14 @@ class Compiler
       return "(" + compile_expr(recv) + " - " + compile_arg0(nid) + ")"
     end
     if mname == "*"
+      lt = infer_type(recv)
+      if lt == "string"
+        @needs_string_helpers = 1
+        return "sp_str_repeat(" + compile_expr(recv) + ", " + compile_arg0(nid) + ")"
+      end
+      if lt == "float"
+        return "(" + compile_expr(recv) + " * " + compile_arg0(nid) + ")"
+      end
       return "(" + compile_expr(recv) + " * " + compile_arg0(nid) + ")"
     end
     if mname == "/"
@@ -5114,6 +5384,10 @@ class Compiler
       return "sp_imod(" + compile_expr(recv) + ", " + compile_arg0(nid) + ")"
     end
     if mname == "<"
+      lt = infer_type(recv)
+      if lt == "string"
+        return "(strcmp(" + compile_expr(recv) + ", " + compile_arg0(nid) + ") < 0)"
+      end
       return "(" + compile_expr(recv) + " < " + compile_arg0(nid) + ")"
     end
     if mname == ">"
@@ -5242,6 +5516,110 @@ class Compiler
       end
       if mname == "freeze"
         return rc
+      end
+      if mname == "sub"
+        args_id = @nd_arguments[nid]
+        arg1 = "\"\""
+        if args_id >= 0
+          a = get_args(args_id)
+          if a.length >= 2
+            arg1 = compile_expr(a[1])
+          end
+        end
+        return "sp_str_sub(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
+      end
+      if mname == "capitalize"
+        return "sp_str_capitalize(" + rc + ")"
+      end
+      if mname == "count"
+        return "sp_str_count(" + rc + ", " + compile_arg0(nid) + ")"
+      end
+      if mname == "*"
+        return "sp_str_repeat(" + rc + ", " + compile_arg0(nid) + ")"
+      end
+      if mname == "empty?"
+        return "(strlen(" + rc + ") == 0)"
+      end
+      if mname == "chars"
+        @needs_str_array = 1
+        @needs_gc = 1
+        return "sp_str_split(" + rc + ", \"\")"
+      end
+      if mname == "bytes"
+        @needs_int_array = 1
+        @needs_gc = 1
+        return "sp_str_bytes(" + rc + ")"
+      end
+      if mname == "hex"
+        return "((mrb_int)strtoll(" + rc + ", NULL, 16))"
+      end
+      if mname == "oct"
+        return "((mrb_int)strtoll(" + rc + ", NULL, 8))"
+      end
+      if mname == "tr"
+        args_id = @nd_arguments[nid]
+        arg1 = "\"\""
+        if args_id >= 0
+          a = get_args(args_id)
+          if a.length >= 2
+            arg1 = compile_expr(a[1])
+          end
+        end
+        return "sp_str_tr(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
+      end
+      if mname == "delete"
+        return "sp_str_delete(" + rc + ", " + compile_arg0(nid) + ")"
+      end
+      if mname == "squeeze"
+        return "sp_str_squeeze(" + rc + ")"
+      end
+      if mname == "size"
+        return "(mrb_int)strlen(" + rc + ")"
+      end
+      if mname == "slice"
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          a = get_args(args_id)
+          if a.length >= 2
+            return "sp_str_sub_range(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+          end
+        end
+        return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
+      end
+      if mname == "ljust"
+        return "sp_str_ljust(" + rc + ", " + compile_arg0(nid) + ")"
+      end
+      if mname == "rjust"
+        return "sp_str_rjust(" + rc + ", " + compile_arg0(nid) + ")"
+      end
+      if mname == "center"
+        return "sp_str_center(" + rc + ", " + compile_arg0(nid) + ")"
+      end
+    end
+
+    # Range methods
+    if recv_type == "range"
+      if mname == "first"
+        return rc + ".first"
+      end
+      if mname == "last"
+        return rc + ".last"
+      end
+      if mname == "include?"
+        tmp = new_temp
+        emit("  sp_Range " + tmp + " = " + rc + ";")
+        return "(" + compile_arg0(nid) + " >= " + tmp + ".first && " + compile_arg0(nid) + " <= " + tmp + ".last)"
+      end
+      if mname == "to_a"
+        @needs_int_array = 1
+        @needs_gc = 1
+        return "sp_IntArray_from_range(" + rc + ".first, " + rc + ".last)"
+      end
+      if mname == "length"
+        return "(" + rc + ".last - " + rc + ".first + 1)"
+      end
+      if mname == "size"
+        return "(" + rc + ".last - " + rc + ".first + 1)"
       end
     end
 
@@ -5620,33 +5998,103 @@ class Compiler
     pnames = @meth_param_names[mi].split(",")
     ptypes = @meth_param_types[mi].split(",")
     defaults = @meth_has_defaults[mi].split(",")
+
+    # Check if args contain a KeywordHashNode - extract kw pairs
+    kw_names = "".split(",")
+    kw_vals = "".split(",")
+    positional_ids = []
+    is_splat_call = 0
+    ak = 0
+    while ak < arg_ids.length
+      if @nd_type[arg_ids[ak]] == "KeywordHashNode"
+        elems = parse_id_list(@nd_elements[arg_ids[ak]])
+        ek = 0
+        while ek < elems.length
+          if @nd_type[elems[ek]] == "AssocNode"
+            key_id = @nd_key[elems[ek]]
+            if key_id >= 0
+              kname = ""
+              if @nd_type[key_id] == "SymbolNode"
+                kname = @nd_content[key_id]
+              end
+              kw_names.push(kname)
+              kw_vals.push(compile_expr(@nd_expression[elems[ek]]))
+            end
+          end
+          ek = ek + 1
+        end
+      else
+        positional_ids.push(arg_ids[ak])
+      end
+      ak = ak + 1
+    end
+
     result = ""
     k = 0
     while k < pnames.length
       if k > 0
         result = result + ", "
       end
-      if k < arg_ids.length
-        # Check if param is poly - box the value
+      # Check keyword args first
+      kw_found = 0
+      ki = 0
+      while ki < kw_names.length
+        if kw_names[ki] == pnames[k]
+          kw_found = 1
+          # Check if param is poly
+          if k < ptypes.length
+            if ptypes[k] == "poly"
+              # Need to box - kw_vals[ki] is already compiled
+              at_guess = "string"
+              result = result + "sp_box_str(" + kw_vals[ki] + ")"
+            else
+              result = result + kw_vals[ki]
+            end
+          else
+            result = result + kw_vals[ki]
+          end
+        end
+        ki = ki + 1
+      end
+      if kw_found == 0
         if k < ptypes.length
-          if ptypes[k] == "poly"
-            result = result + box_expr_to_poly(arg_ids[k])
+          if ptypes[k] == "int_array"
+            # This is a splat/rest param - collect remaining positional args into array
+            @needs_int_array = 1
+            @needs_gc = 1
+            tmp = new_temp
+            emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
+            pi = 0
+            while pi < positional_ids.length
+              emit("  sp_IntArray_push(" + tmp + ", " + compile_expr(positional_ids[pi]) + ");")
+              pi = pi + 1
+            end
+            result = result + tmp
             k = k + 1
             next
           end
         end
-        result = result + compile_expr(arg_ids[k])
-      else
-        # Use default value
-        if k < defaults.length
-          def_id = defaults[k].to_i
-          if def_id >= 0
-            result = result + compile_expr(def_id)
+        if k < positional_ids.length
+          if k < ptypes.length
+            if ptypes[k] == "poly"
+              result = result + box_expr_to_poly(positional_ids[k])
+              k = k + 1
+              next
+            end
+          end
+          result = result + compile_expr(positional_ids[k])
+        else
+          # Use default value
+          if k < defaults.length
+            def_id = defaults[k].to_i
+            if def_id >= 0
+              result = result + compile_expr(def_id)
+            else
+              result = result + "0"
+            end
           else
             result = result + "0"
           end
-        else
-          result = result + "0"
         end
       end
       k = k + 1
@@ -6484,8 +6932,31 @@ class Compiler
     if mname == "raise"
       if recv < 0
         @needs_setjmp = 1
-        msg = compile_arg0(nid)
-        emit("  sp_raise(" + msg + ");")
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          arg_ids = get_args(args_id)
+          if arg_ids.length >= 2
+            # raise ClassName, "message" - use the message with class
+            if @nd_type[arg_ids[0]] == "ConstantReadNode"
+              emit("  sp_raise_cls(\"" + @nd_name[arg_ids[0]] + "\", " + compile_expr(arg_ids[1]) + ");")
+            else
+              emit("  sp_raise(" + compile_expr(arg_ids[1]) + ");")
+            end
+          else
+            if arg_ids.length == 1
+              # raise "message" or raise ClassName
+              if @nd_type[arg_ids[0]] == "ConstantReadNode"
+                emit("  sp_raise(\"" + @nd_name[arg_ids[0]] + "\");")
+              else
+                emit("  sp_raise(" + compile_expr(arg_ids[0]) + ");")
+              end
+            else
+              emit("  sp_raise(\"RuntimeError\");")
+            end
+          end
+        else
+          emit("  sp_raise(\"RuntimeError\");")
+        end
         return
       end
     end
@@ -6849,6 +7320,16 @@ class Compiler
       @indent = @indent - 1
       emit("  }")
     end
+    if rt == "range"
+      tmp = new_temp
+      tmp2 = new_temp
+      emit("  sp_Range " + tmp2 + " = " + rc + ";")
+      emit("  for (lv_" + bp1 + " = " + tmp2 + ".first; lv_" + bp1 + " <= " + tmp2 + ".last; lv_" + bp1 + "++) {")
+      @indent = @indent + 1
+      compile_stmts_body(@nd_body[@nd_block[nid]])
+      @indent = @indent - 1
+      emit("  }")
+    end
     @in_loop = old
   end
 
@@ -7201,12 +7682,8 @@ class Compiler
         emit("  } else {")
         emit("    sp_exc_top--;")
         @indent = @indent + 1
-        ref = @nd_reference[rc]
-        if ref >= 0
-          rname = @nd_name[ref]
-          emit("  lv_" + rname + " = sp_exc_msg[sp_exc_top];")
-        end
-        compile_rescue_body(@nd_body[rc], has_retry)
+        # Check for multiple rescue clauses with exception types
+        compile_rescue_chain(rc, has_retry)
         @indent = @indent - 1
       end
       emit("  }")
@@ -7224,6 +7701,49 @@ class Compiler
       if ec >= 0
         compile_stmts_body(@nd_body[ec])
       end
+    end
+  end
+
+  def compile_rescue_chain(rc, has_retry)
+    # Check for exception type matching
+    exc_types = parse_id_list(@nd_exceptions[rc])
+    ref = @nd_reference[rc]
+    has_type_check = 0
+    if exc_types.length > 0
+      has_type_check = 1
+      # Build condition: sp_exc_is_a(sp_last_exc_cls, "ClassName")
+      cond = ""
+      k = 0
+      while k < exc_types.length
+        if k > 0
+          cond = cond + " || "
+        end
+        cond = cond + "sp_exc_is_a((const char*)sp_last_exc_cls, \"" + @nd_name[exc_types[k]] + "\")"
+        k = k + 1
+      end
+      emit("  if (" + cond + ") {")
+      @indent = @indent + 1
+    end
+    if ref >= 0
+      rname = @nd_name[ref]
+      emit("  lv_" + rname + " = sp_exc_msg[sp_exc_top];")
+    end
+    compile_rescue_body(@nd_body[rc], has_retry)
+    if has_type_check == 1
+      @indent = @indent - 1
+      # Check for subsequent rescue
+      sub = @nd_subsequent[rc]
+      if sub >= 0
+        emit("  } else {")
+        @indent = @indent + 1
+        compile_rescue_chain(sub, has_retry)
+        @indent = @indent - 1
+      end
+      emit("  }")
+    else
+      # No type check - bare rescue, catches all
+      sub = @nd_subsequent[rc]
+      # Ignore subsequent since bare rescue catches all
     end
   end
 
