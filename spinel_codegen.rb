@@ -1017,10 +1017,97 @@ class Compiler
     "str_int_hash"
   end
 
+
   def infer_call_type(nid)
     mname = @nd_name[nid]
     recv = @nd_receiver[nid]
 
+    # Operators
+    r = infer_operator_type(nid, mname, recv)
+    if r != ""
+      return r
+    end
+
+    # Comparison operators
+    r = infer_comparison_type(mname)
+    if r != ""
+      return r
+    end
+
+    # Method name-based type inference
+    r = infer_method_name_type(nid, mname, recv)
+    if r != ""
+      return r
+    end
+
+    # puts/print
+    if mname == "puts"
+      return "void"
+    end
+    if mname == "print"
+      return "void"
+    end
+
+    # Constructor .new
+    r = infer_constructor_type(nid, mname, recv)
+    if r != ""
+      return r
+    end
+
+    # Constant receiver (File, ENV, Dir) and StringIO
+    r = infer_constant_recv_type(nid, mname, recv)
+    if r != ""
+      return r
+    end
+
+    # Math functions, backtick, freeze, to_a
+    r = infer_math_and_misc_type(nid, mname, recv)
+    if r != ""
+      return r
+    end
+
+    # Method call on poly/int/obj receiver
+    r = infer_recv_method_type(nid, mname, recv)
+    if r != ""
+      return r
+    end
+
+    # Top-level method
+    mi = find_method_idx(mname)
+    if mi >= 0
+      return @meth_return_types[mi]
+    end
+
+    # Bare method call in class context
+    if @current_class_idx >= 0
+      mr = cls_method_return(@current_class_idx, mname)
+      return mr
+    end
+
+    # proc / Proc.new
+    if mname == "proc"
+      return "proc"
+    end
+    if mname == "new"
+      if recv >= 0
+        if @nd_type[recv] == "ConstantReadNode"
+          if @nd_name[recv] == "Proc"
+            return "proc"
+          end
+        end
+      end
+    end
+
+    # Open class method dispatch
+    r = infer_open_class_type(nid, mname, recv)
+    if r != ""
+      return r
+    end
+
+    "int"
+  end
+
+  def infer_operator_type(nid, mname, recv)
     if mname == "+"
       if recv >= 0
         lt = infer_type(recv)
@@ -1116,6 +1203,10 @@ class Compiler
     if mname == "%"
       return "int"
     end
+    ""
+  end
+
+  def infer_comparison_type(mname)
     if mname == "<"
       return "bool"
     end
@@ -1137,6 +1228,10 @@ class Compiler
     if mname == "!"
       return "bool"
     end
+    ""
+  end
+
+  def infer_method_name_type(nid, mname, recv)
     if mname == "length"
       return "int"
     end
@@ -1516,12 +1611,10 @@ class Compiler
       end
       return "int"
     end
-    if mname == "puts"
-      return "void"
-    end
-    if mname == "print"
-      return "void"
-    end
+    ""
+  end
+
+  def infer_constructor_type(nid, mname, recv)
     if mname == "new"
       if recv >= 0
         if @nd_type[recv] == "ConstantReadNode"
@@ -1553,6 +1646,10 @@ class Compiler
         end
       end
     end
+    ""
+  end
+
+  def infer_constant_recv_type(nid, mname, recv)
     # File operations
     if recv >= 0
       if @nd_type[recv] == "ConstantReadNode"
@@ -1601,6 +1698,10 @@ class Compiler
         end
       end
     end
+    ""
+  end
+
+  def infer_math_and_misc_type(nid, mname, recv)
     # backtick
     if mname == "`"
       return "string"
@@ -1641,7 +1742,10 @@ class Compiler
       end
       return "int_array"
     end
+    ""
+  end
 
+  def infer_recv_method_type(nid, mname, recv)
     # Method call on poly
     if recv >= 0
       rt = infer_type(recv)
@@ -1733,33 +1837,10 @@ class Compiler
         end
       end
     end
+    ""
+  end
 
-    # Top-level method
-    mi = find_method_idx(mname)
-    if mi >= 0
-      return @meth_return_types[mi]
-    end
-
-    # Bare method call in class context
-    if @current_class_idx >= 0
-      mr = cls_method_return(@current_class_idx, mname)
-      return mr
-    end
-
-    # proc / Proc.new
-    if mname == "proc"
-      return "proc"
-    end
-    if mname == "new"
-      if recv >= 0
-        if @nd_type[recv] == "ConstantReadNode"
-          if @nd_name[recv] == "Proc"
-            return "proc"
-          end
-        end
-      end
-    end
-
+  def infer_open_class_type(nid, mname, recv)
     # Check open class methods for receiver type
     if recv >= 0
       rt = infer_type(recv)
@@ -1781,9 +1862,9 @@ class Compiler
         end
       end
     end
-
-    "int"
+    ""
   end
+
 
   def is_class_or_ancestor(cname, target)
     if cname == target
