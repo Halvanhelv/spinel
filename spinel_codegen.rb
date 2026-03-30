@@ -3823,8 +3823,8 @@ class Compiler
       end
       # Also declare locals for better return type inference
       if @meth_body_ids[i] >= 0
-        lnames = []
-        ltypes = []
+        lnames = "".split(",")
+        ltypes = "".split(",")
         scan_locals(@meth_body_ids[i], lnames, ltypes, pnames)
         lk = 0
         while lk < lnames.length
@@ -4034,7 +4034,7 @@ class Compiler
       return "void"
     end
     # Check for explicit returns
-    rt = scan_return_type_list(stmts)
+    rt = scan_return_type_nid(body_id)
     if rt != ""
       return rt
     end
@@ -4042,7 +4042,8 @@ class Compiler
     infer_type(stmts[stmts.length - 1])
   end
 
-  def scan_return_type_list(stmts)
+  def scan_return_type_nid(nid)
+    stmts = get_stmts(nid)
     i = 0
     while i < stmts.length
       rt = scan_return_type(stmts[i])
@@ -4072,8 +4073,7 @@ class Compiler
       r1 = ""
       body = @nd_body[nid]
       if body >= 0
-        stmts = get_stmts(body)
-        r1 = scan_return_type_list(stmts)
+        r1 = scan_return_type_nid(body)
       end
       sub = @nd_subsequent[nid]
       if sub >= 0
@@ -4087,15 +4087,13 @@ class Compiler
     if @nd_type[nid] == "ElseNode"
       body = @nd_body[nid]
       if body >= 0
-        stmts = get_stmts(body)
-        return scan_return_type_list(stmts)
+        return scan_return_type_nid(body)
       end
     end
     if @nd_type[nid] == "WhileNode"
       body = @nd_body[nid]
       if body >= 0
-        stmts = get_stmts(body)
-        return scan_return_type_list(stmts)
+        return scan_return_type_nid(body)
       end
     end
     if @nd_type[nid] == "CaseMatchNode"
@@ -4105,8 +4103,7 @@ class Compiler
         if @nd_type[inid] == "InNode"
           ibody = @nd_body[inid]
           if ibody >= 0
-            is = get_stmts(ibody)
-            rt = scan_return_type_list(is)
+            rt = scan_return_type_nid(ibody)
             if rt != ""
               return rt
             end
