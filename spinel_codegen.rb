@@ -140,6 +140,10 @@ class Compiler
 
     # Open class tracking for built-in types
     @open_class_names = "".split(",")
+
+    # Module tracking: module_name -> body node id
+    @module_names = "".split(",")
+    @module_body_ids = []
   end
 
   def join_sep(arr, sep)
@@ -1728,6 +1732,16 @@ class Compiler
     end
     stmts = get_body_stmts(root)
 
+    # Pass 0: modules (must come before classes for include)
+    i = 0
+    while i < stmts.length
+      sid = stmts[i]
+      if @nd_type[sid] == "ModuleNode"
+        collect_module(sid)
+      end
+      i = i + 1
+    end
+
     # Pass 1: classes
     i = 0
     while i < stmts.length
@@ -1738,7 +1752,7 @@ class Compiler
       i = i + 1
     end
 
-    # Pass 2: top-level methods, constants, and modules
+    # Pass 2: top-level methods, constants (modules already collected in Pass 0)
     i = 0
     while i < stmts.length
       sid = stmts[i]
@@ -1747,9 +1761,6 @@ class Compiler
       end
       if @nd_type[sid] == "ConstantWriteNode"
         collect_constant(sid)
-      end
-      if @nd_type[sid] == "ModuleNode"
-        collect_module(sid)
       end
       i = i + 1
     end
@@ -1919,6 +1930,7 @@ class Compiler
       return
     end
     body_stmts = get_stmts(body)
+    # First pass: collect all class methods and attrs
     j = 0
     while j < body_stmts.length
       sid = body_stmts[j]
@@ -1926,13 +1938,67 @@ class Compiler
         collect_class_method(ci, sid)
       end
       if @nd_type[sid] == "CallNode"
-        collect_attr_call(ci, sid)
+        cn = @nd_name[sid]
+        if cn != "include"
+          if cn != "private"
+            collect_attr_call(ci, sid)
+          end
+        end
+      end
+      j = j + 1
+    end
+    # Second pass: handle includes (after all own methods are known)
+    j = 0
+    while j < body_stmts.length
+      sid = body_stmts[j]
+      if @nd_type[sid] == "CallNode"
+        if @nd_name[sid] == "include"
+          inc_args = @nd_arguments[sid]
+          if inc_args >= 0
+            inc_ids = get_args(inc_args)
+            ik = 0
+            while ik < inc_ids.length
+              if @nd_type[inc_ids[ik]] == "ConstantReadNode"
+                mod_name = @nd_name[inc_ids[ik]]
+                collect_module_methods_into_class(ci, mod_name)
+              end
+              ik = ik + 1
+            end
+          end
+        end
       end
       j = j + 1
     end
 
     # Collect ivars
     collect_ivars(ci)
+  end
+
+  def collect_module_methods_into_class(ci, mod_name)
+    # Find the module and add its methods to the class
+    mi = 0
+    while mi < @module_names.length
+      if @module_names[mi] == mod_name
+        mbody = @module_body_ids[mi]
+        if mbody >= 0
+          mstmts = get_stmts(mbody)
+          mk = 0
+          while mk < mstmts.length
+            sid = mstmts[mk]
+            if @nd_type[sid] == "DefNode"
+              mname = @nd_name[sid]
+              # Only add if class doesn't already have this method
+              existing = cls_find_method_direct(ci, mname)
+              if existing < 0
+                collect_class_method(ci, sid)
+              end
+            end
+            mk = mk + 1
+          end
+        end
+      end
+      mi = mi + 1
+    end
   end
 
   def collect_class_method(ci, nid)
@@ -2507,6 +2573,9 @@ class Compiler
       mname = @nd_name[cp]
     end
     body = @nd_body[nid]
+    # Store module info for include
+    @module_names.push(mname)
+    @module_body_ids.push(body)
     if body < 0
       return
     end
@@ -2525,9 +2594,11 @@ class Compiler
         @const_types.push(ct)
         @const_expr_ids.push(expr_id)
       end
-      if @nd_type[sid] == "DefNode"
-        collect_toplevel_method(sid)
-      end
+      # Don't collect module DefNodes as top-level methods -
+      # they will be included into classes via collect_module_methods_into_class
+      # if @nd_type[sid] == "DefNode"
+      #   collect_toplevel_method(sid)
+      # end
       j = j + 1
     end
   end
