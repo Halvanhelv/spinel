@@ -3986,6 +3986,7 @@ class Compiler
         @needs_string_helpers = 1
       end
       if mname == "<<"
+        @needs_string_helpers = 1
         if @nd_receiver[nid] >= 0
           rt = infer_type(@nd_receiver[nid])
           if rt == "string"
@@ -4828,6 +4829,7 @@ class Compiler
     end
     emit_class_structs
     emit_forward_decls
+    emit_global_constants
     emit_class_methods
     emit_toplevel_methods
     emit_main
@@ -4867,7 +4869,7 @@ class Compiler
     emit_raw("}")
     emit_raw("")
     emit_raw("static mrb_int sp_gcd(mrb_int a,mrb_int b){if(a<0)a=-a;if(b<0)b=-b;while(b){mrb_int t=b;b=a%b;a=t;}return a;}")
-    emit_raw("static mrb_int sp_clamp(mrb_int v,mrb_int lo,mrb_int hi){return v<lo?lo:v>hi?hi:v;}")
+    emit_raw("static mrb_int sp_int_clamp(mrb_int v,mrb_int lo,mrb_int hi){return v<lo?lo:v>hi?hi:v;}")
     emit_raw("static const char*sp_int_chr(mrb_int n){char*s=(char*)malloc(2);s[0]=(char)n;s[1]=0;return s;}")
     emit_raw("typedef struct{mrb_int first;mrb_int last;}sp_Range;")
     emit_raw("static sp_Range sp_range_new(mrb_int f,mrb_int l){sp_Range r;r.first=f;r.last=l;return r;}")
@@ -5109,6 +5111,19 @@ class Compiler
   end
 
   # ---- Struct emission ----
+  def emit_global_constants
+    # Emit file-scope constant declarations (initialized in main)
+    i = 0
+    while i < @const_names.length
+      ctp = c_type(@const_types[i])
+      emit_raw("static " + ctp + " cst_" + @const_names[i] + " = " + c_default_val(@const_types[i]) + ";")
+      i = i + 1
+    end
+    if @const_names.length > 0
+      emit_raw("")
+    end
+  end
+
   def emit_class_structs
     # Forward declare typedefs
     i = 0
@@ -5279,8 +5294,8 @@ class Compiler
   end
 
   def yield_params_suffix(mi)
-    pnames = @meth_param_names[mi].split(",")
-    if pnames.length == 0
+    pd = method_params_decl(mi)
+    if pd == ""
       return "void (*_block)(mrb_int, void*), void *_benv"
     end
     return ", void (*_block)(mrb_int, void*), void *_benv"
@@ -5346,6 +5361,9 @@ class Compiler
       return result
     end
     if pnames.length == 0
+      if @meth_has_yield[mi] == 1
+        return ""
+      end
       return "void"
     end
     result = ""
@@ -6387,12 +6405,11 @@ class Compiler
       j = j + 1
     end
 
-    # Constants
+    # Constants (initialize global declarations)
     i = 0
     while i < @const_names.length
-      ctp = c_type(@const_types[i])
       val = compile_expr(@const_expr_ids[i])
-      emit("  " + ctp + " cst_" + @const_names[i] + " = " + val + ";")
+      emit("  cst_" + @const_names[i] + " = " + val + ";")
       i = i + 1
     end
 
@@ -7676,7 +7693,7 @@ class Compiler
         if args_id >= 0
           a = get_args(args_id)
           if a.length >= 2
-            return "sp_clamp(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+            return "sp_int_clamp(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
           end
         end
       end
