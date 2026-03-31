@@ -1465,6 +1465,15 @@ class Compiler
       end
       return "int"
     end
+    if mname == "shift"
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "str_array"
+          return "string"
+        end
+      end
+      return "int"
+    end
     if mname == "sort"
       if recv >= 0
         return infer_type(recv)
@@ -5929,8 +5938,8 @@ class Compiler
   end
 
   def emit_gc_runtime
-    emit_raw("typedef struct sp_gc_hdr { struct sp_gc_hdr *next; void (*finalize)(void *); void (*scan)(void *); unsigned marked : 1; } sp_gc_hdr;")
-    emit_raw("static sp_gc_hdr *sp_gc_heap = NULL; static size_t sp_gc_bytes = 0; static size_t sp_gc_threshold = (size_t)-1;")
+    emit_raw("typedef struct sp_gc_hdr { struct sp_gc_hdr *next; void (*finalize)(void *); void (*scan)(void *); size_t size; unsigned marked : 1; } sp_gc_hdr;")
+    emit_raw("static sp_gc_hdr *sp_gc_heap = NULL; static size_t sp_gc_bytes = 0; static size_t sp_gc_threshold = 256*1024;")
     emit_raw("#define SP_GC_STACK_MAX 65536")
     emit_raw("static void **sp_gc_roots[SP_GC_STACK_MAX]; static int sp_gc_nroots = 0;")
     emit_raw("#define SP_GC_SAVE() int __attribute__((cleanup(sp_gc_cleanup))) _gc_saved = sp_gc_nroots")
@@ -5940,23 +5949,24 @@ class Compiler
     emit_raw("static void sp_gc_mark(void*obj){if(!obj)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(h->marked)return;h->marked=1;if(h->scan)h->scan(obj);}")
     emit_raw("static void sp_gc_cleanup(int*p){sp_gc_nroots=*p;}")
     emit_raw("static void sp_gc_mark_stack(void){volatile char dummy;char*sp=(char*)&dummy;char*lo=sp,*hi=sp_gc_stack_bottom;if(lo>hi){char*t=lo;lo=hi;hi=t;}for(sp_gc_hdr*h=sp_gc_heap;h;h=h->next){void*obj=(char*)h+sizeof(sp_gc_hdr);void**p=(void**)lo;while((char*)p<hi){if(*p==obj){sp_gc_mark(obj);break;}p++;}}}")
-    emit_raw("static void sp_gc_collect(void){for(int i=0;i<sp_gc_nroots;i++){void*obj=*sp_gc_roots[i];if(obj)sp_gc_mark(obj);}sp_gc_mark_stack();sp_gc_hdr**pp=&sp_gc_heap;sp_gc_bytes=0;while(*pp){sp_gc_hdr*h=*pp;if(!h->marked){*pp=h->next;if(h->finalize)h->finalize((char*)h+sizeof(sp_gc_hdr));free(h);}else{h->marked=0;sp_gc_bytes+=sizeof(sp_gc_hdr);pp=&h->next;}}}")
-    emit_raw("static void*sp_gc_alloc(size_t sz,void(*fin)(void*),void(*scn)(void*)){if(sp_gc_bytes>sp_gc_threshold){sp_gc_collect();if(sp_gc_bytes>sp_gc_threshold/2)sp_gc_threshold*=2;}sp_gc_hdr*h=(sp_gc_hdr*)calloc(1,sizeof(sp_gc_hdr)+sz);h->finalize=fin;h->scan=scn;h->next=sp_gc_heap;sp_gc_heap=h;sp_gc_bytes+=sizeof(sp_gc_hdr)+sz;return(char*)h+sizeof(sp_gc_hdr);}")
+    emit_raw("static void sp_gc_collect(void){for(int i=0;i<sp_gc_nroots;i++){void*obj=*sp_gc_roots[i];if(obj)sp_gc_mark(obj);}sp_gc_mark_stack();sp_gc_hdr**pp=&sp_gc_heap;sp_gc_bytes=0;while(*pp){sp_gc_hdr*h=*pp;if(!h->marked){*pp=h->next;if(h->finalize)h->finalize((char*)h+sizeof(sp_gc_hdr));free(h);}else{h->marked=0;sp_gc_bytes+=h->size;pp=&h->next;}}}")
+    emit_raw("static void*sp_gc_alloc(size_t sz,void(*fin)(void*),void(*scn)(void*)){if(sp_gc_bytes>sp_gc_threshold){sp_gc_collect();if(sp_gc_bytes>sp_gc_threshold/2)sp_gc_threshold*=2;}sp_gc_hdr*h=(sp_gc_hdr*)calloc(1,sizeof(sp_gc_hdr)+sz);h->finalize=fin;h->scan=scn;h->size=sizeof(sp_gc_hdr)+sz;h->next=sp_gc_heap;sp_gc_heap=h;sp_gc_bytes+=sizeof(sp_gc_hdr)+sz;return(char*)h+sizeof(sp_gc_hdr);}")
     emit_raw("")
   end
 
   def emit_int_array_runtime
     emit_raw("typedef struct{mrb_int*data;mrb_int start;mrb_int len;mrb_int cap;}sp_IntArray;")
     emit_raw("static void sp_IntArray_fin(void*p){free(((sp_IntArray*)p)->data);}")
-    emit_raw("static sp_IntArray*sp_IntArray_new(void){sp_IntArray*a=(sp_IntArray*)sp_gc_alloc(sizeof(sp_IntArray),sp_IntArray_fin,NULL);a->cap=16;a->data=(mrb_int*)malloc(sizeof(mrb_int)*a->cap);a->start=0;a->len=0;return a;}")
-    emit_raw("static sp_IntArray*sp_IntArray_from_range(mrb_int s,mrb_int e){sp_IntArray*a=sp_IntArray_new();mrb_int n=e-s+1;if(n<0)n=0;if(n>a->cap){a->cap=n;a->data=(mrb_int*)realloc(a->data,sizeof(mrb_int)*a->cap);}for(mrb_int i=0;i<n;i++)a->data[i]=s+i;a->len=n;return a;}")
-    emit_raw("static sp_IntArray*sp_IntArray_dup(sp_IntArray*a){sp_IntArray*b=sp_IntArray_new();if(a->len>b->cap){b->cap=a->len;b->data=(mrb_int*)realloc(b->data,sizeof(mrb_int)*b->cap);}memcpy(b->data,a->data+a->start,sizeof(mrb_int)*a->len);b->len=a->len;return b;}")
-    emit_raw("static void sp_IntArray_push(sp_IntArray*a,mrb_int v){mrb_int e=a->start+a->len;if(e>=a->cap){if(a->start>0){memmove(a->data,a->data+a->start,sizeof(mrb_int)*a->len);a->start=0;e=a->len;}if(e>=a->cap){a->cap=a->cap*2+1;a->data=(mrb_int*)realloc(a->data,sizeof(mrb_int)*a->cap);}}a->data[e]=v;a->len++;}")
-    emit_raw("static mrb_int sp_IntArray_pop(sp_IntArray*a){return a->data[a->start+--a->len];}")
-    emit_raw("static mrb_int sp_IntArray_length(sp_IntArray*a){return a->len;}")
-    emit_raw("static mrb_bool sp_IntArray_empty(sp_IntArray*a){return a->len==0;}")
-    emit_raw("static mrb_int sp_IntArray_get(sp_IntArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[a->start+i];}")
-    emit_raw("static void sp_IntArray_set(sp_IntArray*a,mrb_int i,mrb_int v){if(i<0)i+=a->len;if(i>=0&&i<a->len){a->data[a->start+i]=v;return;}while(a->start+i>=a->cap){a->cap=a->cap*2+1;a->data=(mrb_int*)realloc(a->data,sizeof(mrb_int)*a->cap);}while(i>=a->len){a->data[a->start+a->len]=0;a->len++;}a->data[a->start+i]=v;}")
+    emit_raw("static sp_IntArray*sp_IntArray_new(void){sp_IntArray*a=(sp_IntArray*)sp_gc_alloc(sizeof(sp_IntArray),sp_IntArray_fin,NULL);a->cap=16;a->data=(mrb_int*)malloc(sizeof(mrb_int)*a->cap);a->start=0;a->len=0;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(mrb_int)*a->cap;sp_gc_bytes+=sizeof(mrb_int)*a->cap;}return a;}")
+    emit_raw("static sp_IntArray*sp_IntArray_from_range(mrb_int s,mrb_int e){sp_IntArray*a=sp_IntArray_new();mrb_int n=e-s+1;if(n<0)n=0;if(n>a->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes-=sizeof(mrb_int)*a->cap;h->size-=sizeof(mrb_int)*a->cap;a->cap=n;a->data=(mrb_int*)realloc(a->data,sizeof(mrb_int)*a->cap);h->size+=sizeof(mrb_int)*a->cap;sp_gc_bytes+=sizeof(mrb_int)*a->cap;}for(mrb_int i=0;i<n;i++)a->data[i]=s+i;a->len=n;return a;}")
+    emit_raw("static sp_IntArray*sp_IntArray_dup(sp_IntArray*a){sp_IntArray*b=sp_IntArray_new();if(a->len>b->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)b-sizeof(sp_gc_hdr));sp_gc_bytes-=sizeof(mrb_int)*b->cap;h->size-=sizeof(mrb_int)*b->cap;b->cap=a->len;b->data=(mrb_int*)realloc(b->data,sizeof(mrb_int)*b->cap);h->size+=sizeof(mrb_int)*b->cap;sp_gc_bytes+=sizeof(mrb_int)*b->cap;}memcpy(b->data,a->data+a->start,sizeof(mrb_int)*a->len);b->len=a->len;return b;}")
+    emit_raw("static inline void sp_IntArray_push(sp_IntArray*a,mrb_int v){mrb_int e=a->start+a->len;if(e>=a->cap){if(a->start>0){memmove(a->data,a->data+a->start,sizeof(mrb_int)*a->len);a->start=0;e=a->len;}if(e>=a->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes-=sizeof(mrb_int)*a->cap;h->size-=sizeof(mrb_int)*a->cap;a->cap=a->cap*2+1;a->data=(mrb_int*)realloc(a->data,sizeof(mrb_int)*a->cap);h->size+=sizeof(mrb_int)*a->cap;sp_gc_bytes+=sizeof(mrb_int)*a->cap;}}a->data[e]=v;a->len++;}")
+    emit_raw("static inline mrb_int sp_IntArray_pop(sp_IntArray*a){return a->data[a->start+--a->len];}")
+    emit_raw("static inline mrb_int sp_IntArray_shift(sp_IntArray*a){mrb_int v=a->data[a->start];a->start++;a->len--;return v;}")
+    emit_raw("static inline mrb_int sp_IntArray_length(sp_IntArray*a){return a->len;}")
+    emit_raw("static inline mrb_bool sp_IntArray_empty(sp_IntArray*a){return a->len==0;}")
+    emit_raw("static inline mrb_int sp_IntArray_get(sp_IntArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[a->start+i];}")
+    emit_raw("static inline void sp_IntArray_set(sp_IntArray*a,mrb_int i,mrb_int v){if(i<0)i+=a->len;if(i>=0&&i<a->len){a->data[a->start+i]=v;return;}{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));while(a->start+i>=a->cap){sp_gc_bytes-=sizeof(mrb_int)*a->cap;h->size-=sizeof(mrb_int)*a->cap;a->cap=a->cap*2+1;a->data=(mrb_int*)realloc(a->data,sizeof(mrb_int)*a->cap);h->size+=sizeof(mrb_int)*a->cap;sp_gc_bytes+=sizeof(mrb_int)*a->cap;}}while(i>=a->len){a->data[a->start+a->len]=0;a->len++;}a->data[a->start+i]=v;}")
     emit_raw("static void sp_IntArray_reverse_bang(sp_IntArray*a){for(mrb_int i=0,j=a->len-1;i<j;i++,j--){mrb_int t=a->data[a->start+i];a->data[a->start+i]=a->data[a->start+j];a->data[a->start+j]=t;}}")
     emit_raw("static int _sp_int_cmp(const void*a,const void*b){mrb_int va=*(const mrb_int*)a,vb=*(const mrb_int*)b;return(va>vb)-(va<vb);}")
     emit_raw("static sp_IntArray*sp_IntArray_sort(sp_IntArray*a){sp_IntArray*b=sp_IntArray_dup(a);qsort(b->data+b->start,b->len,sizeof(mrb_int),_sp_int_cmp);return b;}")
@@ -5966,8 +5976,9 @@ class Compiler
     emit_raw("static mrb_int sp_IntArray_sum(sp_IntArray*a){mrb_int s=0;for(mrb_int i=0;i<a->len;i++)s+=a->data[a->start+i];return s;}")
     emit_raw("static mrb_bool sp_IntArray_include(sp_IntArray*a,mrb_int v){for(mrb_int i=0;i<a->len;i++)if(a->data[a->start+i]==v)return TRUE;return FALSE;}")
     emit_raw("static sp_IntArray*sp_IntArray_uniq(sp_IntArray*a){sp_IntArray*b=sp_IntArray_new();for(mrb_int i=0;i<a->len;i++){int found=0;for(mrb_int j=0;j<b->len;j++){if(b->data[b->start+j]==a->data[a->start+i]){found=1;break;}}if(!found)sp_IntArray_push(b,a->data[a->start+i]);}return b;}")
-    emit_raw("static void sp_IntArray_unshift(sp_IntArray*a,mrb_int v){if(a->start>0){a->start--;a->data[a->start]=v;a->len++;}else{mrb_int e=a->len+1;if(e>a->cap){a->cap=a->cap*2+1;a->data=(mrb_int*)realloc(a->data,sizeof(mrb_int)*a->cap);}memmove(a->data+1,a->data,sizeof(mrb_int)*a->len);a->data[0]=v;a->len++;}}")
+    emit_raw("static void sp_IntArray_unshift(sp_IntArray*a,mrb_int v){if(a->start>0){a->start--;a->data[a->start]=v;a->len++;}else{mrb_int e=a->len+1;if(e>a->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes-=sizeof(mrb_int)*a->cap;h->size-=sizeof(mrb_int)*a->cap;a->cap=a->cap*2+1;a->data=(mrb_int*)realloc(a->data,sizeof(mrb_int)*a->cap);h->size+=sizeof(mrb_int)*a->cap;sp_gc_bytes+=sizeof(mrb_int)*a->cap;}memmove(a->data+1,a->data,sizeof(mrb_int)*a->len);a->data[0]=v;a->len++;}}")
     emit_raw("static const char*sp_IntArray_join(sp_IntArray*a,const char*sep){size_t sl=strlen(sep),cap=256;char*buf=(char*)malloc(cap);size_t len=0;for(mrb_int i=0;i<a->len;i++){if(i>0){if(len+sl>=cap){cap*=2;buf=(char*)realloc(buf,cap);}memcpy(buf+len,sep,sl);len+=sl;}char tmp[32];int n=snprintf(tmp,32,\"%lld\",(long long)a->data[a->start+i]);if(len+n>=cap){cap*=2;buf=(char*)realloc(buf,cap);}memcpy(buf+len,tmp,n);len+=n;}buf[len]=0;return buf;}")
+    emit_raw("static mrb_bool sp_IntArray_eq(sp_IntArray*a,sp_IntArray*b){if(a->len!=b->len)return FALSE;for(mrb_int i=0;i<a->len;i++)if(a->data[a->start+i]!=b->data[b->start+i])return FALSE;return TRUE;}")
     emit_raw("")
   end
 
@@ -5975,12 +5986,12 @@ class Compiler
     emit_raw("typedef struct{mrb_float*data;mrb_int len;mrb_int cap;}sp_FloatArray;")
     emit_raw("static void sp_FloatArray_fin(void*p){free(((sp_FloatArray*)p)->data);}")
     emit_raw("static sp_FloatArray*sp_FloatArray_new(void){sp_FloatArray*a=(sp_FloatArray*)sp_gc_alloc(sizeof(sp_FloatArray),sp_FloatArray_fin,NULL);a->cap=16;a->data=(mrb_float*)malloc(sizeof(mrb_float)*a->cap);a->len=0;return a;}")
-    emit_raw("static void sp_FloatArray_push(sp_FloatArray*a,mrb_float v){if(a->len>=a->cap){a->cap=a->cap*2+1;a->data=(mrb_float*)realloc(a->data,sizeof(mrb_float)*a->cap);}a->data[a->len++]=v;}")
-    emit_raw("static mrb_float sp_FloatArray_pop(sp_FloatArray*a){return a->data[--a->len];}")
-    emit_raw("static mrb_int sp_FloatArray_length(sp_FloatArray*a){return a->len;}")
-    emit_raw("static mrb_bool sp_FloatArray_empty(sp_FloatArray*a){return a->len==0;}")
-    emit_raw("static mrb_float sp_FloatArray_get(sp_FloatArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[i];}")
-    emit_raw("static void sp_FloatArray_set(sp_FloatArray*a,mrb_int i,mrb_float v){if(i<0)i+=a->len;while(i>=a->cap){a->cap=a->cap*2+1;a->data=(mrb_float*)realloc(a->data,sizeof(mrb_float)*a->cap);}while(i>=a->len){a->data[a->len]=0.0;a->len++;}a->data[i]=v;}")
+    emit_raw("static inline void sp_FloatArray_push(sp_FloatArray*a,mrb_float v){if(a->len>=a->cap){a->cap=a->cap*2+1;a->data=(mrb_float*)realloc(a->data,sizeof(mrb_float)*a->cap);}a->data[a->len++]=v;}")
+    emit_raw("static inline mrb_float sp_FloatArray_pop(sp_FloatArray*a){return a->data[--a->len];}")
+    emit_raw("static inline mrb_int sp_FloatArray_length(sp_FloatArray*a){return a->len;}")
+    emit_raw("static inline mrb_bool sp_FloatArray_empty(sp_FloatArray*a){return a->len==0;}")
+    emit_raw("static inline mrb_float sp_FloatArray_get(sp_FloatArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[i];}")
+    emit_raw("static inline void sp_FloatArray_set(sp_FloatArray*a,mrb_int i,mrb_float v){if(i<0)i+=a->len;while(i>=a->cap){a->cap=a->cap*2+1;a->data=(mrb_float*)realloc(a->data,sizeof(mrb_float)*a->cap);}while(i>=a->len){a->data[a->len]=0.0;a->len++;}a->data[i]=v;}")
     emit_raw("")
   end
 
@@ -5988,12 +5999,12 @@ class Compiler
     emit_raw("typedef struct{const char**data;mrb_int len;mrb_int cap;}sp_StrArray;")
     emit_raw("static void sp_StrArray_fin(void*p){free(((sp_StrArray*)p)->data);}")
     emit_raw("static sp_StrArray*sp_StrArray_new(void){sp_StrArray*a=(sp_StrArray*)sp_gc_alloc(sizeof(sp_StrArray),sp_StrArray_fin,NULL);a->cap=16;a->data=(const char**)malloc(sizeof(const char*)*a->cap);a->len=0;return a;}")
-    emit_raw("static void sp_StrArray_push(sp_StrArray*a,const char*v){if(a->len>=a->cap){a->cap=a->cap*2+1;a->data=(const char**)realloc(a->data,sizeof(const char*)*a->cap);}a->data[a->len++]=v;}")
+    emit_raw("static inline void sp_StrArray_push(sp_StrArray*a,const char*v){if(a->len>=a->cap){a->cap=a->cap*2+1;a->data=(const char**)realloc(a->data,sizeof(const char*)*a->cap);}a->data[a->len++]=v;}")
     emit_raw("static const char*sp_StrArray_pop(sp_StrArray*a){return a->data[--a->len];}")
-    emit_raw("static mrb_int sp_StrArray_length(sp_StrArray*a){return a->len;}")
-    emit_raw("static mrb_bool sp_StrArray_empty(sp_StrArray*a){return a->len==0;}")
-    emit_raw("static const char*sp_StrArray_get(sp_StrArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[i];}")
-    emit_raw("static void sp_StrArray_set(sp_StrArray*a,mrb_int i,const char*v){if(i<0)i+=a->len;while(i>=a->len)sp_StrArray_push(a,\"\");a->data[i]=v;}")
+    emit_raw("static inline mrb_int sp_StrArray_length(sp_StrArray*a){return a->len;}")
+    emit_raw("static inline mrb_bool sp_StrArray_empty(sp_StrArray*a){return a->len==0;}")
+    emit_raw("static inline const char*sp_StrArray_get(sp_StrArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[i];}")
+    emit_raw("static inline void sp_StrArray_set(sp_StrArray*a,mrb_int i,const char*v){if(i<0)i+=a->len;while(i>=a->len)sp_StrArray_push(a,\"\");a->data[i]=v;}")
     emit_raw("static const char*sp_StrArray_join(sp_StrArray*a,const char*sep){size_t sl=strlen(sep),cap=256;char*buf=(char*)malloc(cap);size_t len=0;for(mrb_int i=0;i<a->len;i++){if(i>0){if(len+sl>=cap){cap*=2;buf=(char*)realloc(buf,cap);}memcpy(buf+len,sep,sl);len+=sl;}size_t el=strlen(a->data[i]);if(len+el>=cap){cap=(len+el)*2+1;buf=(char*)realloc(buf,cap);}memcpy(buf+len,a->data[i],el);len+=el;}buf[len]=0;return buf;}")
     emit_raw("static mrb_bool sp_StrArray_include(sp_StrArray*a,const char*v){for(mrb_int i=0;i<a->len;i++)if(strcmp(a->data[i],v)==0)return TRUE;return FALSE;}")
     emit_raw("")
@@ -6313,13 +6324,23 @@ class Compiler
     0
   end
 
+  def ivar_is_gc_ptr(t)
+    if is_obj_type(t) == 1
+      return 1
+    end
+    if type_is_pointer(t) == 1
+      return 1
+    end
+    0
+  end
+
   def class_has_ptr_ivars(ci)
     names = @cls_ivar_names[ci].split(";")
     types = @cls_ivar_types[ci].split(";")
     j = 0
     while j < names.length
       if j < types.length
-        if is_obj_type(types[j]) == 1
+        if ivar_is_gc_ptr(types[j]) == 1
           return 1
         end
       end
@@ -6346,7 +6367,7 @@ class Compiler
         j = 0
         while j < names.length
           if j < types.length
-            if is_obj_type(types[j]) == 1
+            if ivar_is_gc_ptr(types[j]) == 1
               emit_raw("  if (self->" + sanitize_ivar(names[j]) + ") sp_gc_mark(self->" + sanitize_ivar(names[j]) + ");")
             end
           end
@@ -6361,7 +6382,7 @@ class Compiler
             pj = 0
             while pj < pnames.length
               if pj < ptypes.length
-                if is_obj_type(ptypes[pj]) == 1
+                if ivar_is_gc_ptr(ptypes[pj]) == 1
                   emit_raw("  if (self->" + sanitize_ivar(pnames[pj]) + ") sp_gc_mark(self->" + sanitize_ivar(pnames[pj]) + ");")
                 end
               end
@@ -6944,6 +6965,18 @@ class Compiler
 
     if bid >= 0
       declare_method_locals(bid, pnames)
+      if @in_gc_scope == 1
+        emit("  SP_GC_ROOT(self);")
+        j = 0
+        while j < pnames.length
+          if j < ptypes.length
+            if type_is_pointer(ptypes[j]) == 1
+              emit("  SP_GC_ROOT(lv_" + pnames[j] + ");")
+            end
+          end
+          j = j + 1
+        end
+      end
       compile_body_return(bid, rt)
     end
 
@@ -7099,6 +7132,17 @@ class Compiler
     bid = @meth_body_ids[mi]
     if bid >= 0
       declare_method_locals(bid, pnames)
+      if @in_gc_scope == 1
+        j = 0
+        while j < pnames.length
+          if j < ptypes.length
+            if type_is_pointer(ptypes[j]) == 1
+              emit("  SP_GC_ROOT(lv_" + pnames[j] + ");")
+            end
+          end
+          j = j + 1
+        end
+      end
       compile_body_return(bid, @meth_return_types[mi])
     end
 
@@ -9267,6 +9311,9 @@ class Compiler
       if mname == "pop"
         return "sp_IntArray_pop(" + rc + ")"
       end
+      if mname == "shift"
+        return "sp_IntArray_shift(" + rc + ")"
+      end
       if mname == "empty?"
         return "sp_IntArray_empty(" + rc + ")"
       end
@@ -10077,6 +10124,15 @@ class Compiler
           return "(" + lc + " == NULL)"
         else
           return "(" + lc + " != NULL)"
+        end
+      end
+    end
+    if lt == "int_array"
+      if at == "int_array"
+        if op == "=="
+          return "sp_IntArray_eq(" + lc + ", " + rc + ")"
+        else
+          return "(!sp_IntArray_eq(" + lc + ", " + rc + "))"
         end
       end
     end
