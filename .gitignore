@@ -9,6 +9,9 @@
 *.c.out
 /mandelbrot
 
+# Build artifacts
+/build/
+
 # Temp files
 /tmp/
 /spinel_codegen
