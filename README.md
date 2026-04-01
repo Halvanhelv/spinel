@@ -113,9 +113,11 @@ for O(n) in-place append. `+`, interpolation, and methods work on both.
 `=~`, `$1`-`$9`, `match?`, `gsub(/re/, str)`, `sub(/re/, str)`,
 `scan(/re/)`, `split(/re/)`.
 
-**Memory**: Mark-and-sweep GC with explicit roots, conservative stack
-scanning, and adaptive threshold. Arrays track GC-managed memory for
-accurate collection.
+**Memory**: Mark-and-sweep GC with explicit roots and adaptive threshold.
+Small classes (<=4 fields, no inheritance, no mutation through parameters)
+are automatically stack-allocated as **value types** -- no GC allocation,
+no rooting overhead. Programs using only value types emit no GC runtime
+at all. Arrays track GC-managed memory for accurate collection.
 
 **I/O**: `puts`, `print`, `printf`, `p`, `gets`, `ARGV`, `ENV[]`,
 `File.read/write/open`, `system()`, backtick.
@@ -126,7 +128,7 @@ accurate collection.
 spinel              One-command wrapper script (POSIX shell)
 spinel_parse.rb     CRuby frontend: Prism AST → text format (715 lines)
 spinel_parse.c      C frontend: libprism → text format (915 lines)
-spinel_codegen.rb   Compiler backend: AST → C code (14,498 lines)
+spinel_codegen.rb   Compiler backend: AST → C code (15,126 lines)
 lib/regexp/         Built-in regexp engine (1,759 lines)
 lib/                Stub libraries (stringio, strscan, optparse, etc.)
 test/               60 test programs
