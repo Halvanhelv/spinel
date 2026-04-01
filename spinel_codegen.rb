@@ -148,6 +148,11 @@ class Compiler
     @lambda_params = "".split(",")
     @lambda_captures = "".split(",")
 
+    # Fiber support
+    @needs_fiber = 0
+    @fiber_counter = 0
+    @fiber_funcs = ""
+
     # Poly tracking: functions with params called with different types
     @poly_funcs = "".split(",")
     @poly_param_types = "".split(",")
@@ -1104,6 +1109,28 @@ class Compiler
           if @nd_name[recv] == "Proc"
             return "proc"
           end
+          if @nd_name[recv] == "Fiber"
+            return "fiber"
+          end
+        end
+      end
+    end
+    # fiber.resume returns int
+    if mname == "resume"
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "fiber"
+          return "int"
+        end
+      end
+    end
+    # Fiber.yield returns int
+    if mname == "yield"
+      if recv >= 0
+        if @nd_type[recv] == "ConstantReadNode"
+          if @nd_name[recv] == "Fiber"
+            return "int"
+          end
         end
       end
     end
@@ -1688,6 +1715,9 @@ class Compiler
           if rn == "StringIO"
             return "stringio"
           end
+          if rn == "Fiber"
+            return "fiber"
+          end
           return "obj_" + rn
         end
       end
@@ -1730,6 +1760,11 @@ class Compiler
     if recv >= 0
       if @nd_type[recv] == "ConstantReadNode"
         rcname = @nd_name[recv]
+        if rcname == "Fiber"
+          if mname == "new"
+            return "fiber"
+          end
+        end
         ci2 = find_class_idx(rcname)
         if ci2 >= 0
           if mname == "new"
@@ -2031,6 +2066,9 @@ class Compiler
     if t == "mutable_str"
       return 1
     end
+    if t == "fiber"
+      return 1
+    end
     if is_obj_type(t) == 1
       cname = t[4, t.length - 4]
       ci = find_class_idx(cname)
@@ -2131,6 +2169,9 @@ class Compiler
     end
     if t == "str_str_hash"
       return "sp_StrStrHash *"
+    end
+    if t == "fiber"
+      return "sp_Fiber *"
     end
     if t == "poly"
       return "sp_RbVal"
@@ -5328,6 +5369,24 @@ class Compiler
       if mname == "raise"
         @needs_setjmp = 1
       end
+      if mname == "new"
+        if @nd_receiver[nid] >= 0
+          if @nd_type[@nd_receiver[nid]] == "ConstantReadNode"
+            if @nd_name[@nd_receiver[nid]] == "Fiber"
+              @needs_fiber = 1
+            end
+          end
+        end
+      end
+      if mname == "yield"
+        if @nd_receiver[nid] >= 0
+          if @nd_type[@nd_receiver[nid]] == "ConstantReadNode"
+            if @nd_name[@nd_receiver[nid]] == "Fiber"
+              @needs_fiber = 1
+            end
+          end
+        end
+      end
       if mname == "catch"
         @needs_setjmp = 1
       end
@@ -6077,6 +6136,13 @@ class Compiler
     if @needs_lambda == 1
       emit_lambda_runtime
     end
+    if @needs_fiber == 1
+      if @needs_gc == 0
+        @needs_gc = 1
+        emit_gc_runtime
+      end
+      emit_fiber_runtime
+    end
     emit_class_structs
     emit_gc_scan_functions
     emit_forward_decls
@@ -6519,6 +6585,21 @@ class Compiler
     emit_raw("static sp_Val sp_lam_nil_val = { .tag = SP_NIL2 };")
     emit_raw("static sp_Val *sp_lam_call(sp_Val *f, sp_Val *arg) { return f->u.proc.fn(f, arg); }")
     emit_raw("static mrb_int sp_lam_to_int(sp_Val *v) { return v->u.ival; }")
+    emit_raw("")
+  end
+
+  def emit_fiber_runtime
+    emit_raw("/* ---- Fiber runtime (ucontext) ---- */")
+    emit_raw("#include <ucontext.h>")
+    emit_raw("#include <sys/mman.h>")
+    emit_raw("#define SP_FIBER_STACK_SIZE (64*1024)")
+    emit_raw("typedef struct sp_Fiber{ucontext_t ctx;ucontext_t caller_ctx;char*stack;int state;mrb_int yielded_value;mrb_int resumed_value;void(*body)(struct sp_Fiber*);int saved_exc_top;int saved_catch_top;}sp_Fiber;")
+    emit_raw("static sp_Fiber*sp_fiber_current=NULL;")
+    emit_raw("static void sp_Fiber_fin(void*p){sp_Fiber*f=(sp_Fiber*)p;if(f->stack)munmap(f->stack,SP_FIBER_STACK_SIZE);}")
+    emit_raw("static sp_Fiber*sp_Fiber_new(void(*body)(sp_Fiber*)){sp_Fiber*f=(sp_Fiber*)sp_gc_alloc(sizeof(sp_Fiber),sp_Fiber_fin,NULL);f->stack=(char*)mmap(NULL,SP_FIBER_STACK_SIZE,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);f->state=0;f->body=body;f->yielded_value=0;f->resumed_value=0;f->saved_exc_top=0;f->saved_catch_top=0;return f;}")
+    emit_raw("static void sp_fiber_trampoline(void){sp_Fiber*f=sp_fiber_current;f->body(f);f->state=3;f->yielded_value=f->yielded_value;swapcontext(&f->ctx,&f->caller_ctx);}")
+    emit_raw("static mrb_int sp_Fiber_resume(sp_Fiber*f,mrb_int val){if(f->state==3){fputs(\"dead fiber called\",stderr);exit(1);}f->resumed_value=val;sp_Fiber*prev=sp_fiber_current;sp_fiber_current=f;if(f->state==0){f->state=1;getcontext(&f->ctx);f->ctx.uc_stack.ss_sp=f->stack;f->ctx.uc_stack.ss_size=SP_FIBER_STACK_SIZE;f->ctx.uc_link=&f->caller_ctx;makecontext(&f->ctx,(void(*)(void))sp_fiber_trampoline,0);swapcontext(&f->caller_ctx,&f->ctx);}else{f->state=1;swapcontext(&f->caller_ctx,&f->ctx);}sp_fiber_current=prev;return f->yielded_value;}")
+    emit_raw("static mrb_int sp_Fiber_yield(mrb_int val){sp_Fiber*f=sp_fiber_current;f->yielded_value=val;f->state=2;swapcontext(&f->ctx,&f->caller_ctx);return f->resumed_value;}")
     emit_raw("")
   end
 
@@ -6997,7 +7078,7 @@ class Compiler
       if @needs_mutable_str == 1 || @needs_stringio == 1
         @needs_gc = 1
       end
-      if @needs_rb_value == 1 || @needs_lambda == 1
+      if @needs_rb_value == 1 || @needs_lambda == 1 || @needs_fiber == 1
         @needs_gc = 1
       end
     end
@@ -8606,9 +8687,16 @@ class Compiler
     pop_scope
     @in_main = 0
 
-    # Insert lambda functions before main
+    # Insert lambda and fiber functions before main
+    inserted = ""
     if @lambda_funcs != ""
-      @out = @out[0, @lambda_insert_pos] + @lambda_funcs + @out[@lambda_insert_pos, @out.length - @lambda_insert_pos]
+      inserted = inserted + @lambda_funcs
+    end
+    if @fiber_funcs != ""
+      inserted = inserted + @fiber_funcs
+    end
+    if inserted != ""
+      @out = @out[0, @lambda_insert_pos] + inserted + @out[@lambda_insert_pos, @out.length - @lambda_insert_pos]
     end
   end
 
@@ -9135,9 +9223,125 @@ class Compiler
   end
 
 
+  def compile_fiber_new(nid)
+    @needs_fiber = 1
+    blk = @nd_block[nid]
+    if blk < 0
+      return "NULL"
+    end
+    # Get block parameter name
+    bp = ""
+    bparams = @nd_parameters[blk]
+    if bparams >= 0
+      # BlockParametersNode → inner ParametersNode
+      inner = @nd_parameters[bparams]
+      if inner >= 0
+        reqs = parse_id_list(@nd_requireds[inner])
+        if reqs.length > 0
+          bp = @nd_name[reqs[0]]
+        end
+      end
+      if bp == ""
+        # Try direct requireds (in case it's ParametersNode directly)
+        reqs = parse_id_list(@nd_requireds[bparams])
+        if reqs.length > 0
+          bp = @nd_name[reqs[0]]
+        end
+      end
+    end
+    fid = @fiber_counter
+    @fiber_counter = @fiber_counter + 1
+    fname = "_fiber_body_" + fid.to_s
+
+    # Compile fiber body function
+    fbody = "static void " + fname + "(sp_Fiber *_fb) {" + 10.chr
+    if bp != ""
+      fbody = fbody + "  mrb_int lv_" + bp + " = _fb->resumed_value;" + 10.chr
+    end
+    # Compile body — save/restore compiler state
+    saved_out = @out
+    saved_indent = @indent
+    @out = ""
+    @indent = 1
+
+    push_scope
+    if bp != ""
+      declare_var(bp, "int")
+    end
+    body = @nd_body[blk]
+    if body >= 0
+      # Declare locals in fiber body
+      lnames = "".split(",")
+      ltypes = "".split(",")
+      plist = "".split(",")
+      if bp != ""
+        plist.push(bp)
+      end
+      scan_locals(body, lnames, ltypes, plist)
+      lk = 0
+      while lk < lnames.length
+        declare_var(lnames[lk], ltypes[lk])
+        emit("  " + c_type(ltypes[lk]) + " lv_" + lnames[lk] + " = " + c_default_val(ltypes[lk]) + ";")
+        lk = lk + 1
+      end
+
+      stmts = get_stmts(body)
+      if stmts.length > 0
+        i = 0
+        while i < stmts.length - 1
+          compile_stmt(stmts[i])
+          i = i + 1
+        end
+        last = stmts.last
+        last_val = compile_expr(last)
+        emit("  _fb->yielded_value = (mrb_int)" + last_val + ";")
+      end
+    end
+    pop_scope
+
+    fbody = fbody + @out
+    fbody = fbody + "}" + 10.chr
+    @fiber_funcs = @fiber_funcs + fbody
+
+    @out = saved_out
+    @indent = saved_indent
+
+    # Declare locals in body (scan for LocalVariableWriteNode)
+    # Actually the above compile already handles this via the saved @out
+
+    # Return fiber creation expression
+    "sp_Fiber_new(" + fname + ")"
+  end
+
   def compile_call_expr(nid)
     mname = @nd_name[nid]
     recv = @nd_receiver[nid]
+
+    # Fiber.new { block }
+    if mname == "new" && recv >= 0
+      if @nd_type[recv] == "ConstantReadNode"
+        if @nd_name[recv] == "Fiber"
+          return compile_fiber_new(nid)
+        end
+      end
+    end
+    # fiber.resume(val)
+    if mname == "resume" && recv >= 0
+      rt2 = infer_type(recv)
+      if rt2 == "fiber"
+        rc = compile_expr(recv)
+        val = compile_arg0(nid)
+        return "sp_Fiber_resume(" + rc + ", " + val + ")"
+      end
+    end
+    # Fiber.yield(val)
+    if mname == "yield" && recv >= 0
+      if @nd_type[recv] == "ConstantReadNode"
+        if @nd_name[recv] == "Fiber"
+          return "sp_Fiber_yield(" + compile_arg0(nid) + ")"
+        end
+      end
+    end
 
     # No receiver
     if recv < 0
