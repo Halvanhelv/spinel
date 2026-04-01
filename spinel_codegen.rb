@@ -2209,6 +2209,14 @@ class Compiler
     "0"
   end
 
+  def c_return_default(t)
+    # Like c_default_val but for return statements (compound literal for value types)
+    if is_value_type_obj(t) == 1
+      return "(" + c_type(t) + "){0}"
+    end
+    c_default_val(t)
+  end
+
   def sanitize_name(name)
     if name == "<=>"
       return "_cmp"
@@ -7897,6 +7905,7 @@ class Compiler
     @current_method_name = ""
     @in_yield_method = 0
     @indent = 0
+    emit_raw("  return " + c_return_default(rt) + ";")
     emit_raw("}")
     emit_raw("")
   end
@@ -7931,6 +7940,7 @@ class Compiler
     @current_class_idx = -1
     @current_method_name = ""
     @indent = 0
+    emit_raw("  return " + c_return_default(rt) + ";")
     emit_raw("}")
     emit_raw("")
   end
@@ -8064,10 +8074,12 @@ class Compiler
       compile_body_return(bid, @meth_return_types[mi])
     end
 
+    rt = @meth_return_types[mi]
     pop_scope
     @current_method_name = ""
     @in_yield_method = 0
     @indent = 0
+    emit_raw("  return " + c_return_default(rt) + ";")
     emit_raw("}")
     emit_raw("")
   end
@@ -14869,14 +14881,14 @@ class Compiler
   def compile_body_return(body_id, return_type)
     if body_id < 0
       if return_type != "void"
-        emit("  return " + c_default_val(return_type) + ";")
+        emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
     stmts = get_stmts(body_id)
     if stmts.length == 0
       if return_type != "void"
-        emit("  return " + c_default_val(return_type) + ";")
+        emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
@@ -14902,21 +14914,21 @@ class Compiler
     if @nd_type[last] == "WhileNode"
       compile_while_stmt(last)
       if return_type != "void"
-        emit("  return " + c_default_val(return_type) + ";")
+        emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
     if @nd_type[last] == "YieldNode"
       compile_yield_stmt(last)
       if return_type != "void"
-        emit("  return " + c_default_val(return_type) + ";")
+        emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
     if @nd_type[last] == "BeginNode"
       compile_begin_stmt(last)
       if return_type != "void"
-        emit("  return " + c_default_val(return_type) + ";")
+        emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
@@ -14952,7 +14964,7 @@ class Compiler
         end
         compile_stmt(last)
         if return_type != "void"
-          emit("  return " + c_default_val(return_type) + ";")
+          emit("  return " + c_return_default(return_type) + ";")
         end
         return
       end
@@ -14964,7 +14976,7 @@ class Compiler
       if lm == "[]=" || lm == "push" || lm == "pop" || lm == "emit" || lm == "emit_raw"
         compile_stmt(last)
         if return_type != "void"
-          emit("  return " + c_default_val(return_type) + ";")
+          emit("  return " + c_return_default(return_type) + ";")
         end
         return
       end
@@ -14972,14 +14984,14 @@ class Compiler
     if lt == "InstanceVariableWriteNode"
       compile_stmt(last)
       if return_type != "void"
-        emit("  return " + c_default_val(return_type) + ";")
+        emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
     if lt == "InstanceVariableOperatorWriteNode"
       compile_stmt(last)
       if return_type != "void"
-        emit("  return " + c_default_val(return_type) + ";")
+        emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
@@ -15000,7 +15012,7 @@ class Compiler
     if lt == "MultiWriteNode"
       compile_stmt(last)
       if return_type != "void"
-        emit("  return " + c_default_val(return_type) + ";")
+        emit("  return " + c_return_default(return_type) + ";")
       end
       return
     end
@@ -15035,7 +15047,7 @@ class Compiler
       compile_body_return(body, rt)
     else
       if rt != "void"
-        emit("  return " + c_default_val(rt) + ";")
+        emit("  return " + c_return_default(rt) + ";")
       end
     end
     @indent = @indent - 1
@@ -15049,7 +15061,7 @@ class Compiler
           compile_body_return(eb, rt)
         else
           if rt != "void"
-            emit("  return " + c_default_val(rt) + ";")
+            emit("  return " + c_return_default(rt) + ";")
           end
         end
         @indent = @indent - 1
@@ -15061,7 +15073,7 @@ class Compiler
     else
       if rt != "void"
         emit("  } else {")
-        emit("    return " + c_default_val(rt) + ";")
+        emit("    return " + c_return_default(rt) + ";")
       end
     end
     emit("  }")
