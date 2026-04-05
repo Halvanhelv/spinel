@@ -1509,7 +1509,7 @@ class Compiler
       end
       return "int"
     end
-    if mname == "has_key?"
+    if mname == "has_key?" || mname == "key?"
       return "bool"
     end
     if mname == "split"
@@ -8668,6 +8668,27 @@ class Compiler
             aargs = get_args(args_id)
             if aargs.length > 0
               arg_type = infer_type(aargs[0])
+              # If arg is arr[i] where arr is in names, get element type
+              if arg_type == "int" && @nd_type[aargs[0]] == "CallNode"
+                if @nd_name[aargs[0]] == "[]"
+                  arr_recv = @nd_receiver[aargs[0]]
+                  if arr_recv >= 0 && @nd_type[arr_recv] == "LocalVariableReadNode"
+                    arn = @nd_name[arr_recv]
+                    ni = 0
+                    while ni < names.length
+                      if names[ni] == arn
+                        if types[ni] == "str_array"
+                          arg_type = "string"
+                        end
+                        if types[ni] == "float_array"
+                          arg_type = "float"
+                        end
+                      end
+                      ni = ni + 1
+                    end
+                  end
+                end
+              end
               if is_obj_type(arg_type) == 1
                 target_type = arg_type + "_ptr_array"
                 @needs_ptr_array = 1
@@ -8677,6 +8698,28 @@ class Compiler
                   if names[ki] == arr_name
                     if types[ki] == "int_array"
                       types[ki] = target_type
+                    end
+                  end
+                  ki = ki + 1
+                end
+              elsif arg_type == "string"
+                @needs_str_array = 1
+                ki = 0
+                while ki < names.length
+                  if names[ki] == arr_name
+                    if types[ki] == "int_array"
+                      types[ki] = "str_array"
+                    end
+                  end
+                  ki = ki + 1
+                end
+              elsif arg_type == "float"
+                @needs_float_array = 1
+                ki = 0
+                while ki < names.length
+                  if names[ki] == arr_name
+                    if types[ki] == "int_array"
+                      types[ki] = "float_array"
                     end
                   end
                   ki = ki + 1
@@ -11551,7 +11594,7 @@ class Compiler
       if mname == "[]"
         return "sp_StrIntHash_get(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      if mname == "has_key?"
+      if mname == "has_key?" || mname == "key?"
         return "sp_StrIntHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "length"
@@ -11593,7 +11636,7 @@ class Compiler
       if mname == "[]"
         return "sp_StrStrHash_get(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      if mname == "has_key?"
+      if mname == "has_key?" || mname == "key?"
         return "sp_StrStrHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "length"
@@ -12673,15 +12716,25 @@ class Compiler
       end
       vref = fiber_var_ref(lname)
       vt = find_var_type(lname)
-      # ptr_array: empty array literal should create PtrArray
-      if is_ptr_array_type(vt) == 1
+      # Empty array literal: create the correct array type
+      if vt == "str_array" || vt == "float_array" || is_ptr_array_type(vt) == 1
         expr_id = @nd_expression[nid]
         if expr_id >= 0 && @nd_type[expr_id] == "ArrayNode"
           elems = parse_id_list(@nd_elements[expr_id])
           if elems.length == 0
-            @needs_ptr_array = 1
-            @needs_gc = 1
-            emit("  " + vref + " = sp_PtrArray_new();")
+            if vt == "str_array"
+              @needs_str_array = 1
+              @needs_gc = 1
+              emit("  " + vref + " = sp_StrArray_new();")
+            elsif vt == "float_array"
+              @needs_float_array = 1
+              @needs_gc = 1
+              emit("  " + vref + " = sp_FloatArray_new();")
+            else
+              @needs_ptr_array = 1
+              @needs_gc = 1
+              emit("  " + vref + " = sp_PtrArray_new();")
+            end
             return
           end
         end
