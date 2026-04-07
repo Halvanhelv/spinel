@@ -13017,6 +13017,17 @@ class Compiler
       end
       return tmp
     end
+    if arr_type == "float_array"
+      @needs_float_array = 1
+      tmp = new_temp
+      emit("  sp_FloatArray *" + tmp + " = sp_FloatArray_new();")
+      k = 0
+      while k < elems.length
+        emit("  sp_FloatArray_push(" + tmp + ", " + compile_expr(elems[k]) + ");")
+        k = k + 1
+      end
+      return tmp
+    end
     @needs_int_array = 1
     tmp = new_temp
     emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
