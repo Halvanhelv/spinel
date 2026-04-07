@@ -164,6 +164,10 @@ class Compiler
     @heap_promoted_names = "".split(",")
     @heap_promoted_cells = "".split(",")
 
+    # Global variables ($x)
+    @gvar_names = "".split(",")
+    @gvar_types = "".split(",")
+
     # Poly tracking: functions with params called with different types
     @poly_funcs = "".split(",")
     @poly_param_types = "".split(",")
@@ -832,6 +836,17 @@ class Compiler
       vt = find_var_type(@nd_name[nid])
       if vt != ""
         return vt
+      end
+      return "int"
+    end
+    if t == "GlobalVariableReadNode"
+      gname = @nd_name[nid]
+      gi = 0
+      while gi < @gvar_names.length
+        if @gvar_names[gi] == gname
+          return @gvar_types[gi]
+        end
+        gi = gi + 1
       end
       return "int"
     end
@@ -2472,6 +2487,14 @@ class Compiler
       end
     end
     name
+  end
+
+  def sanitize_gvar(name)
+    # $last → gv_last, $1 → gv_1
+    if name.length > 0 && name[0] == "$"
+      return "gv_" + name[1, name.length - 1]
+    end
+    "gv_" + name
   end
 
   # ---- Collection pass ----
@@ -5377,6 +5400,25 @@ class Compiler
     if t == "SymbolNode"
       @needs_string_helpers = 1
     end
+    if t == "GlobalVariableWriteNode"
+      gname = @nd_name[nid]
+      if gname != "$stderr" && gname != "$stdout" && gname != "$?"
+        gt = infer_type(@nd_expression[nid])
+        if not_in(gname, @gvar_names) == 1
+          @gvar_names.push(gname)
+          @gvar_types.push(gt)
+        end
+      end
+    end
+    if t == "GlobalVariableReadNode"
+      gname = @nd_name[nid]
+      if gname != "$stderr" && gname != "$stdout" && gname != "$?"
+        if not_in(gname, @gvar_names) == 1
+          @gvar_names.push(gname)
+          @gvar_types.push("int")
+        end
+      end
+    end
     if t == "CallNode"
       mname = @nd_name[nid]
       if mname == "to_s"
@@ -6513,6 +6555,23 @@ class Compiler
     end
     emit_class_structs
     emit_gc_scan_functions
+    # Emit global variable declarations before functions
+    gi = 0
+    while gi < @gvar_names.length
+      gt = @gvar_types[gi]
+      cname = sanitize_gvar(@gvar_names[gi])
+      ct = c_type(gt)
+      if gt == "string"
+        emit_raw("static " + ct + " " + cname + " = \"\";")
+      elsif gt == "float"
+        emit_raw("static " + ct + " " + cname + " = 0.0;")
+      elsif type_is_pointer(gt) == 1
+        emit_raw("static " + ct + " " + cname + " = NULL;")
+      else
+        emit_raw("static " + ct + " " + cname + " = 0;")
+      end
+      gi = gi + 1
+    end
     emit_forward_decls
     emit_global_constants
     # Lambda functions will be inserted here (before class/toplevel methods)
@@ -9746,7 +9805,8 @@ class Compiler
       if gname == "$?"
         return "sp_last_status"
       end
-      return "0"
+      # General global variable
+      return sanitize_gvar(gname)
     end
     if t == "SourceLineNode"
       return @nd_value[nid].to_s
@@ -13182,6 +13242,15 @@ class Compiler
     if t == "MultiWriteNode"
       compile_multi_write(nid)
       return
+    end
+    if t == "GlobalVariableWriteNode"
+      gname = @nd_name[nid]
+      if gname != "$stderr" && gname != "$stdout" && gname != "$?"
+        cname = sanitize_gvar(gname)
+        val = compile_expr(@nd_expression[nid])
+        emit("  " + cname + " = " + val + ";")
+        return
+      end
     end
     if t == "LocalVariableWriteNode"
       lname = @nd_name[nid]
@@ -16912,6 +16981,13 @@ class Compiler
       compile_stmt(last)
       if return_type != "void"
         emit("  return " + c_return_default(return_type) + ";")
+      end
+      return
+    end
+    if lt == "GlobalVariableWriteNode"
+      compile_stmt(last)
+      if return_type != "void"
+        emit("  return " + sanitize_gvar(@nd_name[last]) + ";")
       end
       return
     end

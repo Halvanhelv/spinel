@@ -5,10 +5,11 @@ IM = 139968
 IA = 3877
 IC = 29573
 
-# Mutable state via array cell (no global variables)
-def gen_random(max, state)
-  state[0] = (state[0] * IA + IC) % IM
-  max * state[0] / IM
+$last = 42
+
+def gen_random(max)
+  $last = ($last * IA + IC) % IM
+  max * $last / IM
 end
 
 def make_repeat_fasta(id, desc, src, n)
@@ -32,7 +33,7 @@ def make_repeat_fasta(id, desc, src, n)
   end
 end
 
-def make_random_fasta(id, desc, table_chars, table_probs, n, state)
+def make_random_fasta(id, desc, table_chars, table_probs, n)
   puts ">" + id + " " + desc
   # Build cumulative probabilities
   cp = Array.new(table_probs.length, 0.0)
@@ -52,7 +53,7 @@ def make_random_fasta(id, desc, table_chars, table_probs, n, state)
     line = ""
     j = 0
     while j < len
-      r = gen_random(1.0, state)
+      r = gen_random(1.0)
       # Linear search
       c = 0
       while c < cp.length - 1
@@ -72,16 +73,15 @@ end
 ALU = "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCGGATCACCTGAGGTCAGGAGTTCGAGACCAGCCTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAATACAAAAATTAGCCGGGCGTGGTGGCGCGCGCCTGTAATCCCAGCTACTCGGGAGGCTGAGGCAGGAGAATCGCTTGAACCCGGGAGGCGGAGGTTGCAGTGAGCCGAGATCGCGCCACTGCACTCCAGCCTGGGCGACAGAGCGAGACTCCGTCTCAAAAAAA"
 
 n = Integer(ARGV[0] || 1000)
-state = [42]
 
 make_repeat_fasta("ONE", "Homo sapiens alu", ALU, n * 2)
 
 iub_chars = ["a", "c", "g", "t", "B", "D", "H", "K", "M", "N", "R", "S", "V", "W", "Y"]
 iub_probs = [0.27, 0.12, 0.12, 0.27, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02]
 
-make_random_fasta("TWO", "IUB ambiguity codes", iub_chars, iub_probs, n * 3, state)
+make_random_fasta("TWO", "IUB ambiguity codes", iub_chars, iub_probs, n * 3)
 
 homo_chars = ["a", "c", "g", "t"]
 homo_probs = [0.3029549426680, 0.1979883004921, 0.1975473066391, 0.3015094502008]
 
-make_random_fasta("THREE", "Homo sapiens frequency", homo_chars, homo_probs, n * 5, state)
+make_random_fasta("THREE", "Homo sapiens frequency", homo_chars, homo_probs, n * 5)
