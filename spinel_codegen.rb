@@ -14685,6 +14685,46 @@ class Compiler
         end
       end
     end
+    # Handle control flow: while/if/unless with file block context
+    if t == "WhileNode"
+      cond = @nd_predicate[nid]
+      emit("  while (" + compile_expr(cond) + ") {")
+      body = @nd_body[nid]
+      if body >= 0
+        bs = get_stmts(body)
+        bk = 0
+        while bk < bs.length
+          compile_file_block_stmt(bs[bk], ftmp, bp)
+          bk = bk + 1
+        end
+      end
+      emit("  }")
+      return
+    end
+    if t == "IfNode"
+      cond = @nd_predicate[nid]
+      emit("  if (" + compile_expr(cond) + ") {")
+      body = @nd_body[nid]
+      if body >= 0
+        bs = get_stmts(body)
+        bk = 0
+        while bk < bs.length
+          compile_file_block_stmt(bs[bk], ftmp, bp)
+          bk = bk + 1
+        end
+      end
+      if @nd_subsequent[nid] >= 0
+        emit("  } else {")
+        ebs = get_stmts(@nd_subsequent[nid])
+        ebk = 0
+        while ebk < ebs.length
+          compile_file_block_stmt(ebs[ebk], ftmp, bp)
+          ebk = ebk + 1
+        end
+      end
+      emit("  }")
+      return
+    end
     # Fallback: compile as normal statement
     compile_stmt(nid)
   end
