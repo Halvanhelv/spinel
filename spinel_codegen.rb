@@ -5459,13 +5459,16 @@ class Compiler
         @needs_gc = 1
       end
       # Methods that need string helpers only when receiver is string
-      if mname == "+" || mname == "*" || mname == "[]" || mname == "reverse"
+      if mname == "+" || mname == "*" || mname == "reverse"
         if @nd_receiver[nid] >= 0
           rt = infer_type(@nd_receiver[nid])
           if rt == "string"
             @needs_string_helpers = 1
           end
         end
+      end
+      if mname == "[]"
+        @needs_string_helpers = 1
       end
       if mname == "new"
         if @nd_receiver[nid] >= 0
@@ -11202,6 +11205,9 @@ class Compiler
     end
     if mname == ">"
       lt = infer_type(recv)
+      if lt == "string"
+        return "(strcmp(" + compile_expr(recv) + ", " + compile_arg0(nid) + ") > 0)"
+      end
       if lt == "poly"
         @needs_rb_value = 1
         return "sp_poly_gt(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
@@ -11209,9 +11215,17 @@ class Compiler
       return "(" + compile_expr(recv) + " > " + compile_arg0(nid) + ")"
     end
     if mname == "<="
+      lt = infer_type(recv)
+      if lt == "string"
+        return "(strcmp(" + compile_expr(recv) + ", " + compile_arg0(nid) + ") <= 0)"
+      end
       return "(" + compile_expr(recv) + " <= " + compile_arg0(nid) + ")"
     end
     if mname == ">="
+      lt = infer_type(recv)
+      if lt == "string"
+        return "(strcmp(" + compile_expr(recv) + ", " + compile_arg0(nid) + ") >= 0)"
+      end
       return "(" + compile_expr(recv) + " >= " + compile_arg0(nid) + ")"
     end
     if mname == "=~"
