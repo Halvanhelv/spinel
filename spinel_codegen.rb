@@ -1676,6 +1676,15 @@ class Compiler
     if mname == "keys"
       return "str_array"
     end
+    if mname == "values"
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "str_str_hash"
+          return "str_array"
+        end
+      end
+      return "int_array"
+    end
     if mname == "push"
       if recv >= 0
         return infer_type(recv)
@@ -5746,6 +5755,18 @@ class Compiler
         @needs_str_array = 1
         @needs_gc = 1
       end
+      if mname == "values"
+        vrt = "int"
+        if @nd_receiver[nid] >= 0
+          vrt = infer_type(@nd_receiver[nid])
+        end
+        if vrt == "str_str_hash"
+          @needs_str_array = 1
+        else
+          @needs_int_array = 1
+        end
+        @needs_gc = 1
+      end
       if mname == "each"
         if @nd_receiver[nid] >= 0
           rt = infer_type(@nd_receiver[nid])
@@ -9448,6 +9469,15 @@ class Compiler
               set_var_type(lnames[k], ltypes2[j])
             end
           end
+          # Upgrade default array/hash types with more specific ones
+          if ltypes[k] == "int_array" && ltypes2[j] != "int_array" && ltypes2[j] != "int"
+            ltypes[k] = ltypes2[j]
+            set_var_type(lnames[k], ltypes2[j])
+          end
+          if ltypes[k] == "str_int_hash" && ltypes2[j] == "str_str_hash"
+            ltypes[k] = ltypes2[j]
+            set_var_type(lnames[k], ltypes2[j])
+          end
         end
         k = k + 1
       end
@@ -12161,6 +12191,9 @@ class Compiler
       if mname == "keys"
         return "sp_StrIntHash_keys(" + rc + ")"
       end
+      if mname == "values"
+        return "sp_StrIntHash_values(" + rc + ")"
+      end
       if mname == "merge"
         tmp = new_temp
         arg = compile_arg0(nid)
@@ -12202,6 +12235,9 @@ class Compiler
       end
       if mname == "keys"
         return "sp_StrStrHash_keys(" + rc + ")"
+      end
+      if mname == "values"
+        return "sp_StrStrHash_values(" + rc + ")"
       end
     end
     ""
