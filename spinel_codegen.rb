@@ -1596,6 +1596,9 @@ class Compiler
     if mname == "any?" || mname == "all?" || mname == "none?"
       return "bool"
     end
+    if mname == "between?"
+      return "bool"
+    end
     if mname == "nil?"
       return "bool"
     end
@@ -11346,6 +11349,22 @@ class Compiler
     end
     if mname == "!"
       return "(!" + compile_expr(recv) + ")"
+    end
+    if mname == "between?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length >= 2
+          rc = compile_expr(recv)
+          lo = compile_expr(aargs[0])
+          hi = compile_expr(aargs[1])
+          lt = infer_type(recv)
+          if lt == "string"
+            return "(strcmp(" + rc + ", " + lo + ") >= 0 && strcmp(" + rc + ", " + hi + ") <= 0)"
+          end
+          return "(" + rc + " >= " + lo + " && " + rc + " <= " + hi + ")"
+        end
+      end
     end
     if mname == "<<"
       lt = infer_type(recv)
