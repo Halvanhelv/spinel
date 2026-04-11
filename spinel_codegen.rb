@@ -1632,7 +1632,7 @@ class Compiler
       end
       return "int"
     end
-    if mname == "has_key?" || mname == "key?"
+    if mname == "has_key?" || mname == "key?" || mname == "member?"
       return "bool"
     end
     if mname == "split"
@@ -12499,7 +12499,7 @@ class Compiler
       if mname == "[]"
         return "sp_StrIntHash_get(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      if mname == "has_key?" || mname == "key?"
+      if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
         return "sp_StrIntHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
@@ -12565,7 +12565,7 @@ class Compiler
       if mname == "[]"
         return "sp_StrStrHash_get(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      if mname == "has_key?" || mname == "key?"
+      if mname == "has_key?" || mname == "key?" || mname == "include?" || mname == "member?"
         return "sp_StrStrHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
