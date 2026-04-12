@@ -15279,6 +15279,22 @@ class Compiler
         return 1
       end
     end
+
+    # abort — print message to stderr and exit(1)
+    if mname == "abort"
+      if recv < 0
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          aargs = get_args(args_id)
+          if aargs.length > 0
+            msg = compile_expr(aargs[0])
+            emit("  fputs(" + msg + ", stderr); fputc('\\n', stderr);")
+          end
+        end
+        emit("  exit(1);")
+        return 1
+      end
+    end
     0
   end
 
@@ -18131,7 +18147,7 @@ class Compiler
     lt = @nd_type[last]
     if lt == "CallNode"
       lm = @nd_name[last]
-      if lm == "[]=" || lm == "push" || lm == "pop" || lm == "emit" || lm == "emit_raw" || lm == "puts" || lm == "print" || lm == "p" || lm == "printf" || lm == "warn" || lm == "raise" || lm == "exit" || lm == "sleep" || lm == "delete" || lm == "clear" || lm == "concat" || lm == "prepend" || lm == "fill" || lm == "insert" || lm == "update" || lm == "merge!" || lm == "store" || lm == "reverse!" || lm == "sort!" || lm == "each" || lm == "times" || lm == "upto" || lm == "downto"
+      if lm == "[]=" || lm == "push" || lm == "pop" || lm == "emit" || lm == "emit_raw" || lm == "puts" || lm == "print" || lm == "p" || lm == "printf" || lm == "warn" || lm == "raise" || lm == "exit" || lm == "abort" || lm == "sleep" || lm == "delete" || lm == "clear" || lm == "concat" || lm == "prepend" || lm == "fill" || lm == "insert" || lm == "update" || lm == "merge!" || lm == "store" || lm == "reverse!" || lm == "sort!" || lm == "each" || lm == "times" || lm == "upto" || lm == "downto"
         compile_stmt(last)
         if return_type != "void"
           emit("  return " + c_return_default(return_type) + ";")
