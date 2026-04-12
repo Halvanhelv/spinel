@@ -9436,6 +9436,8 @@ class Compiler
                     end
                   elsif mname == "each_char" || mname == "each_line"
                     types.push("string")
+                  elsif mname == "each_byte"
+                    types.push("int")
                   elsif mname == "tap" || mname == "then" || mname == "yield_self"
                     # Block param gets receiver type
                     types.push(recv_type)
@@ -15103,6 +15105,34 @@ class Compiler
           emit("  const char *" + src_tmp + " = " + src + ";")
           emit("  for (mrb_int " + tmp + " = 0; " + src_tmp + "[" + tmp + "]; " + tmp + "++) {")
           emit("    lv_" + bp + " = sp_str_sub_range(" + src_tmp + ", " + tmp + ", 1);")
+          @indent = @indent + 1
+          compile_stmts_body(@nd_body[@nd_block[nid]])
+          @indent = @indent - 1
+          emit("  }")
+          return 1
+        end
+      end
+    end
+
+    if mname == "each_byte"
+      if @nd_block[nid] >= 0 && recv >= 0
+        rt = infer_type(recv)
+        if rt == "string" || rt == "mutable_str"
+          rc = compile_expr(recv)
+          bp = get_block_param(nid, 0)
+          if bp == ""
+            bp = "_b"
+          end
+          declare_var(bp, "int")
+          tmp = new_temp
+          src = rc
+          if rt == "mutable_str"
+            src = rc + "->data"
+          end
+          src_tmp = new_temp
+          emit("  const char *" + src_tmp + " = " + src + ";")
+          emit("  for (mrb_int " + tmp + " = 0; " + src_tmp + "[" + tmp + "]; " + tmp + "++) {")
+          emit("    lv_" + bp + " = (unsigned char)" + src_tmp + "[" + tmp + "];")
           @indent = @indent + 1
           compile_stmts_body(@nd_body[@nd_block[nid]])
           @indent = @indent - 1
