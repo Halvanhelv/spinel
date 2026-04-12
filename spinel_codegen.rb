@@ -1628,7 +1628,7 @@ class Compiler
     if mname == "empty?"
       return "bool"
     end
-    if mname == "any?" || mname == "all?" || mname == "none?"
+    if mname == "any?" || mname == "all?" || mname == "none?" || mname == "one?"
       return "bool"
     end
     if mname == "between?"
@@ -12348,7 +12348,7 @@ class Compiler
       pfx = array_c_prefix(recv_type)
       return "(sp_" + pfx + "_length(" + rc + ") == 0)"
     end
-    if (mname == "any?" || mname == "all?" || mname == "none?") && @nd_block[nid] >= 0
+    if (mname == "any?" || mname == "all?" || mname == "none?" || mname == "one?") && @nd_block[nid] >= 0
       return compile_array_predicate_block(nid, rc, recv_type, mname)
     end
     if (mname == "find" || mname == "detect") && @nd_block[nid] >= 0
@@ -17124,6 +17124,8 @@ class Compiler
       emit("    if (" + bexpr + ") { " + tmp_res + " = TRUE; break; }")
     elsif mname == "all?"
       emit("    if (!(" + bexpr + ")) { " + tmp_res + " = FALSE; break; }")
+    elsif mname == "one?"
+      emit("    if (" + bexpr + ") { if (" + tmp_res + ") { " + tmp_res + " = FALSE; break; } " + tmp_res + " = TRUE; }")
     else
       # none?
       emit("    if (" + bexpr + ") { " + tmp_res + " = FALSE; break; }")
