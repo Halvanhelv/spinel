@@ -13174,6 +13174,9 @@ class Compiler
         @needs_str_int_hash = 1
         return "sp_StrArray_tally(" + rc + ")"
       end
+      if mname == "compact"
+        return "sp_StrArray_compact(" + rc + ")"
+      end
       if mname == "insert"
         args_id = @nd_arguments[nid]
         if args_id >= 0
