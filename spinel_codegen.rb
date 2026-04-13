@@ -11,8 +11,26 @@
 class Compiler
   attr_accessor :out
 
+  def final_output
+    result = @out_lines.join(10.chr) + 10.chr
+    if @deferred_tuple != ""
+      result = result.gsub("/*TUPLE_INSERT_POINT*/", @deferred_tuple)
+    else
+      result = result.gsub("/*TUPLE_INSERT_POINT*/" + 10.chr, "")
+    end
+    if @deferred_lambda != ""
+      result = result.gsub("/*LAMBDA_INSERT_POINT*/", @deferred_lambda)
+    else
+      result = result.gsub("/*LAMBDA_INSERT_POINT*/" + 10.chr, "")
+    end
+    result
+  end
+
   def initialize
+    @out_lines = "".split(",")
     @out = ""
+    @deferred_tuple = ""
+    @deferred_lambda = ""
     @indent = 0
     @temp_counter = 0
     @label_counter = 0
@@ -775,11 +793,11 @@ class Compiler
       ind = ind + "  "
       j = j + 1
     end
-    @out = @out + ind + s + 10.chr
+    @out_lines.push(ind + s)
   end
 
   def emit_raw(s)
-    @out = @out + s + 10.chr
+    @out_lines.push(s)
   end
 
 
@@ -6979,7 +6997,7 @@ class Compiler
       emit_regexp_runtime
     end
     emit_class_structs
-    @tuple_insert_pos = @out.length
+    emit_raw("/*TUPLE_INSERT_POINT*/")
     emit_gc_scan_functions
     # Emit global variable declarations before functions
     gi = 0
@@ -7000,16 +7018,14 @@ class Compiler
     end
     emit_forward_decls
     emit_global_constants
-    # Lambda functions will be inserted here (before class/toplevel methods)
-    @lambda_insert_pos = @out.length
+    emit_raw("/*LAMBDA_INSERT_POINT*/")
     emit_class_methods
     emit_toplevel_methods
     # Emit lambda functions before main (they are generated during compilation)
     # We emit them in emit_main after forward declarations
     emit_main
-    # Insert tuple struct definitions at the saved position
+    # Build tuple struct definitions into @deferred_tuple
     if @tuple_types.length > 0
-      tuple_lines = ""
       k = 0
       while k < @tuple_types.length
         t = @tuple_types[k]
@@ -7024,11 +7040,13 @@ class Compiler
           fields = fields + c_type(parts[fi]) + " _" + fi.to_s + ";"
           fi = fi + 1
         end
-        tuple_lines = tuple_lines + "typedef struct { " + fields + " } " + name + ";\n"
+        @deferred_tuple << "typedef struct { "
+        @deferred_tuple << fields
+        @deferred_tuple << " } "
+        @deferred_tuple << name
+        @deferred_tuple << ";\n"
         k = k + 1
       end
-      # Prepend before the content at @tuple_insert_pos
-      @out[@tuple_insert_pos] = tuple_lines + @out[@tuple_insert_pos]
     end
     0
   end
@@ -10086,17 +10104,14 @@ class Compiler
     pop_scope
     @in_main = 0
 
-    # Insert lambda and fiber functions before main
-    inserted = ""
+    # Accumulate lambda and fiber functions into deferred buffer
     if @lambda_funcs != ""
-      inserted = inserted + @lambda_funcs
+      @deferred_lambda << @lambda_funcs
     end
     if @fiber_funcs != ""
-      inserted = inserted + @fiber_funcs
+      @deferred_lambda << @fiber_funcs
     end
-    if inserted != ""
-      @out = @out[0, @lambda_insert_pos] + inserted + @out[@lambda_insert_pos, @out.length - @lambda_insert_pos]
-    end
+    0
   end
 
   # ---- Expression compiler ----
@@ -10872,14 +10887,14 @@ class Compiler
     end
 
     # Save/restore compiler state
-    saved_out = @out
+    saved_out = @out_lines
     saved_indent = @indent
     saved_in_fiber_body = @in_fiber_body
     saved_fiber_captures = @fiber_captures
     saved_fiber_capture_types = @fiber_capture_types
     saved_hp_names_len = @heap_promoted_names.length
     saved_hp_cells_len = @heap_promoted_cells.length
-    @out = ""
+    @out_lines = "".split(",")
     @indent = 1
     @in_fiber_body = 1
     @fiber_captures = free_vars
@@ -10919,11 +10934,12 @@ class Compiler
     end
     pop_scope
 
-    fbody = fbody + @out
+    fbody = fbody + @out_lines.join(10.chr) + 10.chr
     fbody = fbody + "}" + 10.chr
-    @fiber_funcs = @fiber_funcs + cap_typedef + fbody
+    @fiber_funcs << cap_typedef
+    @fiber_funcs << fbody
 
-    @out = saved_out
+    @out_lines = saved_out
     @indent = saved_indent
     @in_fiber_body = saved_in_fiber_body
     @fiber_captures = saved_fiber_captures
@@ -16919,11 +16935,11 @@ class Compiler
       bs = get_stmts(body)
       if bs.length > 0 && has_typed_caps == 1
         # Typed captures: compile body using regular compiler
-        save_out = @out
+        save_out = @out_lines
         save_indent = @indent
         save_hp_names_len = @heap_promoted_names.length
         save_hp_cells_len = @heap_promoted_cells.length
-        @out = ""
+        @out_lines = "".split(",")
         @indent = 1
 
         push_scope
@@ -16981,8 +16997,8 @@ class Compiler
         last_val = compile_expr(last)
 
         pop_scope
-        body_stmts = @out
-        @out = save_out
+        body_stmts = @out_lines.join(10.chr) + 10.chr
+        @out_lines = save_out
         @indent = save_indent
         # Restore heap promoted
         while @heap_promoted_names.length > save_hp_names_len
@@ -16993,21 +17009,25 @@ class Compiler
         end
 
         # Build lambda function with typed body
-        @lambda_funcs = @lambda_funcs + "static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) {\n"
+        @lambda_funcs <<"static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) {\n"
         if pname != ""
-          @lambda_funcs = @lambda_funcs + "  mrb_int lv_" + pname + " = sp_lam_to_int(arg);\n"
+          @lambda_funcs << "  mrb_int lv_"
+          @lambda_funcs << pname
+          @lambda_funcs << " = sp_lam_to_int(arg);\n"
         end
-        @lambda_funcs = @lambda_funcs + body_stmts + 10.chr
+        @lambda_funcs << body_stmts
+        @lambda_funcs << 10.chr
         bexpr = lam_box(last_val, last_type)
-        @lambda_funcs = @lambda_funcs + "  return " + bexpr + ";\n"
-        @lambda_funcs = @lambda_funcs + "}\n\n"
+        @lambda_funcs << "  return "
+        @lambda_funcs << bexpr
+        @lambda_funcs << ";\n}\n\n"
       elsif bs.length > 0
         # No typed captures: use sp_Val* lambda body compiler
-        save_out = @out
+        save_out = @out_lines
         save_params = @lambda_params
         save_captures = @lambda_captures
         save_cell_types = @lambda_capture_cell_types
-        @out = ""
+        @out_lines = "".split(",")
         @lambda_params = param_arr
         @lambda_captures = free_vars
         @lambda_capture_cell_types = cap_cell_types
@@ -17018,35 +17038,35 @@ class Compiler
           si = si + 1
         end
         bexpr = compile_lambda_body_expr(bs.last, param_arr, free_vars)
-        body_stmts = @out
-        @out = save_out
+        body_stmts = @out_lines.join(10.chr) + 10.chr
+        @out_lines = save_out
         @lambda_params = save_params
         @lambda_captures = save_captures
         @lambda_capture_cell_types = save_cell_types
 
         if body_stmts != ""
-          @lambda_funcs = @lambda_funcs + "static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) {\n"
+          @lambda_funcs <<"static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) {\n"
           if pname != ""
-            @lambda_funcs = @lambda_funcs + "  sp_Val *lv_" + pname + " = arg;\n"
+            @lambda_funcs <<"  sp_Val *lv_" + pname + " = arg;\n"
           end
-          @lambda_funcs = @lambda_funcs + "  (void)self;\n"
-          @lambda_funcs = @lambda_funcs + body_stmts + 10.chr
-          @lambda_funcs = @lambda_funcs + "  return " + bexpr + ";\n"
-          @lambda_funcs = @lambda_funcs + "}\n\n"
+          @lambda_funcs <<"  (void)self;\n"
+          @lambda_funcs <<body_stmts + 10.chr
+          @lambda_funcs <<"  return " + bexpr + ";\n"
+          @lambda_funcs <<"}\n\n"
         else
-          @lambda_funcs = @lambda_funcs + "static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) {\n"
+          @lambda_funcs <<"static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) {\n"
           if pname != ""
-            @lambda_funcs = @lambda_funcs + "  sp_Val *lv_" + pname + " = arg;\n"
+            @lambda_funcs <<"  sp_Val *lv_" + pname + " = arg;\n"
           end
-          @lambda_funcs = @lambda_funcs + "  (void)self;\n"
-          @lambda_funcs = @lambda_funcs + "  return " + bexpr + ";\n"
-          @lambda_funcs = @lambda_funcs + "}\n\n"
+          @lambda_funcs <<"  (void)self;\n"
+          @lambda_funcs <<"  return " + bexpr + ";\n"
+          @lambda_funcs <<"}\n\n"
         end
       else
-        @lambda_funcs = @lambda_funcs + "static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) { (void)self; (void)arg; return &sp_lam_nil_val; }\n\n"
+        @lambda_funcs <<"static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) { (void)self; (void)arg; return &sp_lam_nil_val; }\n\n"
       end
     else
-      @lambda_funcs = @lambda_funcs + "static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) { (void)self; (void)arg; return &sp_lam_nil_val; }\n\n"
+      @lambda_funcs <<"static sp_Val *" + fname + "(sp_Val *self, sp_Val *arg) { (void)self; (void)arg; return &sp_lam_nil_val; }\n\n"
     end
 
     # Build the closure creation expression
@@ -17130,8 +17150,8 @@ class Compiler
     fname = "_sp_proc_fn_" + @proc_counter.to_s
     bbody = @nd_body[blk]
     # Save current output, compile body into a separate buffer
-    save_out = @out
-    @out = ""
+    save_out = @out_lines
+    @out_lines = "".split(",")
     push_scope
     declare_var(bp, "int")
     bexpr = "0"
@@ -17146,11 +17166,11 @@ class Compiler
           if k == bs.length - 1
             if lt != "void"
               # Last statement: compile all previous, then get return expr
-              body_stmts = @out
-              @out = ""
+              body_stmts = @out_lines.join(10.chr) + 10.chr
+              @out_lines = "".split(",")
               bexpr = compile_expr(bs[k])
-              extra = @out
-              @out = ""
+              extra = @out_lines.join(10.chr) + 10.chr
+              @out_lines = "".split(",")
               body_stmts = body_stmts + extra
             else
               # Last is void (like puts): compile as statement, return 0
@@ -17162,13 +17182,13 @@ class Compiler
           k = k + 1
         end
         if body_stmts == ""
-          body_stmts = @out
-          @out = ""
+          body_stmts = @out_lines.join(10.chr) + 10.chr
+          @out_lines = "".split(",")
         end
       end
     end
     pop_scope
-    @out = save_out
+    @out_lines = save_out
     # Build function body
     if body_stmts != ""
       return "({ mrb_int " + fname + "(mrb_int lv_" + bp + ") { " + body_stmts.strip + " return " + bexpr + "; } sp_proc_new(" + fname + "); })"
@@ -19624,8 +19644,9 @@ compiler = Compiler.new
 compiler.read_text_ast(data)
 compiler.compile
 
+final = compiler.final_output
 if out_file != nil
-  File.write(out_file, compiler.out)
+  File.write(out_file, final)
 else
-  print compiler.out
+  print final
 end
