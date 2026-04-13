@@ -1831,6 +1831,24 @@ class Compiler
     if mname == "bit_length"
       return "int"
     end
+    if mname == "divmod"
+      return "tuple:int,int"
+    end
+    if mname == "minmax"
+      if recv >= 0
+        rt = infer_type(recv)
+        et = elem_type_of_array(rt)
+        return "tuple:" + et + "," + et
+      end
+      return "tuple:int,int"
+    end
+    if mname == "partition"
+      if recv >= 0
+        rt = infer_type(recv)
+        return "tuple:" + rt + "," + rt
+      end
+      return "tuple:int_array,int_array"
+    end
     if mname == "fdiv"
       return "float"
     end
@@ -9620,7 +9638,7 @@ class Compiler
                   end
                   if mname == "times" || mname == "upto" || mname == "downto"
                     types.push("int")
-                  elsif mname == "each" || mname == "each_pair" || mname == "map" || mname == "select" || mname == "filter" || mname == "reject" || mname == "find" || mname == "detect" || mname == "any?" || mname == "all?" || mname == "none?" || mname == "one?" || mname == "count" || mname == "min" || mname == "max" || mname == "sum" || mname == "min_by" || mname == "max_by" || mname == "sort_by" || mname == "flat_map" || mname == "filter_map" || mname == "cycle"
+                  elsif mname == "each" || mname == "each_pair" || mname == "map" || mname == "select" || mname == "filter" || mname == "reject" || mname == "find" || mname == "detect" || mname == "any?" || mname == "all?" || mname == "none?" || mname == "one?" || mname == "count" || mname == "min" || mname == "max" || mname == "sum" || mname == "min_by" || mname == "max_by" || mname == "sort_by" || mname == "flat_map" || mname == "filter_map" || mname == "cycle" || mname == "partition"
                     # Element iteration: infer block param from collection type
                     if recv_type == "str_array"
                       types.push("string")
@@ -12452,6 +12470,18 @@ class Compiler
     if mname == "fdiv"
       return "((mrb_float)(" + rc + ") / (mrb_float)" + compile_arg0(nid) + ")"
     end
+    if mname == "divmod"
+      tt = "tuple:int,int"
+      register_tuple_type(tt)
+      @needs_gc = 1
+      name = tuple_c_name(tt)
+      arg = compile_arg0(nid)
+      tmp = new_temp
+      emit("  " + name + " *" + tmp + " = (" + name + " *)sp_gc_alloc(sizeof(" + name + "), NULL, NULL);")
+      emit("  " + tmp + "->_0 = " + rc + " / " + arg + ";")
+      emit("  " + tmp + "->_1 = sp_imod(" + rc + ", " + arg + ");")
+      return tmp
+    end
     if mname == "to_i"
       return rc
     end
@@ -12724,6 +12754,74 @@ class Compiler
     end
     if (mname == "sum") && @nd_block[nid] >= 0
       return compile_array_sum_block(nid, rc, recv_type)
+    end
+    if mname == "partition" && @nd_block[nid] >= 0
+      pfx = array_c_prefix(recv_type)
+      tt = "tuple:" + recv_type + "," + recv_type
+      register_tuple_type(tt)
+      @needs_gc = 1
+      name = tuple_c_name(tt)
+      bp1 = get_block_param(nid, 0)
+      if bp1 == ""
+        bp1 = "_x"
+      end
+      et = elem_type_of_array(recv_type)
+      declare_var(bp1, et)
+      tmp_t = new_temp
+      tmp_f = new_temp
+      tmp_res = new_temp
+      itmp = new_temp
+      emit("  " + c_type(recv_type) + " " + tmp_t + " = sp_" + pfx + "_new();")
+      emit("  " + c_type(recv_type) + " " + tmp_f + " = sp_" + pfx + "_new();")
+      emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_" + pfx + "_length(" + rc + "); " + itmp + "++) {")
+      emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + itmp + ");")
+      blk = @nd_block[nid]
+      bexpr = "0"
+      if @nd_body[blk] >= 0
+        bs = get_stmts(@nd_body[blk])
+        if bs.length > 0
+          k = 0
+          while k < bs.length - 1
+            compile_stmt(bs[k])
+            k = k + 1
+          end
+          bexpr = compile_expr(bs.last)
+        end
+      end
+      emit("    if (" + bexpr + ") sp_" + pfx + "_push(" + tmp_t + ", lv_" + bp1 + "); else sp_" + pfx + "_push(" + tmp_f + ", lv_" + bp1 + ");")
+      emit("  }")
+      emit("  " + name + " *" + tmp_res + " = (" + name + " *)sp_gc_alloc(sizeof(" + name + "), NULL, NULL);")
+      emit("  " + tmp_res + "->_0 = " + tmp_t + ";")
+      emit("  " + tmp_res + "->_1 = " + tmp_f + ";")
+      return tmp_res
+    end
+    if mname == "minmax"
+      pfx = array_c_prefix(recv_type)
+      et = elem_type_of_array(recv_type)
+      tt = "tuple:" + et + "," + et
+      register_tuple_type(tt)
+      @needs_gc = 1
+      name = tuple_c_name(tt)
+      tmp = new_temp
+      tmp_min = new_temp
+      tmp_max = new_temp
+      itmp = new_temp
+      emit("  " + c_type(et) + " " + tmp_min + " = sp_" + pfx + "_get(" + rc + ", 0);")
+      emit("  " + c_type(et) + " " + tmp_max + " = " + tmp_min + ";")
+      emit("  for (mrb_int " + itmp + " = 1; " + itmp + " < sp_" + pfx + "_length(" + rc + "); " + itmp + "++) {")
+      emit("    " + c_type(et) + " _v = sp_" + pfx + "_get(" + rc + ", " + itmp + ");")
+      if et == "string"
+        emit("    if (strcmp(_v, " + tmp_min + ") < 0) " + tmp_min + " = _v;")
+        emit("    if (strcmp(_v, " + tmp_max + ") > 0) " + tmp_max + " = _v;")
+      else
+        emit("    if (_v < " + tmp_min + ") " + tmp_min + " = _v;")
+        emit("    if (_v > " + tmp_max + ") " + tmp_max + " = _v;")
+      end
+      emit("  }")
+      emit("  " + name + " *" + tmp + " = (" + name + " *)sp_gc_alloc(sizeof(" + name + "), NULL, NULL);")
+      emit("  " + tmp + "->_0 = " + tmp_min + ";")
+      emit("  " + tmp + "->_1 = " + tmp_max + ";")
+      return tmp
     end
     if (mname == "min" || mname == "max") && @nd_block[nid] >= 0
       return compile_array_min_max_block(nid, rc, recv_type, mname)
