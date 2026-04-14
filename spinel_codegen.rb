@@ -2691,6 +2691,9 @@ class Compiler
     if t == "mutable_str"
       return 1
     end
+    if t == "string"
+      return 1
+    end
     if t == "fiber" || t == "bigint"
       return 1
     end
@@ -2887,7 +2890,7 @@ class Compiler
       return "FALSE"
     end
     if t == "string"
-      return "\"\""
+      return "(\"\\xff\" + 1)"
     end
     if t == "mutable_str"
       return "NULL"
@@ -9898,7 +9901,7 @@ class Compiler
     emit_raw("static sp_Argv sp_argv;")
     emit_raw("")
     emit_raw("int main(int argc,char**argv){")
-    emit_raw("  sp_argv.data=(const char**)(argv+1);sp_argv.len=argc-1;")
+    emit_raw("  sp_argv.len=argc-1;sp_argv.data=(const char**)malloc(sizeof(const char*)*(argc>1?argc-1:1));{int _i;for(_i=0;_i<sp_argv.len;_i++)sp_argv.data[_i]=sp_str_dup_external(argv[_i+1]);}")
     if @needs_regexp == 1
       emit_raw("  sp_re_init();")
     end
@@ -10070,7 +10073,7 @@ class Compiler
     while j < lnames.length
       ctp = c_type(ltypes[j])
       if type_is_pointer(ltypes[j]) == 1
-        emit("  " + vol + ctp + "lv_" + lnames[j] + " = NULL;")
+        emit("  " + vol + ctp + "lv_" + lnames[j] + " = " + c_default_val(ltypes[j]) + ";")
         emit("  SP_GC_ROOT(lv_" + lnames[j] + ");")
       else
         emit("  " + vol + ctp + " lv_" + lnames[j] + " = " + c_default_val(ltypes[j]) + ";")
@@ -10548,7 +10551,7 @@ class Compiler
     @needs_string_helpers = 1
     parts = parse_id_list(@nd_parts[nid])
     if parts.length == 0
-      return "\"\""
+      return "(\"\\xff\" + 1)"
     end
     fmt = ""
     arg_exprs = "".split(",")
@@ -13558,13 +13561,13 @@ class Compiler
       # ENV
       if rcname == "ENV"
         if mname == "[]"
-          return "getenv(" + compile_arg0(nid) + ")"
+          return "sp_str_dup_external(getenv(" + compile_arg0(nid) + "))"
         end
       end
       # Dir
       if rcname == "Dir"
         if mname == "home"
-          return "getenv(\"HOME\")"
+          return "sp_str_dup_external(getenv(\"HOME\"))"
         end
       end
       # Module class method dispatch
