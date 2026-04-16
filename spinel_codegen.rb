@@ -158,6 +158,7 @@ class Compiler
     @needs_str_str_hash = 0
     @needs_sym_int_hash = 0
     @needs_sym_str_hash = 0
+    @needs_sym_intern = 0
     @needs_string_helpers = 0
     @needs_setjmp = 0
     @needs_file_io = 0
@@ -6134,6 +6135,14 @@ class Compiler
         @needs_str_array = 1
         @needs_gc = 1
       end
+      if mname == "to_sym" || mname == "intern"
+        if @nd_receiver[nid] >= 0
+          rt = infer_type(@nd_receiver[nid])
+          if rt == "string"
+            @needs_sym_intern = 1
+          end
+        end
+      end
       # Methods that need string helpers only when receiver is string
       if mname == "+" || mname == "*" || mname == "reverse"
         if @nd_receiver[nid] >= 0
@@ -7684,11 +7693,9 @@ class Compiler
   # Symbol type Phase 2, Step 2: emit the intern table and helpers.
   # SymbolNode now compiles to sp_sym values that index into sp_sym_names.
   def emit_sym_runtime
-    emit_raw("/* sp_sym intern table (sp_sym typedef is in sp_runtime.h) */")
-    emit_raw("#define SP_SYM_COUNT " + @sym_names.length.to_s)
-    if @sym_names.length == 0
-      emit_raw("static const char *const sp_sym_names[1] __attribute__((unused)) = {0};")
-    else
+    if @sym_names.length > 0
+      emit_raw("/* sp_sym intern table */")
+      emit_raw("#define SP_SYM_COUNT " + @sym_names.length.to_s)
       line = "static const char *const sp_sym_names[" + @sym_names.length.to_s + "] = {"
       i = 0
       while i < @sym_names.length
@@ -7700,27 +7707,36 @@ class Compiler
       end
       line = line + "};"
       emit_raw(line)
-    end
-    # Dynamic intern pool: symbols created via String#to_sym at runtime.
-    # IDs beyond SP_SYM_COUNT index into this pool.
-    emit_raw("static const char **sp_sym_dyn_names = NULL;")
-    emit_raw("static mrb_int sp_sym_dyn_count = 0;")
-    emit_raw("static mrb_int sp_sym_dyn_cap = 0;")
-    emit_raw("static sp_sym sp_sym_intern(const char *s) __attribute__((unused));")
-    emit_raw("static sp_sym sp_sym_intern(const char *s){mrb_int i;for(i=0;i<SP_SYM_COUNT;i++){if(strcmp(sp_sym_names[i],s)==0)return (sp_sym)i;}for(i=0;i<sp_sym_dyn_count;i++){if(strcmp(sp_sym_dyn_names[i],s)==0)return (sp_sym)(SP_SYM_COUNT+i);}if(sp_sym_dyn_count>=sp_sym_dyn_cap){sp_sym_dyn_cap=sp_sym_dyn_cap?sp_sym_dyn_cap*2:8;sp_sym_dyn_names=(const char**)realloc(sp_sym_dyn_names,sizeof(char*)*sp_sym_dyn_cap);}{size_t sl=strlen(s);char*dup=(char*)malloc(sl+1);memcpy(dup,s,sl+1);sp_sym_dyn_names[sp_sym_dyn_count]=dup;}return (sp_sym)(SP_SYM_COUNT+sp_sym_dyn_count++);}")
-    emit_raw("static const char *sp_sym_to_s(sp_sym id) __attribute__((unused));")
-    emit_raw("static const char *sp_sym_to_s(sp_sym id){if(id<0)return \"\";if(id<SP_SYM_COUNT)return sp_sym_names[id];mrb_int idx=(mrb_int)id-SP_SYM_COUNT;if(idx>=sp_sym_dyn_count)return \"\";return sp_sym_dyn_names[idx];}")
-    # Sort comparator for sym arrays: lexical by symbol name.
-    emit_raw("static int sp_sym_sort_cmp(const void*a,const void*b){return strcmp(sp_sym_to_s(*(const sp_sym*)a),sp_sym_to_s(*(const sp_sym*)b));}")
-    emit_raw("static void sp_sym_array_sort(sp_IntArray*a){qsort(a->data+a->start,a->len,sizeof(mrb_int),sp_sym_sort_cmp);}")
-    # Emit SPS_<name> defines for symbols that form valid C identifiers.
-    i = 0
-    while i < @sym_names.length
-      nm = @sym_names[i]
-      if sym_is_c_ident(nm) == 1
-        emit_raw("#define SPS_" + nm + " ((sp_sym)" + i.to_s + ")")
+      if @needs_sym_intern == 1
+        # Dynamic intern pool: String#to_sym at runtime.
+        emit_raw("static const char **sp_sym_dyn_names = NULL;")
+        emit_raw("static mrb_int sp_sym_dyn_count = 0;")
+        emit_raw("static mrb_int sp_sym_dyn_cap = 0;")
+        emit_raw("static sp_sym sp_sym_intern(const char *s) __attribute__((unused));")
+        emit_raw("static sp_sym sp_sym_intern(const char *s){mrb_int i;for(i=0;i<SP_SYM_COUNT;i++){if(strcmp(sp_sym_names[i],s)==0)return (sp_sym)i;}for(i=0;i<sp_sym_dyn_count;i++){if(strcmp(sp_sym_dyn_names[i],s)==0)return (sp_sym)(SP_SYM_COUNT+i);}if(sp_sym_dyn_count>=sp_sym_dyn_cap){sp_sym_dyn_cap=sp_sym_dyn_cap?sp_sym_dyn_cap*2:8;sp_sym_dyn_names=(const char**)realloc(sp_sym_dyn_names,sizeof(char*)*sp_sym_dyn_cap);}{size_t sl=strlen(s);char*dup=(char*)malloc(sl+1);memcpy(dup,s,sl+1);sp_sym_dyn_names[sp_sym_dyn_count]=dup;}return (sp_sym)(SP_SYM_COUNT+sp_sym_dyn_count++);}")
+        emit_raw("static const char *sp_sym_to_s(sp_sym id) __attribute__((unused));")
+        emit_raw("static const char *sp_sym_to_s(sp_sym id){if(id<0)return \"\";if(id<SP_SYM_COUNT)return sp_sym_names[id];mrb_int idx=(mrb_int)id-SP_SYM_COUNT;if(idx>=sp_sym_dyn_count)return \"\";return sp_sym_dyn_names[idx];}")
+      else
+        emit_raw("static const char *sp_sym_to_s(sp_sym id) __attribute__((unused));")
+        emit_raw("static const char *sp_sym_to_s(sp_sym id){if(id>=0&&id<SP_SYM_COUNT)return sp_sym_names[id];return \"\";}")
       end
-      i = i + 1
+      # Emit SPS_<name> defines for symbols that form valid C identifiers.
+      i = 0
+      while i < @sym_names.length
+        nm = @sym_names[i]
+        if sym_is_c_ident(nm) == 1
+          emit_raw("#define SPS_" + nm + " ((sp_sym)" + i.to_s + ")")
+        end
+        i = i + 1
+      end
+      # Sort comparator for sym arrays: lexical by symbol name.
+      emit_raw("static int sp_sym_sort_cmp(const void*a,const void*b) __attribute__((unused));")
+      emit_raw("static int sp_sym_sort_cmp(const void*a,const void*b){return strcmp(sp_sym_to_s(*(const sp_sym*)a),sp_sym_to_s(*(const sp_sym*)b));}")
+      emit_raw("static void sp_sym_array_sort(sp_IntArray*a) __attribute__((unused));")
+      emit_raw("static void sp_sym_array_sort(sp_IntArray*a){qsort(a->data+a->start,a->len,sizeof(mrb_int),sp_sym_sort_cmp);}")
+    else
+      # No symbols used at all — provide stub for sp_runtime.h's SP_TAG_SYM
+      emit_raw("static const char *sp_sym_to_s(sp_sym id){(void)id;return \"\";}")
     end
     emit_raw("")
     if @needs_sym_int_hash == 1
