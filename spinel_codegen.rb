@@ -135,6 +135,7 @@ class Compiler
     @in_main = 0
     @in_loop = 0
     @hoisted_strlen_var = ""
+    @hoisted_strlen_recv = ""
     @in_yield_method = 0
     @in_gc_scope = 0
 
@@ -12810,6 +12811,10 @@ class Compiler
     end
     if mname == "[]"
       args_id = @nd_arguments[nid]
+      # Use length-aware variant if strlen of this receiver is hoisted
+      use_len = (@hoisted_strlen_var != "" && @hoisted_strlen_recv == rc)
+      fn = use_len ? "sp_str_sub_range_len" : "sp_str_sub_range"
+      lprefix = use_len ? (rc + ", " + @hoisted_strlen_var) : rc
       if args_id >= 0
         a = get_args(args_id)
         if a.length >= 1
@@ -12817,15 +12822,15 @@ class Compiler
             # s[1..3]
             left = compile_expr(@nd_left[a[0]])
             right = compile_expr(@nd_right[a[0]])
-            return "sp_str_sub_range(" + rc + ", " + left + ", " + right + " - " + left + " + 1)"
+            return fn + "(" + lprefix + ", " + left + ", " + right + " - " + left + " + 1)"
           end
           if a.length >= 2
             # s[0, 2]
-            return "sp_str_sub_range(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+            return fn + "(" + lprefix + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
           end
         end
       end
-      return "sp_str_sub_range(" + rc + ", " + compile_arg0(nid) + ", 1)"
+      return fn + "(" + lprefix + ", " + compile_arg0(nid) + ", 1)"
     end
     if mname == "reverse"
       @needs_string_helpers = 1
@@ -15663,12 +15668,16 @@ class Compiler
     tmp = new_temp
     rc = compile_expr(recv)
     emit("  mrb_int " + tmp + " = (mrb_int)strlen(" + rc + ");")
+    @hoisted_strlen_recv = rc
     tmp
   end
 
   def compile_while_stmt(nid)
     old = @in_loop
     @in_loop = 1
+    # Save outer hoist state to restore on exit (support nested loops)
+    saved_var = @hoisted_strlen_var
+    saved_recv = @hoisted_strlen_recv
     # Try to hoist strlen from condition
     len_tmp = try_hoist_strlen(@nd_predicate[nid])
     if len_tmp != ""
@@ -15680,9 +15689,8 @@ class Compiler
     compile_stmts_body(@nd_body[nid])
     @indent = @indent - 1
     emit("  }")
-    if len_tmp != ""
-      @hoisted_strlen_var = ""
-    end
+    @hoisted_strlen_var = saved_var
+    @hoisted_strlen_recv = saved_recv
     @in_loop = old
   end
 
