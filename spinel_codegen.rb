@@ -8758,6 +8758,23 @@ class Compiler
     end
   end
 
+  # Return "static inline " for short methods so gcc has permission
+  # to inline them, or "static " otherwise.  Body of ≤ 3 statements
+  # and no yield is considered short.
+  def method_linkage(body_id, has_yield)
+    if has_yield == 1
+      return "static "
+    end
+    if body_id < 0
+      return "static inline "
+    end
+    stmts = get_stmts(body_id)
+    if stmts.length <= 3
+      return "static inline "
+    end
+    "static "
+  end
+
   def emit_tuple_structs
     # Tuple structs are now inserted at end of generate_code
   end
@@ -8955,7 +8972,7 @@ class Compiler
       if @meth_has_yield[i] == 1
         yp = yield_params_suffix(i)
       end
-      emit_raw("static " + c_type(@meth_return_types[i]) + " sp_" + sanitize_name(@meth_names[i]) + "(" + method_params_decl(i) + yp + ");")
+      emit_raw(method_linkage(@meth_body_ids[i], @meth_has_yield[i]) + c_type(@meth_return_types[i]) + " sp_" + sanitize_name(@meth_names[i]) + "(" + method_params_decl(i) + yp + ");")
       i = i + 1
     end
     # Class methods
@@ -8992,7 +9009,9 @@ class Compiler
           if @cls_is_value_type[i] == 1
             sp = " self"
           end
-          emit_raw("static " + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mnames[j]) + "(sp_" + cname + sp + method_with_self_params(j, all_params, all_ptypes) + yp + ");")
+          bids = @cls_meth_bodies[i].split(";")
+          bid_j = j < bids.length ? bids[j].to_i : -1
+          emit_raw(method_linkage(bid_j, cls_method_has_yield(i, j)) + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mnames[j]) + "(sp_" + cname + sp + method_with_self_params(j, all_params, all_ptypes) + yp + ");")
         end
         j = j + 1
       end
@@ -9535,10 +9554,11 @@ class Compiler
     if @in_yield_method == 1
       yp = yield_params_suffix_cls(ci, midx)
     end
+    cm_linkage = method_linkage(bid, @in_yield_method)
     if @cls_is_value_type[ci] == 1
-      emit_raw("static " + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mname) + "(sp_" + cname + " self" + build_params_str(pnames, ptypes) + yp + ") {")
+      emit_raw(cm_linkage + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mname) + "(sp_" + cname + " self" + build_params_str(pnames, ptypes) + yp + ") {")
     else
-      emit_raw("static " + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mname) + "(sp_" + cname + " *self" + build_params_str(pnames, ptypes) + yp + ") {")
+      emit_raw(cm_linkage + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mname) + "(sp_" + cname + " *self" + build_params_str(pnames, ptypes) + yp + ") {")
     end
 
     push_scope
@@ -9710,11 +9730,11 @@ class Compiler
       else
         pdecl = self_ctype + " self"
       end
-      emit_raw("static " + c_type(rt) + " sp_" + sanitize_name(mfullname) + "(" + pdecl + ") {")
+      emit_raw(method_linkage(@meth_body_ids[mi], @meth_has_yield[mi]) + c_type(rt) + " sp_" + sanitize_name(mfullname) + "(" + pdecl + ") {")
       push_scope
       declare_var("__self_type", oc_type)
     else
-      emit_raw("static " + c_type(@meth_return_types[mi]) + " sp_" + sanitize_name(mfullname) + "(" + method_params_decl(mi) + yp + ") {")
+      emit_raw(method_linkage(@meth_body_ids[mi], @meth_has_yield[mi]) + c_type(@meth_return_types[mi]) + " sp_" + sanitize_name(mfullname) + "(" + method_params_decl(mi) + yp + ") {")
       push_scope
     end
 
