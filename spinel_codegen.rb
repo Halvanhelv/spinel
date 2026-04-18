@@ -8759,9 +8759,13 @@ class Compiler
   end
 
   # Return "static inline " for short methods so gcc has permission
-  # to inline them, or "static " otherwise.  Body of ≤ 3 statements
-  # and no yield is considered short.
+  # to inline them, or "static " otherwise.  Body of ≤ 3 statements,
+  # no yield, and not self-recursive are considered inlineable.
   def method_linkage(body_id, has_yield)
+    method_linkage_named(body_id, has_yield, "")
+  end
+
+  def method_linkage_named(body_id, has_yield, mname)
     if has_yield == 1
       return "static "
     end
@@ -8769,10 +8773,61 @@ class Compiler
       return "static inline "
     end
     stmts = get_stmts(body_id)
-    if stmts.length <= 3
-      return "static inline "
+    if stmts.length > 3
+      return "static "
     end
-    "static "
+    # Avoid inlining self-recursive methods: static inline on a recursive
+    # function can blow up code size and hurt performance (gcc tries
+    # to inline harder than it should).
+    if mname != "" && node_calls_name?(body_id, mname) == 1
+      return "static "
+    end
+    "static inline "
+  end
+
+  # Return 1 if any CallNode in the subtree invokes mname.
+  def node_calls_name?(nid, mname)
+    if nid < 0
+      return 0
+    end
+    if @nd_type[nid] == "CallNode" && @nd_name[nid] == mname
+      return 1
+    end
+    if @nd_receiver[nid] >= 0
+      if node_calls_name?(@nd_receiver[nid], mname) == 1
+        return 1
+      end
+    end
+    args_id = @nd_arguments[nid]
+    if args_id >= 0
+      arr = get_args(args_id)
+      k = 0
+      while k < arr.length
+        if node_calls_name?(arr[k], mname) == 1
+          return 1
+        end
+        k = k + 1
+      end
+    end
+    if @nd_body[nid] >= 0
+      if node_calls_name?(@nd_body[nid], mname) == 1
+        return 1
+      end
+    end
+    stmts = parse_id_list(@nd_stmts[nid])
+    k = 0
+    while k < stmts.length
+      if node_calls_name?(stmts[k], mname) == 1
+        return 1
+      end
+      k = k + 1
+    end
+    if @nd_subsequent[nid] >= 0
+      if node_calls_name?(@nd_subsequent[nid], mname) == 1
+        return 1
+      end
+    end
+    0
   end
 
   def emit_tuple_structs
@@ -8972,7 +9027,7 @@ class Compiler
       if @meth_has_yield[i] == 1
         yp = yield_params_suffix(i)
       end
-      emit_raw(method_linkage(@meth_body_ids[i], @meth_has_yield[i]) + c_type(@meth_return_types[i]) + " sp_" + sanitize_name(@meth_names[i]) + "(" + method_params_decl(i) + yp + ");")
+      emit_raw(method_linkage_named(@meth_body_ids[i], @meth_has_yield[i], @meth_names[i]) + c_type(@meth_return_types[i]) + " sp_" + sanitize_name(@meth_names[i]) + "(" + method_params_decl(i) + yp + ");")
       i = i + 1
     end
     # Class methods
@@ -9011,7 +9066,7 @@ class Compiler
           end
           bids = @cls_meth_bodies[i].split(";")
           bid_j = j < bids.length ? bids[j].to_i : -1
-          emit_raw(method_linkage(bid_j, cls_method_has_yield(i, j)) + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mnames[j]) + "(sp_" + cname + sp + method_with_self_params(j, all_params, all_ptypes) + yp + ");")
+          emit_raw(method_linkage_named(bid_j, cls_method_has_yield(i, j), mnames[j]) + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mnames[j]) + "(sp_" + cname + sp + method_with_self_params(j, all_params, all_ptypes) + yp + ");")
         end
         j = j + 1
       end
@@ -9554,7 +9609,7 @@ class Compiler
     if @in_yield_method == 1
       yp = yield_params_suffix_cls(ci, midx)
     end
-    cm_linkage = method_linkage(bid, @in_yield_method)
+    cm_linkage = method_linkage_named(bid, @in_yield_method, mname)
     if @cls_is_value_type[ci] == 1
       emit_raw(cm_linkage + c_type(rt) + " sp_" + cname + "_" + sanitize_name(mname) + "(sp_" + cname + " self" + build_params_str(pnames, ptypes) + yp + ") {")
     else
@@ -9730,11 +9785,11 @@ class Compiler
       else
         pdecl = self_ctype + " self"
       end
-      emit_raw(method_linkage(@meth_body_ids[mi], @meth_has_yield[mi]) + c_type(rt) + " sp_" + sanitize_name(mfullname) + "(" + pdecl + ") {")
+      emit_raw(method_linkage_named(@meth_body_ids[mi], @meth_has_yield[mi], mfullname) + c_type(rt) + " sp_" + sanitize_name(mfullname) + "(" + pdecl + ") {")
       push_scope
       declare_var("__self_type", oc_type)
     else
-      emit_raw(method_linkage(@meth_body_ids[mi], @meth_has_yield[mi]) + c_type(@meth_return_types[mi]) + " sp_" + sanitize_name(mfullname) + "(" + method_params_decl(mi) + yp + ") {")
+      emit_raw(method_linkage_named(@meth_body_ids[mi], @meth_has_yield[mi], mfullname) + c_type(@meth_return_types[mi]) + " sp_" + sanitize_name(mfullname) + "(" + method_params_decl(mi) + yp + ") {")
       push_scope
     end
 
