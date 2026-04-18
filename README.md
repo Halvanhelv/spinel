@@ -78,7 +78,7 @@ gen2.c == gen3.c   (bootstrap loop closed)
 
 ## Benchmarks
 
-75 tests pass. 53/54 benchmarks pass (1 pre-existing failure).
+75 tests pass. 53 benchmarks pass.
 Geometric mean: **~49x faster** than CRuby across 50 benchmarks.
 
 ### Computation
@@ -229,7 +229,7 @@ lib/sp_runtime.h      Runtime library header (581 lines)
 lib/sp_bigint.c       Arbitrary precision integers (5,394 lines)
 lib/regexp/           Built-in regexp engine (1,626 lines)
 test/                 75 feature tests
-benchmark/            54 benchmarks
+benchmark/            53 benchmarks
 Makefile              Build automation
 ```
 
@@ -258,7 +258,7 @@ by inlining the referenced file.
 ```bash
 make              # build parser + regexp library + bootstrap compiler
 make test         # run 75 feature tests (requires bootstrap)
-make bench        # run 54 benchmarks (requires bootstrap)
+make bench        # run 53 benchmarks (requires bootstrap)
 make bootstrap    # rebuild compiler from source
 sudo make install # install to /usr/local (spinel in PATH)
 make clean        # remove build artifacts
