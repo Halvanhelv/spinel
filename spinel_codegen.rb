@@ -13506,6 +13506,9 @@ class Compiler
     # Array methods
     if recv_type == "int_array" || recv_type == "sym_array"
       if mname == "length"
+        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
+          return @hoisted_strlen_var
+        end
         return "sp_IntArray_length(" + rc + ")"
       end
       if mname == "[]"
@@ -13704,6 +13707,9 @@ class Compiler
     # Float array methods
     if recv_type == "float_array"
       if mname == "length"
+        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
+          return @hoisted_strlen_var
+        end
         return "sp_FloatArray_length(" + rc + ")"
       end
       if mname == "[]"
@@ -13726,6 +13732,9 @@ class Compiler
       elem_type = ptr_array_elem_type(recv_type)
       ct = c_type(elem_type)
       if mname == "length" || mname == "size"
+        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
+          return @hoisted_strlen_var
+        end
         return "sp_PtrArray_length(" + rc + ")"
       end
       if mname == "[]"
@@ -13740,6 +13749,9 @@ class Compiler
     end
     if recv_type == "str_array"
       if mname == "length"
+        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
+          return @hoisted_strlen_var
+        end
         return "sp_StrArray_length(" + rc + ")"
       end
       if mname == "[]"
@@ -13862,6 +13874,9 @@ class Compiler
         return "sp_SymIntHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
+          return @hoisted_strlen_var
+        end
         return "sp_SymIntHash_length(" + rc + ")"
       end
       if mname == "empty?"
@@ -13905,6 +13920,9 @@ class Compiler
         return "sp_SymStrHash_has_key(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
+          return @hoisted_strlen_var
+        end
         return "sp_SymStrHash_length(" + rc + ")"
       end
       if mname == "empty?"
@@ -13934,6 +13952,9 @@ class Compiler
         return "sp_StrIntHash_has_key(" + rc + ", " + compile_str_arg0(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
+          return @hoisted_strlen_var
+        end
         return "sp_StrIntHash_length(" + rc + ")"
       end
       if mname == "empty?"
@@ -14020,6 +14041,9 @@ class Compiler
         return "sp_StrStrHash_has_key(" + rc + ", " + compile_str_arg0(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
+        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
+          return @hoisted_strlen_var
+        end
         return "sp_StrStrHash_length(" + rc + ")"
       end
       if mname == "empty?"
@@ -15684,9 +15708,141 @@ class Compiler
     emit("  }")
   end
 
-  # Check if while condition uses strlen and hoist if safe
+  # C expression for computing length of a value of the given type.
+  # Returns "" if the type doesn't have a hoist-friendly length op.
+  def length_c_expr(rt, rc)
+    if rt == "string"
+      return "(mrb_int)strlen(" + rc + ")"
+    end
+    if rt == "int_array" || rt == "sym_array"
+      return "sp_IntArray_length(" + rc + ")"
+    end
+    if rt == "str_array"
+      return "sp_StrArray_length(" + rc + ")"
+    end
+    if rt == "float_array"
+      return "sp_FloatArray_length(" + rc + ")"
+    end
+    if is_ptr_array_type(rt) == 1
+      return "sp_PtrArray_length(" + rc + ")"
+    end
+    if rt == "str_int_hash"
+      return "sp_StrIntHash_length(" + rc + ")"
+    end
+    if rt == "str_str_hash"
+      return "sp_StrStrHash_length(" + rc + ")"
+    end
+    if rt == "sym_int_hash"
+      return "sp_SymIntHash_length(" + rc + ")"
+    end
+    if rt == "sym_str_hash"
+      return "sp_SymStrHash_length(" + rc + ")"
+    end
+    ""
+  end
+
+  # Scan a while-body for any mutation of a local variable (by name).
+  # Returns 1 if any mutating method call is found on the receiver
+  # (push/pop/shift/unshift/<< / []= / delete / clear / insert /
+  # replace / concat).  Used to block unsafe hoisting.
+  def body_mutates_var?(body_nid, vname)
+    if body_nid < 0
+      return 0
+    end
+    t = @nd_type[body_nid]
+    if t == "CallNode"
+      mn = @nd_name[body_nid]
+      recv = @nd_receiver[body_nid]
+      if recv >= 0 && @nd_type[recv] == "LocalVariableReadNode" && @nd_name[recv] == vname
+        if mn == "push" || mn == "pop" || mn == "shift" || mn == "unshift" ||
+           mn == "<<" || mn == "[]=" || mn == "delete" || mn == "clear" ||
+           mn == "insert" || mn == "replace" || mn == "concat" ||
+           mn == "sort!" || mn == "reverse!" || mn == "compact!" || mn == "uniq!" ||
+           mn == "merge!" || mn == "store" || mn == "update" || mn == "fill"
+          return 1
+        end
+      end
+    end
+    if t == "LocalVariableWriteNode" && @nd_name[body_nid] == vname
+      return 1
+    end
+    # Recurse into children
+    if @nd_body[body_nid] >= 0
+      if body_mutates_var?(@nd_body[body_nid], vname) == 1
+        return 1
+      end
+    end
+    stmts = parse_id_list(@nd_stmts[body_nid])
+    k = 0
+    while k < stmts.length
+      if body_mutates_var?(stmts[k], vname) == 1
+        return 1
+      end
+      k = k + 1
+    end
+    if @nd_subsequent[body_nid] >= 0
+      if body_mutates_var?(@nd_subsequent[body_nid], vname) == 1
+        return 1
+      end
+    end
+    if @nd_receiver[body_nid] >= 0
+      if body_mutates_var?(@nd_receiver[body_nid], vname) == 1
+        return 1
+      end
+    end
+    args_id = @nd_arguments[body_nid]
+    if args_id >= 0
+      arr = get_args(args_id)
+      k = 0
+      while k < arr.length
+        if body_mutates_var?(arr[k], vname) == 1
+          return 1
+        end
+        k = k + 1
+      end
+    end
+    0
+  end
+
+  # Return the local variable name on which .length/.size is called
+  # inside a comparison predicate (for mutation scanning).  Empty if
+  # the predicate doesn't match the hoist pattern.
+  def hoist_receiver_var(pred_nid)
+    if @nd_type[pred_nid] != "CallNode"
+      return ""
+    end
+    op = @nd_name[pred_nid]
+    if op != "<" && op != "<=" && op != ">" && op != ">="
+      return ""
+    end
+    len_nid = -1
+    args_id = @nd_arguments[pred_nid]
+    if args_id >= 0
+      a = get_args(args_id)
+      if a.length > 0
+        len_nid = a[0]
+      end
+    end
+    if op == ">" || op == ">="
+      len_nid = @nd_receiver[pred_nid]
+    end
+    if len_nid < 0 || @nd_type[len_nid] != "CallNode"
+      return ""
+    end
+    mn = @nd_name[len_nid]
+    if mn != "length" && mn != "size"
+      return ""
+    end
+    recv = @nd_receiver[len_nid]
+    if recv < 0 || @nd_type[recv] != "LocalVariableReadNode"
+      return ""
+    end
+    @nd_name[recv]
+  end
+
+  # Check if while condition uses .length/.size and hoist if safe.
+  # Supports string, arrays, and hashes.
   def try_hoist_strlen(pred_nid)
-    # Pattern: i < str.length  →  CallNode(<), recv=i, arg=CallNode(length/size)
     if @nd_type[pred_nid] != "CallNode"
       return ""
     end
@@ -15722,13 +15878,29 @@ class Compiler
       return ""
     end
     rt = infer_type(recv)
-    if rt != "string"
+    # Must be a local variable so we can check for mutations in the body
+    if @nd_type[recv] != "LocalVariableReadNode"
+      # string literal or ivar: be conservative, only hoist string (already safe)
+      if rt != "string"
+        return ""
+      end
+      tmp = new_temp
+      rc = compile_expr(recv)
+      emit("  mrb_int " + tmp + " = (mrb_int)strlen(" + rc + ");")
+      @hoisted_strlen_recv = rc
+      return tmp
+    end
+    len_c = length_c_expr(rt, "")
+    if len_c == ""
       return ""
     end
-    # Hoist: emit len variable before the loop
+    # Check that the loop body doesn't mutate this variable
+    vname = @nd_name[recv]
+    # (The pred_nid is the while predicate; body scan happens below via caller
+    #  passing @while_body_nid.  Here we only check if type is hoistable.)
     tmp = new_temp
     rc = compile_expr(recv)
-    emit("  mrb_int " + tmp + " = (mrb_int)strlen(" + rc + ");")
+    emit("  mrb_int " + tmp + " = " + length_c_expr(rt, rc) + ";")
     @hoisted_strlen_recv = rc
     tmp
   end
@@ -15739,10 +15911,21 @@ class Compiler
     # Save outer hoist state to restore on exit (support nested loops)
     saved_var = @hoisted_strlen_var
     saved_recv = @hoisted_strlen_recv
-    # Try to hoist strlen from condition
-    len_tmp = try_hoist_strlen(@nd_predicate[nid])
-    if len_tmp != ""
-      @hoisted_strlen_var = len_tmp
+    # Try to hoist length from condition (string/array/hash).  Skip if the
+    # loop body mutates the receiver variable (push/pop/<< etc.).
+    len_tmp = ""
+    can_hoist = 1
+    hoist_target = hoist_receiver_var(@nd_predicate[nid])
+    if hoist_target != ""
+      if body_mutates_var?(@nd_body[nid], hoist_target) == 1
+        can_hoist = 0
+      end
+    end
+    if can_hoist == 1
+      len_tmp = try_hoist_strlen(@nd_predicate[nid])
+      if len_tmp != ""
+        @hoisted_strlen_var = len_tmp
+      end
     end
     cond = compile_expr(@nd_predicate[nid])
     emit("  while (" + cond + ") {")
