@@ -7132,18 +7132,32 @@ class Compiler
     end
   end
 
+  # Build a string fingerprint of the arrays that iterative type inference
+  # refines. Identical fingerprints between successive iterations means a
+  # fixed point has been reached and further iterations are wasted work.
+  def inference_signature
+    @meth_return_types.join("|") + "/" + @cls_ivar_types.join("|") + "/" + @meth_param_types.join("|")
+  end
+
   def compile
     collect_all
     infer_main_call_types
     infer_function_body_call_types
     infer_class_body_call_types
     detect_poly_locals
-    # Iterative type inference: converge param types, return types, ivar types
+    # Iterative type inference: converge param types, return types, ivar types.
+    # Stop early when the signature of these three arrays stops changing.
     iter = 0
+    prev_sig = inference_signature
     while iter < 4
       infer_all_returns
       infer_ivar_types_from_writers
       detect_poly_params
+      cur_sig = inference_signature
+      if cur_sig == prev_sig
+        break
+      end
+      prev_sig = cur_sig
       iter = iter + 1
     end
     # Fix nil/poly-typed ivars with attr_writer to nullable self type
