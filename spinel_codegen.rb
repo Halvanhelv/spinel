@@ -10185,7 +10185,46 @@ class Compiler
       blk = @nd_block[nid]
       if blk >= 0
         bp = @nd_parameters[blk]
-        if bp >= 0
+        if bp >= 0 && @nd_type[bp] == "NumberedParametersNode"
+          nmax = @nd_value[bp]
+          nk = 0
+          while nk < nmax
+            nbname = "_" + (nk + 1).to_s
+            if not_in(nbname, names) == 1
+              if not_in(nbname, params) == 1
+                names.push(nbname)
+                # Infer type from receiver element type
+                nrt = ""
+                if @nd_receiver[nid] >= 0
+                  nrt = infer_type(@nd_receiver[nid])
+                  if nrt == "int" && @nd_type[@nd_receiver[nid]] == "LocalVariableReadNode"
+                    nrname = @nd_name[@nd_receiver[nid]]
+                    nri = 0
+                    while nri < names.length
+                      if names[nri] == nrname
+                        nrt = types[nri]
+                      end
+                      nri = nri + 1
+                    end
+                  end
+                end
+                if nrt == "str_array"
+                  types.push("string")
+                elsif nrt == "float_array"
+                  types.push("float")
+                elsif nrt == "sym_array"
+                  types.push("symbol")
+                elsif is_ptr_array_type(nrt) == 1
+                  types.push(ptr_array_elem_type(nrt))
+                else
+                  types.push("int")
+                end
+              end
+            end
+            nk = nk + 1
+          end
+        end
+        if bp >= 0 && @nd_type[bp] != "NumberedParametersNode"
           inner = @nd_parameters[bp]
           if inner >= 0
             reqs = parse_id_list(@nd_requireds[inner])
@@ -13571,6 +13610,9 @@ class Compiler
     end
     if (mname == "sum") && @nd_block[nid] >= 0
       return compile_array_sum_block(nid, rc, recv_type)
+    end
+    if (mname == "count") && @nd_block[nid] >= 0
+      return compile_array_count_block(nid, rc, recv_type)
     end
     if mname == "partition" && @nd_block[nid] >= 0
       pfx = array_c_prefix(recv_type)
@@ -18553,6 +18595,14 @@ class Compiler
     if params < 0
       return ""
     end
+    # NumberedParametersNode ({ _1 + _2 }): params is the node itself,
+    # and @nd_value holds the maximum (1 for _1, 2 for _2, etc.).
+    if @nd_type[params] == "NumberedParametersNode"
+      if idx < @nd_value[params]
+        return "_" + (idx + 1).to_s
+      end
+      return ""
+    end
     inner = @nd_parameters[params]
     if inner < 0
       return ""
@@ -18897,24 +18947,42 @@ class Compiler
     "0"
   end
 
+  # Emit the loop-open lines for iterating over a receiver expression.
+  # Supports range and all array-like types.  After calling this helper,
+  # the caller emits the block body and a closing '}'.  idx_var holds
+  # the loop counter (position or value for range); elem_var gets the
+  # current element.
+  def emit_iter_open(rc, recv_type, elem_var, idx_var)
+    if recv_type == "range"
+      rtmp = new_temp
+      emit("  sp_Range " + rtmp + " = " + rc + ";")
+      emit("  for (mrb_int " + idx_var + " = " + rtmp + ".first; " + idx_var + " <= " + rtmp + ".last; " + idx_var + "++) {")
+      emit("    " + elem_var + " = " + idx_var + ";")
+      return
+    end
+    pfx = array_c_prefix(recv_type)
+    emit("  for (mrb_int " + idx_var + " = 0; " + idx_var + " < sp_" + pfx + "_length(" + rc + "); " + idx_var + "++) {")
+    emit("    " + elem_var + " = sp_" + pfx + "_get(" + rc + ", " + idx_var + ");")
+  end
+
+  # Element type of an iterable (for block param type inference).
+  def iter_elem_type(recv_type)
+    if recv_type == "range"
+      return "int"
+    end
+    elem_type_of_array(recv_type)
+  end
+
   def compile_array_sum_block(nid, rc, recv_type)
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
       bp1 = "_x"
     end
-    elem_type = "int"
-    if recv_type == "str_array"
-      elem_type = "string"
-    elsif recv_type == "float_array"
-      elem_type = "float"
-    end
-    declare_var(bp1, elem_type)
-    pfx = array_c_prefix(recv_type)
+    declare_var(bp1, iter_elem_type(recv_type))
     tmp_sum = new_temp
     tmp_i = new_temp
     emit("  mrb_int " + tmp_sum + " = 0;")
-    emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx + "_length(" + rc + "); " + tmp_i + "++) {")
-    emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
+    emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
     blk = @nd_block[nid]
     bexpr = "0"
     if @nd_body[blk] >= 0
@@ -18933,6 +19001,34 @@ class Compiler
     tmp_sum
   end
 
+  def compile_array_count_block(nid, rc, recv_type)
+    bp1 = get_block_param(nid, 0)
+    if bp1 == ""
+      bp1 = "_x"
+    end
+    declare_var(bp1, iter_elem_type(recv_type))
+    tmp_cnt = new_temp
+    tmp_i = new_temp
+    emit("  mrb_int " + tmp_cnt + " = 0;")
+    emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
+    blk = @nd_block[nid]
+    bexpr = "0"
+    if @nd_body[blk] >= 0
+      bs = get_stmts(@nd_body[blk])
+      if bs.length > 0
+        k = 0
+        while k < bs.length - 1
+          compile_stmt(bs[k])
+          k = k + 1
+        end
+        bexpr = compile_expr(bs.last)
+      end
+    end
+    emit("    if (" + bexpr + ") " + tmp_cnt + "++;")
+    emit("  }")
+    tmp_cnt
+  end
+
   def compile_array_min_max_block(nid, rc, recv_type, mname)
     bp1 = get_block_param(nid, 0)
     if bp1 == ""
@@ -18945,16 +19041,15 @@ class Compiler
       elem_type = "float"
     end
     set_var_type(bp1, elem_type)
-    pfx = array_c_prefix(recv_type)
     tmp_res = new_temp
     tmp_key = new_temp
     tmp_i = new_temp
     bp_tmp = new_temp
     emit("  " + c_type(elem_type) + " " + tmp_res + " = " + c_default_val(elem_type) + ";")
     emit("  mrb_int " + tmp_key + " = 0;")
-    emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx + "_length(" + rc + "); " + tmp_i + "++) {")
-    emit("    " + c_type(elem_type) + " " + bp_tmp + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
-    emit("    lv_" + bp1 + " = " + bp_tmp + ";")
+    emit("  " + c_type(elem_type) + " " + bp_tmp + " = " + c_default_val(elem_type) + ";")
+    emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
+    emit("    " + bp_tmp + " = lv_" + bp1 + ";")
     blk = @nd_block[nid]
     bexpr = "0"
     if @nd_body[blk] >= 0
@@ -18983,14 +19078,7 @@ class Compiler
     if bp1 == ""
       bp1 = "_x"
     end
-    elem_type = "int"
-    if recv_type == "str_array"
-      elem_type = "string"
-    elsif recv_type == "float_array"
-      elem_type = "float"
-    end
-    declare_var(bp1, elem_type)
-    pfx_src = array_c_prefix(recv_type)
+    declare_var(bp1, iter_elem_type(recv_type))
     # Determine result type from block return
     blk = @nd_block[nid]
     block_ret = "int"
@@ -19016,8 +19104,7 @@ class Compiler
     tmp_i = new_temp
     tmp_val = new_temp
     emit("  " + c_type(result_type) + " " + tmp_arr + " = sp_" + pfx_dst + "_new();")
-    emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx_src + "_length(" + rc + "); " + tmp_i + "++) {")
-    emit("    lv_" + bp1 + " = sp_" + pfx_src + "_get(" + rc + ", " + tmp_i + ");")
+    emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
     @indent = @indent + 1
     bexpr = "0"
     if blk >= 0
@@ -19046,19 +19133,12 @@ class Compiler
     if bp1 == ""
       bp1 = "_x"
     end
-    elem_type = "int"
-    if recv_type == "str_array"
-      elem_type = "string"
-    elsif recv_type == "float_array"
-      elem_type = "float"
-    end
+    elem_type = iter_elem_type(recv_type)
     declare_var(bp1, elem_type)
-    pfx = array_c_prefix(recv_type)
     tmp_res = new_temp
     tmp_i = new_temp
     emit("  " + c_type(elem_type) + " " + tmp_res + " = " + c_default_val(elem_type) + ";")
-    emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx + "_length(" + rc + "); " + tmp_i + "++) {")
-    emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
+    emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
     blk = @nd_block[nid]
     bbody = @nd_body[blk]
     bexpr = "0"
@@ -19084,24 +19164,15 @@ class Compiler
     if bp1 == ""
       bp1 = "_x"
     end
-    # Infer element type for block parameter
-    elem_type = "int"
-    if recv_type == "str_array"
-      elem_type = "string"
-    elsif recv_type == "float_array"
-      elem_type = "float"
-    end
-    declare_var(bp1, elem_type)
+    declare_var(bp1, iter_elem_type(recv_type))
     tmp_res = new_temp
     tmp_i = new_temp
-    pfx = array_c_prefix(recv_type)
     init_val = "FALSE"
     if mname == "all?" || mname == "none?"
       init_val = "TRUE"
     end
     emit("  mrb_bool " + tmp_res + " = " + init_val + ";")
-    emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx + "_length(" + rc + "); " + tmp_i + "++) {")
-    emit("    lv_" + bp1 + " = sp_" + pfx + "_get(" + rc + ", " + tmp_i + ");")
+    emit_iter_open(rc, recv_type, "lv_" + bp1, tmp_i)
     blk = @nd_block[nid]
     bbody = @nd_body[blk]
     bexpr = "0"
@@ -19376,6 +19447,64 @@ class Compiler
   end
 
   def compile_map_expr(nid)
+    # N.times.map { |i| ... } -> loop 0..N-1 building an array
+    recv_n = @nd_receiver[nid]
+    if recv_n >= 0 && @nd_type[recv_n] == "CallNode" && @nd_name[recv_n] == "times" && @nd_block[recv_n] < 0
+      @needs_gc = 1
+      ncount = compile_expr(@nd_receiver[recv_n])
+      bpn = get_block_param(nid, 0)
+      res_type = "int"
+      blk_n = @nd_block[nid]
+      if blk_n >= 0
+        body_n = @nd_body[blk_n]
+        if body_n >= 0
+          stmts_n = get_stmts(body_n)
+          if stmts_n.length > 0
+            res_type = infer_type(stmts_n.last)
+          end
+        end
+      end
+      tmp_arrn = new_temp
+      tmp_in = new_temp
+      if res_type == "string"
+        @needs_str_array = 1
+        emit("  sp_StrArray *" + tmp_arrn + " = sp_StrArray_new();")
+      elsif res_type == "float"
+        emit("  sp_FloatArray *" + tmp_arrn + " = sp_FloatArray_new();")
+      else
+        @needs_int_array = 1
+        emit("  sp_IntArray *" + tmp_arrn + " = sp_IntArray_new();")
+      end
+      emit("  for (mrb_int " + tmp_in + " = 0; " + tmp_in + " < " + ncount + "; " + tmp_in + "++) {")
+      if bpn != ""
+        emit("    lv_" + bpn + " = " + tmp_in + ";")
+      end
+      @indent = @indent + 1
+      if blk_n >= 0
+        body_n2 = @nd_body[blk_n]
+        if body_n2 >= 0
+          stmts_n2 = get_stmts(body_n2)
+          if stmts_n2.length > 0
+            k = 0
+            while k < stmts_n2.length - 1
+              compile_stmt(stmts_n2[k])
+              k = k + 1
+            end
+            lastv = compile_expr(stmts_n2.last)
+            if res_type == "string"
+              emit("  sp_StrArray_push(" + tmp_arrn + ", " + lastv + ");")
+            elsif res_type == "float"
+              emit("  sp_FloatArray_push(" + tmp_arrn + ", " + lastv + ");")
+            else
+              emit("  sp_IntArray_push(" + tmp_arrn + ", " + lastv + ");")
+            end
+          end
+        end
+      end
+      @indent = @indent - 1
+      emit("  }")
+      return tmp_arrn
+    end
     rt = infer_type(@nd_receiver[nid])
     rc_expr = compile_expr(@nd_receiver[nid])
     # Store receiver in a temp to avoid re-evaluation
@@ -20405,6 +20534,64 @@ class Compiler
     @needs_gc = 1
     old = @in_loop
     @in_loop = 1
+    # N.times.map { |i| ... } -> build int_array with block body; param = index
+    recv = @nd_receiver[nid]
+    if recv >= 0 && @nd_type[recv] == "CallNode" && @nd_name[recv] == "times" && @nd_block[recv] < 0
+      ncount = compile_expr(@nd_receiver[recv])
+      bpn = get_block_param(nid, 0)
+      tmp_arrn = new_temp
+      tmp_in = new_temp
+      # infer block result type
+      res_type = "int"
+      blk_n = @nd_block[nid]
+      if blk_n >= 0
+        body_n = @nd_body[blk_n]
+        if body_n >= 0
+          stmts_n = get_stmts(body_n)
+          if stmts_n.length > 0
+            res_type = infer_type(stmts_n.last)
+          end
+        end
+      end
+      if res_type == "string"
+        @needs_str_array = 1
+        emit("  sp_StrArray *" + tmp_arrn + " = sp_StrArray_new();")
+      elsif res_type == "float"
+        emit("  sp_FloatArray *" + tmp_arrn + " = sp_FloatArray_new();")
+      else
+        emit("  sp_IntArray *" + tmp_arrn + " = sp_IntArray_new();")
+      end
+      emit("  for (mrb_int " + tmp_in + " = 0; " + tmp_in + " < " + ncount + "; " + tmp_in + "++) {")
+      if bpn != ""
+        emit("    lv_" + bpn + " = " + tmp_in + ";")
+      end
+      @indent = @indent + 1
+      if blk_n >= 0
+        body_n2 = @nd_body[blk_n]
+        if body_n2 >= 0
+          stmts_n2 = get_stmts(body_n2)
+          if stmts_n2.length > 0
+            k = 0
+            while k < stmts_n2.length - 1
+              compile_stmt(stmts_n2[k])
+              k = k + 1
+            end
+            lastv = compile_expr(stmts_n2.last)
+            if res_type == "string"
+              emit("  sp_StrArray_push(" + tmp_arrn + ", " + lastv + ");")
+            elsif res_type == "float"
+              emit("  sp_FloatArray_push(" + tmp_arrn + ", " + lastv + ");")
+            else
+              emit("  sp_IntArray_push(" + tmp_arrn + ", " + lastv + ");")
+            end
+          end
+        end
+      end
+      @indent = @indent - 1
+      emit("  }")
+      @in_loop = old
+      return
+    end
     rt = infer_type(@nd_receiver[nid])
     rc = compile_expr(@nd_receiver[nid])
     bp1 = get_block_param(nid, 0)
@@ -20577,6 +20764,24 @@ class Compiler
         if lmname == "select"
           if return_type != "void"
             val = compile_select_expr(last)
+            emit("  return " + val + ";")
+            return
+          end
+        end
+        if lmname == "sum"
+          if return_type != "void"
+            rtype_sum = infer_type(@nd_receiver[last])
+            rc_sum = compile_expr(@nd_receiver[last])
+            val = compile_array_sum_block(last, rc_sum, rtype_sum)
+            emit("  return " + val + ";")
+            return
+          end
+        end
+        if lmname == "count"
+          if return_type != "void"
+            rtype_cnt = infer_type(@nd_receiver[last])
+            rc_cnt = compile_expr(@nd_receiver[last])
+            val = compile_array_count_block(last, rc_cnt, rtype_cnt)
             emit("  return " + val + ";")
             return
           end

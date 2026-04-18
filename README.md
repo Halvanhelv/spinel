@@ -78,7 +78,7 @@ gen2.c == gen3.c   (bootstrap loop closed)
 
 ## Benchmarks
 
-75 tests pass. 52/54 benchmarks pass (2 pre-existing failures).
+75 tests pass. 53/54 benchmarks pass (1 pre-existing failure).
 Geometric mean: **~49x faster** than CRuby across 50 benchmarks.
 
 ### Computation
@@ -86,6 +86,7 @@ Geometric mean: **~49x faster** than CRuby across 50 benchmarks.
 | Benchmark | Spinel | CRuby | Speedup |
 |---|---|---|---|
 | ackermann | 5 ms | 394 ms | 78.8x |
+| life (Conway's GoL) | 22 ms | 1,525 ms | 69.3x |
 | fib (recursive) | 11 ms | 560 ms | 50.9x |
 | mandelbrot | 24 ms | 1,187 ms | 49.5x |
 | matmul | 9 ms | 329 ms | 36.6x |
