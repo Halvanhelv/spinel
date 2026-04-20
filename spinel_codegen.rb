@@ -9010,7 +9010,7 @@ class Compiler
         while j < names.length
           if j < types.length
             if ivar_is_gc_ptr(types[j]) == 1
-              emit_raw("  if (self->" + sanitize_ivar(names[j]) + ") sp_gc_mark(self->" + sanitize_ivar(names[j]) + ");")
+              emit_raw("  if (self->" + sanitize_ivar(names[j]) + ") sp_gc_mark((void *)self->" + sanitize_ivar(names[j]) + ");")
             end
           end
           j = j + 1
@@ -9025,7 +9025,7 @@ class Compiler
             while pj < pnames.length
               if pj < ptypes.length
                 if ivar_is_gc_ptr(ptypes[pj]) == 1
-                  emit_raw("  if (self->" + sanitize_ivar(pnames[pj]) + ") sp_gc_mark(self->" + sanitize_ivar(pnames[pj]) + ");")
+                  emit_raw("  if (self->" + sanitize_ivar(pnames[pj]) + ") sp_gc_mark((void *)self->" + sanitize_ivar(pnames[pj]) + ");")
                 end
               end
               pj = pj + 1
