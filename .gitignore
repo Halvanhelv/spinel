@@ -11,6 +11,7 @@
 
 # Build artifacts
 /build/
+/vendor/
 
 # Temp files
 /tmp/

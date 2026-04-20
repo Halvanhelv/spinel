@@ -15,11 +15,14 @@ CFLAGS   = -O2 -Wno-all
 SEC_FLAGS = -ffunction-sections -fdata-sections
 GC_FLAGS  = -Wl,--gc-sections
 
-# Prism library (auto-detect from gem, or set PRISM_DIR manually)
-PRISM_DIR ?= $(shell ruby -rprism -e 'puts $$LOADED_FEATURES.grep(/prism/).first.sub(%r{/lib/.*}, "")' 2>/dev/null)
-
-ifeq ($(PRISM_DIR),)
-  $(warning Cannot find Prism gem. Set PRISM_DIR=/path/to/prism manually.)
+# Prism library: prefer vendor/prism (fetched via `make deps`), then
+# fall back to the Prism gem if one is installed. Override by setting
+# PRISM_DIR=/path/to/prism on the command line.
+PRISM_VERSION ?= 1.9.0
+ifneq ($(wildcard vendor/prism/include/prism.h),)
+  PRISM_DIR ?= vendor/prism
+else
+  PRISM_DIR ?= $(shell ruby -rprism -e 'puts $$LOADED_FEATURES.grep(/prism/).first.sub(%r{/lib/.*}, "")' 2>/dev/null)
 endif
 
 PRISM_INC    = $(PRISM_DIR)/include
@@ -27,9 +30,40 @@ PRISM_SRC    = $(wildcard $(PRISM_DIR)/src/*.c) $(wildcard $(PRISM_DIR)/src/util
 PRISM_OBJ    = $(patsubst $(PRISM_DIR)/src/%.c,build/prism/%.o,$(PRISM_SRC))
 PRISM_LIB    = build/libprism.a
 
-.PHONY: all parse bootstrap test bench clean install uninstall
+.PHONY: all parse bootstrap test bench clean install uninstall deps
 
 all: parse regexp bootstrap
+
+# ---- Dependencies ----
+# Clone Prism into vendor/prism at the pinned version. Run this once
+# after cloning Spinel if you don't have the Prism gem installed.
+deps: vendor/prism/include/prism/diagnostic.h
+
+# Download the pre-built Prism gem from rubygems.org and extract its C
+# sources. We use the .gem tarball instead of a git clone because it
+# ships with the generated headers (diagnostic.h, etc.) already in
+# place — no rake/bundler needed.
+vendor/prism/include/prism/diagnostic.h:
+	@mkdir -p vendor/prism
+	@echo "Fetching prism v$(PRISM_VERSION) from rubygems.org..."
+	curl -sL -o /tmp/prism-$(PRISM_VERSION).gem https://rubygems.org/gems/prism-$(PRISM_VERSION).gem
+	@tmpdir=$$(mktemp -d); \
+	 tar -xf /tmp/prism-$(PRISM_VERSION).gem -C $$tmpdir data.tar.gz; \
+	 tar -xzf $$tmpdir/data.tar.gz -C vendor/prism; \
+	 rm -rf $$tmpdir /tmp/prism-$(PRISM_VERSION).gem
+	@test -f $@ && echo "prism v$(PRISM_VERSION) ready at vendor/prism"
+
+# If PRISM_DIR ended up empty (no vendor/prism, no gem), halt with a
+# clear message before trying to build anything that needs it.
+ifeq ($(PRISM_DIR),)
+parse bootstrap regexp all: prism-missing
+prism-missing:
+	@echo "Error: Prism not found."; \
+	 echo "  Run 'make deps' to fetch libprism into vendor/prism,"; \
+	 echo "  or install the prism gem (gem install prism),"; \
+	 echo "  or set PRISM_DIR=/path/to/prism manually."; \
+	 exit 1
+endif
 
 # ---- Prism static library ----
 

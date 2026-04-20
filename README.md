@@ -34,6 +34,9 @@ Native binary           Standalone, no runtime dependencies
 ## Quick Start
 
 ```bash
+# Fetch libprism sources (from the prism gem on rubygems.org):
+make deps
+
 # Build everything:
 make
 
@@ -262,6 +265,7 @@ by inlining the referenced file.
 ## Building
 
 ```bash
+make deps         # fetch libprism into vendor/prism (one-time)
 make              # build parser + regexp library + bootstrap compiler
 make test         # run 74 feature tests (requires bootstrap)
 make bench        # run 55 benchmarks (requires bootstrap)
@@ -272,8 +276,11 @@ make clean        # remove build artifacts
 
 Override install prefix: `make install PREFIX=$HOME/.local`
 
-Requires [Prism](https://github.com/ruby/prism) gem installed (for
-libprism source). Override with `PRISM_DIR=/path/to/prism`.
+[Prism](https://github.com/ruby/prism) is the Ruby parser used by
+`spinel_parse`. `make deps` downloads the prism gem tarball from
+rubygems.org and extracts its C sources to `vendor/prism`. If you
+already have the prism gem installed, the build auto-detects it; you
+can also point at a custom location with `PRISM_DIR=/path/to/prism`.
 
 CRuby is needed only for the initial bootstrap. After `make`, the
 entire pipeline runs without Ruby.
