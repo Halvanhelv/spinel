@@ -192,12 +192,7 @@ install: all
 	install -m 644 spinel_codegen.rb $(SPNLDIR)/
 	install -m 644 lib/libspinel_rt.a $(SPNLDIR)/lib/
 	install -m 644 lib/sp_runtime.h   $(SPNLDIR)/lib/
-	install -m 644 lib/erb.rb         $(SPNLDIR)/lib/
-	install -m 644 lib/forwardable.rb $(SPNLDIR)/lib/
-	install -m 644 lib/optparse.rb    $(SPNLDIR)/lib/
-	install -m 644 lib/set.rb         $(SPNLDIR)/lib/
-	install -m 644 lib/stringio.rb    $(SPNLDIR)/lib/
-	install -m 644 lib/strscan.rb     $(SPNLDIR)/lib/
+	install -m 644 lib/*.rb           $(SPNLDIR)/lib/
 	install -d $(PREFIX)/bin
 	ln -sf $(SPNLDIR)/spinel $(PREFIX)/bin/spinel
 
