@@ -20951,6 +20951,72 @@ class Compiler
         return tmp_arr
       end
     end
+    if rt == "str_array"
+      # str_array.map { |s| ... } produced no result branch before, so
+      # `tt = foo.map { ... }` silently became `lv_tt = 0` and the
+      # subsequent iteration crashed. Issue #43.
+      @needs_gc = 1
+      block_ret = "string"
+      blk = @nd_block[nid]
+      if blk >= 0
+        body = @nd_body[blk]
+        if body >= 0
+          stmts = get_stmts(body)
+          if stmts.length > 0
+            block_ret = infer_type(stmts.last)
+          end
+        end
+      end
+      declare_var(bp1, "string")
+      if block_ret == "int"
+        @needs_int_array = 1
+        emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
+        emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_StrArray_length(" + rc + "); " + tmp_i + "++) {")
+        emit("    lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp_i + ");")
+        @indent = @indent + 1
+        if blk >= 0
+          body3 = @nd_body[blk]
+          if body3 >= 0
+            stmts3 = get_stmts(body3)
+            if stmts3.length > 0
+              k = 0
+              while k < stmts3.length - 1
+                compile_stmt(stmts3[k])
+                k = k + 1
+              end
+              val = compile_expr(stmts3.last)
+              emit("  sp_IntArray_push(" + tmp_arr + ", " + val + ");")
+            end
+          end
+        end
+        @indent = @indent - 1
+        emit("  }")
+        return tmp_arr
+      end
+      @needs_str_array = 1
+      emit("  sp_StrArray *" + tmp_arr + " = sp_StrArray_new();")
+      emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_StrArray_length(" + rc + "); " + tmp_i + "++) {")
+      emit("    lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp_i + ");")
+      @indent = @indent + 1
+      if blk >= 0
+        body3 = @nd_body[blk]
+        if body3 >= 0
+          stmts3 = get_stmts(body3)
+          if stmts3.length > 0
+            k = 0
+            while k < stmts3.length - 1
+              compile_stmt(stmts3[k])
+              k = k + 1
+            end
+            val = compile_expr(stmts3.last)
+            emit("  sp_StrArray_push(" + tmp_arr + ", " + val + ");")
+          end
+        end
+      end
+      @indent = @indent - 1
+      emit("  }")
+      return tmp_arr
+    end
     "0"
   end
 
