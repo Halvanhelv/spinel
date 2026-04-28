@@ -3574,18 +3574,21 @@ class Compiler
     if t == "poly_array"
       return "PolyArray"
     end
+    if is_ptr_array_type(t) == 1
+      return "PtrArray"
+    end
     "IntArray"
   end
 
   # The canonical "is this an array type?" check. Use this when you need
   # to dispatch a method that's defined for every typed array — `+`,
   # `concat`, `shuffle`, `each_with_object`, `flat_map`, etc. Covers the
-  # 5 typed arrays (int/str/float/sym/poly). *_ptr_array is intentionally
-  # excluded for now: sp_PtrArray lacks `_dup`/`_shuffle` and several
-  # other helpers, and the existing dispatchers don't route ptr_array
-  # through this path correctly even on master.
+  # 5 typed arrays (int/str/float/sym/poly) and any *_ptr_array.
   def is_array_type(t)
     if t == "int_array" || t == "str_array" || t == "float_array" || t == "sym_array" || t == "poly_array"
+      return 1
+    end
+    if is_ptr_array_type(t) == 1
       return 1
     end
     0
@@ -8598,6 +8601,9 @@ class Compiler
     emit_raw("static inline void sp_PtrArray_set(sp_PtrArray*a,mrb_int i,void*v){if(i<0)i+=a->len;a->data[i]=v;}")
     emit_raw("static inline mrb_int sp_PtrArray_length(sp_PtrArray*a){return a->len;}")
     emit_raw("static inline mrb_bool sp_PtrArray_empty(sp_PtrArray*a){return a->len==0;}")
+    emit_raw("static sp_PtrArray*sp_PtrArray_dup(sp_PtrArray*a){sp_PtrArray*b=sp_PtrArray_new_scan(a->scan_elem);for(mrb_int i=0;i<a->len;i++)sp_PtrArray_push(b,a->data[i]);return b;}")
+    emit_raw("static void sp_PtrArray_shuffle_bang(sp_PtrArray*a){for(mrb_int i=a->len-1;i>0;i--){mrb_int j=(mrb_int)(rand()%(i+1));void*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}")
+    emit_raw("static sp_PtrArray*sp_PtrArray_shuffle(sp_PtrArray*a){sp_PtrArray*b=sp_PtrArray_dup(a);sp_PtrArray_shuffle_bang(b);return b;}")
     emit_raw("")
   end
 
@@ -21962,6 +21968,8 @@ class Compiler
       elem_type = "float"
     elsif rt == "poly_array"
       elem_type = "poly"
+    elsif is_ptr_array_type(rt) == 1
+      elem_type = ptr_array_elem_type(rt)
     end
     declare_var(bp1, elem_type)
     emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_" + pfx_src + "_length(" + rc + "); " + tmp_i + "++) {")
