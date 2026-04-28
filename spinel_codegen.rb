@@ -13311,6 +13311,15 @@ class Compiler
     end
 
     recv_type = infer_type(recv)
+    # Nullable receiver: dispatch identically to the base type. The
+    # null check is the caller's responsibility, matching Ruby's
+    # NoMethodError semantics on a nil receiver. Without this, a
+    # local typed `string?` (e.g. an opt param `f = nil` later passed
+    # a string) misses every per-type dispatcher and falls through
+    # to the "0" fallback. Issue #60.
+    if is_nullable_type(recv_type) == 1
+      recv_type = base_type(recv_type)
+    end
     rc = compile_expr_gc_rooted(recv)
     # Root receiver if it may be collected during argument evaluation
     if expr_may_gc(recv) == 1 && type_is_pointer(recv_type) == 1
