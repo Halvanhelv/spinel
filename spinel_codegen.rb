@@ -3536,6 +3536,9 @@ class Compiler
     if t == "poly_array"
       return "PolyArray"
     end
+    if is_ptr_array_type(t) == 1
+      return "PtrArray"
+    end
     "IntArray"
   end
 
