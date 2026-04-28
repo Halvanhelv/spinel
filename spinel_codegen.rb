@@ -20151,7 +20151,17 @@ class Compiler
         obj_ct = c_type(infer_type(aargs[0]))
       end
     end
-    obj_arg = compile_arg0(nid)
+    # Root the seed: it lives across every loop iteration, and any
+    # allocation inside the block can trigger a GC that would otherwise
+    # sweep the freshly constructed seed object before the loop ends.
+    obj_arg_nid = -1
+    if args_id >= 0
+      aargs2 = get_args(args_id)
+      if aargs2.length > 0
+        obj_arg_nid = aargs2[0]
+      end
+    end
+    obj_arg = compile_expr_gc_rooted(obj_arg_nid)
     bp1 = get_block_param(nid, 0)
     bp2 = get_block_param(nid, 1)
     if bp1 == ""
