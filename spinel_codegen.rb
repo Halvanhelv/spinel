@@ -16253,9 +16253,10 @@ class Compiler
   end
 
   def compile_constant_recv_expr(nid, mname, recv, rc)
-    # ARGV methods
-    if @nd_type[recv] == "ConstantReadNode"
-      if @nd_name[recv] == "ARGV"
+    rcname = constructor_class_name(recv)
+    if rcname != ""
+      # ARGV methods
+      if rcname == "ARGV"
         if mname == "length"
           return "sp_argv.len"
         end
@@ -16264,11 +16265,7 @@ class Compiler
           return "((" + idx_expr + " < sp_argv.len) ? sp_argv.data[(int)" + idx_expr + "] : NULL)"
         end
       end
-    end
-
-    # Math
-    if @nd_type[recv] == "ConstantReadNode"
-      rcname = @nd_name[recv]
+      # Math
       if rcname == "Math"
         if mname == "sqrt"
           return "sqrt(" + compile_arg0(nid) + ")"
