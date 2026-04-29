@@ -4899,6 +4899,10 @@ class Compiler
       if @nd_type[sid] == "ConstantWriteNode"
         collect_constant(sid)
       end
+      # Top-level `A, B = expr` with constant targets.
+      if @nd_type[sid] == "MultiWriteNode"
+        collect_scoped_multi_const("", sid)
+      end
       if @nd_type[sid] == "CallNode"
         if @nd_name[sid] == "define_method"
           collect_define_method(sid)
@@ -5635,6 +5639,10 @@ class Compiler
       end
       if @nd_type[sid] == "ConstantWriteNode"
         collect_scoped_constant(cname, sid)
+      end
+      # Class-body `A, B = ...` multi-write to constants.
+      if @nd_type[sid] == "MultiWriteNode"
+        collect_scoped_multi_const(cname, sid)
       end
       if @nd_type[sid] == "CallNode"
         cn = @nd_name[sid]
@@ -6707,6 +6715,10 @@ class Compiler
       if @nd_type[sid] == "ConstantWriteNode"
         collect_scoped_constant(mname, sid)
       end
+      # Module-body `A, B = ...` multi-write to constants.
+      if @nd_type[sid] == "MultiWriteNode"
+        collect_scoped_multi_const(mname, sid)
+      end
       # Collect module class methods (def self.xxx) as top-level functions
       if @nd_type[sid] == "DefNode"
         if @nd_receiver[sid] >= 0
@@ -6772,6 +6784,56 @@ class Compiler
 
   def collect_constant(nid)
     collect_scoped_constant("", nid)
+  end
+
+  # Multi-write to constants: `A, B, C = expr`. Each ConstantTargetNode
+  # in the targets list gets registered as a separate constant whose
+  # value is the i-th element of the RHS at emit time. Used both at
+  # top level and inside class/module bodies (`scope_name`).
+  def collect_scoped_multi_const(scope_name, nid)
+    targets = parse_id_list(@nd_targets[nid])
+    val_id = @nd_expression[nid]
+    ti = 0
+    while ti < targets.length
+      tid = targets[ti]
+      if @nd_type[tid] == "ConstantTargetNode"
+        cname = @nd_name[tid]
+        if scope_name != ""
+          cname = scope_name + "_" + cname
+        end
+        # Use the existing scope chain when inferring element types so
+        # nested-array RHS (`A, B = (1..2).map {...}`) gets the elem
+        # type of the array rather than int.
+        old_scope = @current_lexical_scope
+        @current_lexical_scope = scope_name
+        ct = scan_ivars_multi_target_type(val_id, ti)
+        @current_lexical_scope = old_scope
+        ci = find_const_idx(cname)
+        if ci >= 0
+          @const_types[ci] = ct
+          @const_expr_ids[ci] = -1
+          @const_scope_names[ci] = scope_name
+        else
+          @const_names.push(cname)
+          @const_types.push(ct)
+          # Element-of-multi: emit_global_constants can't reduce these
+          # at module-init time since the source expression is the
+          # whole RHS, not a per-target one. Mark expr_id = -1 and
+          # rely on @multi_const_inits below to drive the assignment.
+          @const_expr_ids.push(-1)
+          @const_scope_names.push(scope_name)
+        end
+        ti = ti + 1
+      else
+        ti = ti + 1
+      end
+    end
+    # Record the multi-write as a single deferred init: the RHS is
+    # evaluated once and each constant takes one element.
+    if @multi_const_inits == nil
+      @multi_const_inits = "".split(",")
+    end
+    @multi_const_inits.push(scope_name + "|" + nid.to_s)
   end
 
   def collect_struct_class(cname, call_nid)
@@ -14988,6 +15050,34 @@ class Compiler
     1
   end
 
+  # Scan locals introduced by constant-initializer RHS expressions —
+  # those run inside main() before the user stmts, so any block
+  # params they introduce (`FRAME = [...].map { |n| ... }` and the
+  # multi-write form `A, B = [...].map { |n| ... }`) need their
+  # `lv_<bp>` decls in main's scope. Covers both `@const_expr_ids`
+  # (single-const inits) and `@multi_const_inits` (the multi-write
+  # form, where the RHS lives on a MultiWriteNode).
+  def scan_const_init_locals(lnames, ltypes, empty_params)
+    i = 0
+    while i < @const_expr_ids.length
+      if @const_expr_ids[i] >= 0
+        scan_locals(@const_expr_ids[i], lnames, ltypes, empty_params)
+      end
+      i = i + 1
+    end
+    if @multi_const_inits != nil
+      j = 0
+      while j < @multi_const_inits.length
+        mw_id = @multi_const_inits[j].split("|")[1].to_i
+        rhs = @nd_expression[mw_id]
+        if rhs >= 0
+          scan_locals(rhs, lnames, ltypes, empty_params)
+        end
+        j = j + 1
+      end
+    end
+  end
+
   # ---- Main emission ----
   def emit_main
     stmts = get_body_stmts(@root_id)
@@ -15038,15 +15128,10 @@ class Compiler
     # Constant initializer expressions get compiled into main() right
     # before the user statements run, but the block params they
     # introduce (e.g. \`FRAME = [...].map { |n| ... }\`) need
-    # declarations in the same scope. Scan each const's RHS so the
-    # block param names land in lnames alongside the user-stmt locals.
-    ci_lc = 0
-    while ci_lc < @const_expr_ids.length
-      if @const_expr_ids[ci_lc] >= 0
-        scan_locals(@const_expr_ids[ci_lc], lnames, ltypes, empty_params)
-      end
-      ci_lc = ci_lc + 1
-    end
+    # declarations in the same scope. Scan each const init's RHS so
+    # the block param names land in lnames alongside the user-stmt
+    # locals. Covers both single-const and multi-write-const forms.
+    scan_const_init_locals(lnames, ltypes, empty_params)
 
     # Declare vars for second pass to resolve dependent types
     j = 0
@@ -15204,19 +15289,78 @@ class Compiler
     # Constants (initialize global declarations)
     i = 0
     while i < @const_names.length
-      old_scope = @current_lexical_scope
-      if i < @const_scope_names.length
-        @current_lexical_scope = @const_scope_names[i]
-      else
-        @current_lexical_scope = ""
-      end
-      val = compile_expr(@const_expr_ids[i])
-      @current_lexical_scope = old_scope
-      emit("  cst_" + @const_names[i] + " = " + val + ";")
-      if type_is_pointer(@const_types[i]) == 1
-        emit("  SP_GC_ROOT(cst_" + @const_names[i] + ");")
+      # expr_id == -1 means this constant came from a `A, B, C = expr`
+      # multi-write: its value is computed by the deferred init block
+      # below, not from a single per-target expression.
+      if i < @const_expr_ids.length && @const_expr_ids[i] >= 0
+        old_scope = @current_lexical_scope
+        if i < @const_scope_names.length
+          @current_lexical_scope = @const_scope_names[i]
+        else
+          @current_lexical_scope = ""
+        end
+        val = compile_expr(@const_expr_ids[i])
+        @current_lexical_scope = old_scope
+        emit("  cst_" + @const_names[i] + " = " + val + ";")
+        if type_is_pointer(@const_types[i]) == 1
+          emit("  SP_GC_ROOT(cst_" + @const_names[i] + ");")
+        end
       end
       i = i + 1
+    end
+
+    # Multi-write constant initializers: `A, B, C = rhs` evaluates
+    # rhs once and assigns each element. ArrayNode literals split
+    # element-wise; otherwise we evaluate to a temp and index it
+    # (currently only int_array supported, which covers the
+    # optcarrot CLK_1..CLK_8 = (1..8).map {...} pattern).
+    if @multi_const_inits != nil
+      mci = 0
+      while mci < @multi_const_inits.length
+        parts = @multi_const_inits[mci].split("|")
+        scope_n = parts[0]
+        mw_id = parts[1].to_i
+        targets = parse_id_list(@nd_targets[mw_id])
+        val_id = @nd_expression[mw_id]
+        old_scope = @current_lexical_scope
+        @current_lexical_scope = scope_n
+        if val_id >= 0 && @nd_type[val_id] == "ArrayNode"
+          elems = parse_id_list(@nd_elements[val_id])
+          ti2 = 0
+          while ti2 < targets.length
+            tid = targets[ti2]
+            if @nd_type[tid] == "ConstantTargetNode" && ti2 < elems.length
+              cn = @nd_name[tid]
+              if scope_n != ""
+                cn = scope_n + "_" + cn
+              end
+              ev = compile_expr(elems[ti2])
+              emit("  cst_" + cn + " = " + ev + ";")
+            end
+            ti2 = ti2 + 1
+          end
+        else
+          rhs_t = infer_type(val_id)
+          if rhs_t == "int_array"
+            tmp_n = new_temp
+            emit("  sp_IntArray *" + tmp_n + " = " + compile_expr(val_id) + ";")
+            ti3 = 0
+            while ti3 < targets.length
+              tid = targets[ti3]
+              if @nd_type[tid] == "ConstantTargetNode"
+                cn = @nd_name[tid]
+                if scope_n != ""
+                  cn = scope_n + "_" + cn
+                end
+                emit("  cst_" + cn + " = sp_IntArray_get(" + tmp_n + ", " + ti3.to_s + ");")
+              end
+              ti3 = ti3 + 1
+            end
+          end
+        end
+        @current_lexical_scope = old_scope
+        mci = mci + 1
+      end
     end
 
     emit_raw("")
