@@ -3430,6 +3430,20 @@ class Compiler
   # resolution. This helper distinguishes `[]` from `[1, 2, 3]` so the
   # promotion machinery can know "writes haven't fixed the element type
   # yet, so a later push can still pick it".
+  def is_empty_hash_literal(nid)
+    if nid < 0
+      return 0
+    end
+    if @nd_type[nid] != "HashNode"
+      return 0
+    end
+    elems = parse_id_list(@nd_elements[nid])
+    if elems.length == 0
+      return 1
+    end
+    0
+  end
+
   def is_empty_array_literal(nid)
     if nid < 0
       return 0
@@ -4546,6 +4560,26 @@ class Compiler
         add_ivar(ci, iname, "int")
       end
       j = j + 1
+    end
+  end
+
+  # Direct, unconditional ivar type replacement. Bypasses the
+  # widening logic in update_ivar_type — used when the caller has
+  # already determined the new type is correct (e.g. promoting an
+  # empty-hash default to a concrete hash type from a `[]=` write).
+  def replace_ivar_type(ci, iname, new_type)
+    names = @cls_ivar_names[ci].split(";")
+    types = @cls_ivar_types[ci].split(";")
+    k = 0
+    while k < names.length
+      if names[k] == iname
+        if k < types.length
+          types[k] = new_type
+          @cls_ivar_types[ci] = types.join(";")
+        end
+        return
+      end
+      k = k + 1
     end
   end
 
@@ -6015,6 +6049,38 @@ class Compiler
     ""
   end
 
+  # Pick the concrete hash type for an ivar that was initialized as
+  # the empty-hash default (`str_int_hash`) and is later written via
+  # `@h[k] = v`. Returns "" when the (key, value) pair has no
+  # matching concrete container — the caller leaves the ivar type
+  # alone in that case.
+  def promote_empty_hash_for(kt, vt)
+    if kt == "string"
+      if vt == "string"
+        return "str_str_hash"
+      end
+      if vt == "int" || vt == "bool" || vt == "nil"
+        return "str_int_hash"
+      end
+      return "str_poly_hash"
+    end
+    if kt == "symbol"
+      if vt == "string"
+        return "sym_str_hash"
+      end
+      if vt == "int" || vt == "bool" || vt == "nil"
+        return "sym_int_hash"
+      end
+      return "sym_poly_hash"
+    end
+    if kt == "int"
+      if vt == "string"
+        return "int_str_hash"
+      end
+    end
+    ""
+  end
+
   # Does class `ci` provide `mname` as a reader, writer, or method?
   # Walks parent classes for inherited members.
   def class_has_method(ci, mname)
@@ -6166,9 +6232,17 @@ class Compiler
     if @nd_type[nid] == "InstanceVariableWriteNode"
       if @current_class_idx >= 0
         iname = @nd_name[nid]
-        at = infer_type(@nd_expression[nid])
-        if at != "int" && at != "nil"
-          update_ivar_type(@current_class_idx, iname, at)
+        expr_id = @nd_expression[nid]
+        # Empty `{}` / `[]` literal: don't reset the ivar's tracked
+        # type to the default (`str_int_hash` / `int_array`), since a
+        # later `[]=` write may have already promoted the slot to a
+        # more specific type. Reseeding from the empty-default would
+        # widen the promoted type to poly on the next iteration.
+        if is_empty_hash_literal(expr_id) == 0 && is_empty_array_literal(expr_id) == 0
+          at = infer_type(expr_id)
+          if at != "int" && at != "nil"
+            update_ivar_type(@current_class_idx, iname, at)
+          end
         end
       end
     end
@@ -6201,6 +6275,44 @@ class Compiler
                     end
                   end
                   wk = wk + 1
+                end
+              end
+            end
+          end
+        end
+      end
+      # `@h[k] = v` against an ivar still typed as the empty-hash
+      # default (str_int_hash) — promote based on the actual key/value
+      # types so the codegen picks the matching `sp_*Hash_set` (issue
+      # #64). Only the empty-default → another concrete hash type
+      # transition; richer mismatches stay where they are.
+      if mname == "[]=" && @current_class_idx >= 0 && recv >= 0 && @nd_type[recv] == "InstanceVariableReadNode"
+        iname = @nd_name[recv]
+        cur_t = cls_ivar_type(@current_class_idx, iname)
+        if cur_t == "str_int_hash"
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            ai = get_args(args_id)
+            if ai.length >= 2
+              kt = infer_type(ai[0])
+              vt = infer_type(ai[ai.length - 1])
+              promoted = promote_empty_hash_for(kt, vt)
+              if promoted != "" && promoted != cur_t
+                # Direct assign: update_ivar_type would widen the
+                # existing-vs-new mismatch to `poly`, but we know this
+                # transition is just refining the empty-hash default.
+                replace_ivar_type(@current_class_idx, iname, promoted)
+                # Mark the runtime feature as needed before emit_features
+                # runs, so the corresponding `sp_*Hash_*` helpers are
+                # emitted into the generated C.
+                if promoted == "str_str_hash"
+                  @needs_str_str_hash = 1
+                elsif promoted == "int_str_hash"
+                  @needs_int_str_hash = 1
+                elsif promoted == "sym_int_hash"
+                  @needs_sym_int_hash = 1
+                elsif promoted == "sym_str_hash"
+                  @needs_sym_str_hash = 1
                 end
               end
             end
@@ -10713,9 +10825,36 @@ class Compiler
             end
           end
           if @nd_type[sid] == "InstanceVariableWriteNode"
-            ivar = sanitize_ivar(@nd_name[sid])
-            val = compile_expr(@nd_expression[sid])
-            emit_raw("  " + self_arrow + ivar + " = " + val + ";")
+            ivar_name = @nd_name[sid]
+            ivar = sanitize_ivar(ivar_name)
+            expr_id_iv = @nd_expression[sid]
+            # Match the special-case in compile_stmt: an empty `{}`
+            # assigned to an ivar promoted by scan_writer_calls needs
+            # the matching `sp_*Hash_new()` constructor (issue #64).
+            ivt = cls_ivar_type(@current_class_idx, ivar_name)
+            iv_ctor = ""
+            if is_empty_hash_literal(expr_id_iv) == 1 && ivt != "" && ivt != "str_int_hash"
+              if ivt == "str_str_hash"
+                @needs_str_str_hash = 1
+                iv_ctor = "sp_StrStrHash_new()"
+              elsif ivt == "int_str_hash"
+                @needs_int_str_hash = 1
+                iv_ctor = "sp_IntStrHash_new()"
+              elsif ivt == "sym_int_hash"
+                @needs_sym_int_hash = 1
+                iv_ctor = "sp_SymIntHash_new()"
+              elsif ivt == "sym_str_hash"
+                @needs_sym_str_hash = 1
+                iv_ctor = "sp_SymStrHash_new()"
+              end
+            end
+            if iv_ctor != ""
+              @needs_gc = 1
+              emit_raw("  " + self_arrow + ivar + " = " + iv_ctor + ";")
+            else
+              val = compile_expr(expr_id_iv)
+              emit_raw("  " + self_arrow + ivar + " = " + val + ";")
+            end
           else
             if @nd_type[sid] != "SuperNode"
               # Compile other statements (e.g., method calls like @arr[0] = val)
@@ -18492,7 +18631,39 @@ class Compiler
       return
     end
     if t == "InstanceVariableWriteNode"
-      val = compile_expr(@nd_expression[nid])
+      iname = @nd_name[nid]
+      expr_id = @nd_expression[nid]
+      # Empty `{}` literal assigned to an ivar that scan_writer_calls
+      # has promoted to a non-default hash type. compile_hash_literal
+      # always returns `sp_StrIntHash_new()` for empty `{}`, so without
+      # this special-case the ivar slot's type and the initializer's
+      # type disagree (issue #64).
+      ivt = ""
+      if @current_class_idx >= 0
+        ivt = cls_ivar_type(@current_class_idx, iname)
+      end
+      if is_empty_hash_literal(expr_id) == 1 && ivt != "" && ivt != "str_int_hash"
+        ctor = ""
+        if ivt == "str_str_hash"
+          @needs_str_str_hash = 1
+          ctor = "sp_StrStrHash_new()"
+        elsif ivt == "int_str_hash"
+          @needs_int_str_hash = 1
+          ctor = "sp_IntStrHash_new()"
+        elsif ivt == "sym_int_hash"
+          @needs_sym_int_hash = 1
+          ctor = "sp_SymIntHash_new()"
+        elsif ivt == "sym_str_hash"
+          @needs_sym_str_hash = 1
+          ctor = "sp_SymStrHash_new()"
+        end
+        if ctor != ""
+          @needs_gc = 1
+          emit("  " + self_arrow + sanitize_ivar(iname) + " = " + ctor + ";")
+          return
+        end
+      end
+      val = compile_expr(expr_id)
       # Check if we're in a module class method
       mod_ivar = 0
       mi3 = 0
@@ -18500,7 +18671,6 @@ class Compiler
         mmod = @module_names[mi3]
         if mmod != ""
           if @current_method_name.start_with?(mmod + "_cls_")
-            iname = @nd_name[nid]
             cname3 = mmod + "_" + iname[1, iname.length - 1]
             ci3 = find_const_idx(cname3)
             if ci3 >= 0
@@ -18512,7 +18682,7 @@ class Compiler
         mi3 = mi3 + 1
       end
       if mod_ivar == 0
-        emit("  " + self_arrow + sanitize_ivar(@nd_name[nid]) + " = " + val + ";")
+        emit("  " + self_arrow + sanitize_ivar(iname) + " = " + val + ";")
       end
       return
     end
