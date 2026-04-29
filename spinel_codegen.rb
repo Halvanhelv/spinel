@@ -2666,7 +2666,6 @@ class Compiler
                   return "poly_array"
                 end
                 if type_is_pointer(vt) == 1
-                  @needs_ptr_array = 1
                   @needs_gc = 1
                   return vt + "_ptr_array"
                 end
@@ -4598,7 +4597,6 @@ class Compiler
                     return "poly_array"
                   end
                   if type_is_pointer(vt) == 1
-                    @needs_ptr_array = 1
                     @needs_gc = 1
                     return vt + "_ptr_array"
                   end
@@ -14064,7 +14062,6 @@ class Compiler
             # so the GC scans the elements. Without this they'd be pushed
             # into an int_array and silently swept.
             if type_is_pointer(vt) == 1
-              @needs_ptr_array = 1
               @needs_gc = 1
               tmp = new_temp
               emit("  sp_PtrArray *" + tmp + " = sp_PtrArray_new();")
@@ -14722,7 +14719,6 @@ class Compiler
       return "sp_int_to_s(" + rc + ")"
     end
     if mname == "inspect"
-      @needs_string_helpers = 1
       return "sp_int_to_s(" + rc + ")"
     end
     if mname == "digits"
@@ -14809,7 +14805,6 @@ class Compiler
       return "sp_float_to_s(" + rc + ")"
     end
     if mname == "inspect"
-      @needs_string_helpers = 1
       return "sp_float_inspect(" + rc + ")"
     end
     if mname == "to_i"
@@ -20616,7 +20611,6 @@ class Compiler
       if op == "+"
         tt = new_temp
         ti = new_temp
-        @needs_string_helpers = 1
         emit("  { sp_IntStrHash *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx +
              "; sp_IntStrHash_set(" + tt + ", " + ti +
              ", sp_str_concat(sp_IntStrHash_get(" + tt + ", " + ti + "), " + val + ")); }")
@@ -20639,23 +20633,18 @@ class Compiler
   # callers can fall back to their previous behaviour.
   def compile_inspect_for(at, val)
     if at == "int"
-      @needs_string_helpers = 1
       return "sp_int_to_s(" + val + ")"
     end
     if at == "float"
-      @needs_string_helpers = 1
       return "sp_float_inspect(" + val + ")"
     end
     if at == "string" || at == "string?"
-      @needs_string_helpers = 1
       return "sp_str_inspect(" + val + ")"
     end
     if at == "mutable_str"
-      @needs_string_helpers = 1
       return "sp_str_inspect(" + val + "->data)"
     end
     if at == "symbol"
-      @needs_string_helpers = 1
       return "sp_str_concat(\":\", sp_sym_to_s(" + val + "))"
     end
     if at == "bool"
@@ -20666,32 +20655,26 @@ class Compiler
     end
     if at == "int_array"
       @needs_int_array = 1
-      @needs_string_helpers = 1
       return "sp_IntArray_inspect(" + val + ")"
     end
     if at == "float_array"
       @needs_float_array = 1
-      @needs_string_helpers = 1
       return "sp_FloatArray_inspect(" + val + ")"
     end
     if at == "str_array"
       @needs_str_array = 1
-      @needs_string_helpers = 1
       return "sp_StrArray_inspect(" + val + ")"
     end
     if at == "sym_array"
       @needs_int_array = 1
-      @needs_string_helpers = 1
       return "sp_SymArray_inspect(" + val + ")"
     end
     if at == "poly_array"
       @needs_rb_value = 1
-      @needs_string_helpers = 1
       return "sp_PolyArray_inspect(" + val + ")"
     end
     if at == "poly"
       @needs_rb_value = 1
-      @needs_string_helpers = 1
       return "sp_poly_inspect(" + val + ")"
     end
     ""
