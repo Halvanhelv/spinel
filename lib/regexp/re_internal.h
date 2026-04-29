@@ -112,10 +112,17 @@ typedef struct mrb_regexp_pattern {
 /* Maximum captures */
 #define RE_MAX_CAPTURES 32
 
-/* Thread struct for Pike VM */
+/* Thread struct for Pike VM. `sp` is the input position the thread is
+   waiting for; the outer loop only dispatches a thread when its sp
+   matches the loop's current sp, otherwise the thread is deferred to
+   the next iteration. This keeps multi-byte consumers (RE_CLASS over
+   a UTF-8 char, advancing 3 bytes) in sync with single-byte consumers
+   (RE_CHAR, advancing 1 byte) without requiring a uniform char-step
+   outer loop — both varieties just enqueue at their own sp+N. */
 typedef struct {
   uint32_t pc;
   int cap_slot;
+  const char *sp;
 } re_thread_cache;
 
 /* Compile a pattern string into bytecode */

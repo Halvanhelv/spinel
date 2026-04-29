@@ -207,6 +207,7 @@ add_thread(pike_state *s, re_threadlist *list,
     re_thread *t = &list->threads[list->count++];
     t->pc = pc;
     t->cap_slot = cap_slot;
+    t->sp = sp;
   }
 }
 
@@ -326,6 +327,16 @@ pike_vm(const mrb_regexp_pattern *pat,
     for (int i = 0; i < curr.count; i++) {
       re_thread *th = &curr.threads[i];
       if (th->pc >= pat->code_len) continue;
+      /* A thread enqueued at sp+advance (RE_CLASS over a multi-byte
+         char) waits in the list until the byte-stepped outer sp
+         catches up to its own sp. Until then, carry it forward to
+         next iteration's curr unchanged. */
+      if (th->sp != sp) {
+        if (next.count < next.capa) {
+          next.threads[next.count++] = *th;
+        }
+        continue;
+      }
 
       re_inst inst = pat->code[th->pc];
       switch (inst.op) {
