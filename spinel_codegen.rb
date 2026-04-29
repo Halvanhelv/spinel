@@ -22380,6 +22380,29 @@ class Compiler
         end
         emit("  " + self_arrow + sanitize_ivar(iname) + " = " + v + ";")
       end
+      return
+    end
+    if @nd_type[tid] == "CallTargetNode"
+      # `obj.attr = val` style — used as one slot in a multi-write
+      # destructure. Lower as either a direct ivar write (when the
+      # receiver class has an attr_writer for the name) or as a call
+      # to `sp_<C>_<attr>_eq`.
+      recv_id = @nd_receiver[tid]
+      mname = @nd_name[tid]
+      if mname.end_with?("=")
+        mname = mname[0, mname.length - 1]
+      end
+      recv_t = infer_type(recv_id)
+      recv_c = compile_expr(recv_id)
+      if recv_t.start_with?("obj_")
+        cls_n = recv_t[4, recv_t.length - 4]
+        ci_w = find_class_idx(cls_n)
+        if cls_has_attr_writer(ci_w, mname) == 1
+          emit("  " + recv_c + "->iv_" + mname + " = " + value_expr + ";")
+        else
+          emit("  sp_" + cls_n + "_" + mname + "_eq(" + recv_c + ", " + value_expr + ");")
+        end
+      end
     end
   end
 
@@ -22587,6 +22610,28 @@ class Compiler
         tid = targets[k]
         if @nd_type[tid] == "LocalVariableTargetNode"
           emit("  " + fiber_var_ref(@nd_name[tid]) + " = sp_IntArray_get(" + tmp + ", " + k.to_s + ");")
+        end
+        if @nd_type[tid] == "CallTargetNode"
+          # `obj.attr = <slot>` in a multi-write context.
+          # Inline as a direct ivar write when the recv class has an
+          # attr_writer; otherwise fall back to the generated setter.
+          recv_id = @nd_receiver[tid]
+          mname = @nd_name[tid]
+          if mname.end_with?("=")
+            mname = mname[0, mname.length - 1]
+          end
+          recv_t = infer_type(recv_id)
+          recv_c = compile_expr(recv_id)
+          slot_expr = "sp_IntArray_get(" + tmp + ", " + k.to_s + ")"
+          if recv_t.start_with?("obj_")
+            cls_n = recv_t[4, recv_t.length - 4]
+            ci_w = find_class_idx(cls_n)
+            if cls_has_attr_writer(ci_w, mname) == 1
+              emit("  " + recv_c + "->iv_" + mname + " = " + slot_expr + ";")
+            else
+              emit("  sp_" + cls_n + "_" + mname + "_eq(" + recv_c + ", " + slot_expr + ");")
+            end
+          end
         end
         k = k + 1
       end

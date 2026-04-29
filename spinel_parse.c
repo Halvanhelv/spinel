@@ -300,6 +300,13 @@ static int flatten(pm_node_t *node) {
     NAME("name", n->name);
     break;
   }
+  case PM_CALL_TARGET_NODE: {
+    pm_call_target_node_t *n = (pm_call_target_node_t *)node;
+    N("CallTargetNode");
+    NAME("name", n->name);
+    R("receiver", n->receiver);
+    break;
+  }
   case PM_INSTANCE_VARIABLE_AND_WRITE_NODE: {
     pm_instance_variable_and_write_node_t *n = (pm_instance_variable_and_write_node_t *)node;
     N("InstanceVariableAndWriteNode");
