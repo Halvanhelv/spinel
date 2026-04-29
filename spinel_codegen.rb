@@ -8144,6 +8144,30 @@ class Compiler
         end
       end
     end
+    # Multi-write to ivars: `@a, @b = pulse_0, pulse_1`. Mirrors the
+    # single-write branch above so each ivar's type is widened from
+    # the corresponding RHS slot. Without this the multi-write left
+    # the ivars at their initial "int" guess and the struct came out
+    # with mrb_int fields that the assigning method then tried to
+    # overwrite with pointer values.
+    if @nd_type[nid] == "MultiWriteNode"
+      if @current_class_idx >= 0
+        targets_mw = parse_id_list(@nd_targets[nid])
+        val_mw = @nd_expression[nid]
+        ti_mw = 0
+        while ti_mw < targets_mw.length
+          tid_mw = targets_mw[ti_mw]
+          if @nd_type[tid_mw] == "InstanceVariableTargetNode"
+            iname_mw = @nd_name[tid_mw]
+            at_mw = scan_ivars_multi_target_type(val_mw, ti_mw)
+            if at_mw != "int" && at_mw != "nil"
+              update_ivar_type(@current_class_idx, iname_mw, at_mw)
+            end
+          end
+          ti_mw = ti_mw + 1
+        end
+      end
+    end
     if @nd_type[nid] == "CallNode"
       mname = @nd_name[nid]
       recv = @nd_receiver[nid]
