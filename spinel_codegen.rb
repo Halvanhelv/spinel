@@ -17041,6 +17041,28 @@ class Compiler
     if at == "symbol"
       return "sp_box_sym(" + val + ")"
     end
+    # Built-in pointer types route through sp_box_obj with a reserved
+    # negative cls_id (mirrors box_expr_to_poly).
+    if at == "int_array"
+      return "sp_box_int_array(" + val + ")"
+    end
+    if at == "float_array"
+      return "sp_box_float_array(" + val + ")"
+    end
+    if at == "str_array"
+      return "sp_box_str_array(" + val + ")"
+    end
+    if at == "sym_array"
+      return "sp_box_sym_array(" + val + ")"
+    end
+    if is_ptr_array_type(at) == 1
+      return "sp_box_ptr_array(" + val + ")"
+    end
+    if is_obj_type(at) == 1
+      cname = at[4, at.length - 4]
+      ci = find_class_idx(cname)
+      return "sp_box_obj(" + val + ", " + ci.to_s + ")"
+    end
     "sp_box_int(" + val + ")"
   end
 
@@ -18501,7 +18523,14 @@ class Compiler
         mi3 = mi3 + 1
       end
       if mod_ivar == 0
-        emit("  " + self_arrow + sanitize_ivar(iname) + " = " + value_expr + ";")
+        v = value_expr
+        if @current_class_idx >= 0
+          it = cls_ivar_type(@current_class_idx, iname)
+          if it == "poly" && value_type != "" && value_type != "poly"
+            v = box_value_to_poly(value_type, value_expr)
+          end
+        end
+        emit("  " + self_arrow + sanitize_ivar(iname) + " = " + v + ";")
       end
     end
   end
@@ -18609,7 +18638,9 @@ class Compiler
     emit("  SP_GC_ROOT(" + tmp + ");")
     len_tmp = new_temp
     emit("  mrb_int " + len_tmp + " = " + length_c_expr(rt, tmp) + ";")
-    # Pre-splat targets.
+    # Pre-splat targets. int_array / sym_array share IntArray storage,
+    # so they share the default. Other typed arrays need their matching
+    # `_get` / `_slice` so the C calls are well-typed.
     get_fn = "sp_IntArray_get"
     slice_fn = "sp_IntArray_slice"
     if rt == "str_array"
@@ -18619,6 +18650,10 @@ class Compiler
     if rt == "float_array"
       get_fn = "sp_FloatArray_get"
       slice_fn = "sp_FloatArray_slice"
+    end
+    if rt == "poly_array"
+      get_fn = "sp_PolyArray_get"
+      slice_fn = "sp_PolyArray_slice"
     end
     if is_ptr_array_type(rt) == 1
       get_fn = "sp_PtrArray_get"
