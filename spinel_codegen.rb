@@ -19179,6 +19179,11 @@ class Compiler
     if at == "proc" || at == "lambda"
       return "sp_box_proc(" + val + ")"
     end
+    # Other pointer types (hashes, mutable strings, etc.) — box with a
+    # neutral cls_id of 0 rather than truncating the pointer to int.
+    if type_is_pointer(at) == 1
+      return "sp_box_obj((void *)(" + val + "), 0)"
+    end
     "sp_box_int(" + val + ")"
   end
 
@@ -19203,6 +19208,33 @@ class Compiler
     end
     if at == "symbol"
       return "sp_box_sym(" + val + ")"
+    end
+    if at == "int_array"
+      return "sp_box_int_array(" + val + ")"
+    end
+    if at == "float_array"
+      return "sp_box_float_array(" + val + ")"
+    end
+    if at == "str_array"
+      return "sp_box_str_array(" + val + ")"
+    end
+    if at == "sym_array"
+      return "sp_box_sym_array(" + val + ")"
+    end
+    if is_ptr_array_type(at) == 1
+      return "sp_box_ptr_array(" + val + ")"
+    end
+    if is_obj_type(at) == 1
+      cname = at[4, at.length - 4]
+      ci = find_class_idx(cname)
+      return "sp_box_obj(" + val + ", " + ci.to_s + ")"
+    end
+    # Other pointer types (hashes, mutable strings, etc.) — box with a
+    # neutral cls_id of 0. Round-tripping back to the original concrete
+    # type is the caller's problem; this just makes the assignment
+    # type-check rather than silently truncating a pointer to mrb_int.
+    if type_is_pointer(at) == 1
+      return "sp_box_obj((void *)(" + val + "), 0)"
     end
     "sp_box_int(" + val + ")"
   end
