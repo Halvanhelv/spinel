@@ -12919,6 +12919,7 @@ class Compiler
     if @cls_is_value_type[ci] == 1
       emit_raw("static sp_" + cname + " sp_" + cname + "_new(" + constructor_params_decl(ci) + ") {")
       emit_raw("  sp_" + cname + " self = {0};")
+      @in_gc_scope = 0
     else
       emit_raw("static inline sp_" + cname + " *sp_" + cname + "_new(" + constructor_params_decl(ci) + ") {")
       emit_raw("  SP_GC_SAVE();")
