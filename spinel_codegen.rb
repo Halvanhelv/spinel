@@ -6538,11 +6538,15 @@ class Compiler
                   while kk < arg_ids.length
                     at = infer_type(arg_ids[kk])
                     if kk < ptypes.length
-                      if ptypes[kk] == "int"
-                        if at != "int"
-                          ptypes[kk] = at
-                        end
-                      end
+                      # Unify against the existing param type rather
+                      # than only widening from "int". The previous
+                      # rule let the FIRST non-int call site freeze
+                      # the param type; subsequent disagreeing calls
+                      # (e.g. addr arg seen as Range from one site
+                      # and as Integer from another) compiled to a
+                      # signature mismatch. unify_call_types collapses
+                      # incompatible types to "poly".
+                      ptypes[kk] = unify_call_types(ptypes[kk], at, arg_ids[kk])
                     end
                     kk = kk + 1
                   end
@@ -9580,6 +9584,13 @@ class Compiler
               while kk < arg_ids.length
                 at = infer_type(arg_ids[kk])
                 if kk < ptypes.length
+                  # Same unify-instead-of-only-widen-from-int change as
+                  # the obj-recv path in scan_new_calls. A no-recv self
+                  # call inside the same class is the path that, e.g.,
+                  # `def boot; add_mappings(0x..0x, ...); end` inside
+                  # CPU#boot lands on, and disagreeing arg types from
+                  # different self-calls need to widen to poly rather
+                  # than freezing on the first non-int call site.
                   ptypes[kk] = unify_call_types(ptypes[kk], at, arg_ids[kk])
                 end
                 kk = kk + 1
@@ -20139,28 +20150,34 @@ class Compiler
         result = result + ", "
       end
       if k < arg_ids.length
-        aexpr = compile_expr(arg_ids[k])
         at = infer_type(arg_ids[k])
         if k < ptypes.length
           pt = ptypes[k]
-          if pt == "poly"
-            result = result + box_expr_to_poly(arg_ids[k])
-            k = k + 1
-            next
-          end
-          if at == "int"
-            if is_obj_type(pt) == 1
-              # Cast int to object pointer
-              pcname = pt[4, pt.length - 4]
-              aexpr = "(sp_" + pcname + " *)" + aexpr
+          # If the param is poly and the arg is anything else, box it.
+          # The unify pass widens disagreeing param types to "poly" but
+          # leaves the call sites untouched; without this branch the
+          # call passes a raw mrb_int / pointer / range to a sp_RbVal
+          # parameter and the C compiler rejects it.
+          if pt == "poly" && at != "poly"
+            aexpr = box_expr_to_poly(arg_ids[k])
+          else
+            aexpr = compile_expr(arg_ids[k])
+            if at == "int"
+              if is_obj_type(pt) == 1
+                # Cast int to object pointer
+                pcname = pt[4, pt.length - 4]
+                aexpr = "(sp_" + pcname + " *)" + aexpr
+              end
+            end
+            if is_obj_type(at) == 1
+              if pt == "int"
+                # Cast object pointer to int
+                aexpr = "(mrb_int)" + aexpr
+              end
             end
           end
-          if is_obj_type(at) == 1
-            if pt == "int"
-              # Cast object pointer to int
-              aexpr = "(mrb_int)" + aexpr
-            end
-          end
+        else
+          aexpr = compile_expr(arg_ids[k])
         end
         result = result + aexpr
       else
