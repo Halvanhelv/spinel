@@ -2855,10 +2855,23 @@ class Compiler
               if is_obj_type(bret) == 1
                 return bret + "_ptr_array"
               end
+              # Block returns a non-trivial type (an array literal,
+              # poly value, ...). The map's overall result is still an
+              # Array — fall through to the recv-based default below
+              # only when recv is already array-shaped, otherwise
+              # return int_array as a generic placeholder.
             end
           end
         end
-        return infer_type(recv)
+        rt_recv = infer_type(recv)
+        # Range#map / Integer#step.map / non-array recv → result is
+        # an Array, not a Range/IntArray. Without this, an
+        # `@x = (0...n).map {...}` recorded the ivar as `range` and
+        # later `@x = something_else` writes failed to type-check.
+        if rt_recv == "range" || rt_recv == "int"
+          return "int_array"
+        end
+        return rt_recv
       end
       return "int_array"
     end
