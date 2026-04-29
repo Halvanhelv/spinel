@@ -26979,11 +26979,39 @@ class Compiler
     if lt == "CallNode"
       lm = @nd_name[last]
       if lm == "[]=" || lm == "push" || lm == "pop" || lm == "emit" || lm == "emit_raw" || lm == "puts" || lm == "print" || lm == "p" || lm == "printf" || lm == "warn" || lm == "raise" || lm == "exit" || lm == "abort" || lm == "sleep" || lm == "delete" || lm == "clear" || lm == "concat" || lm == "prepend" || lm == "fill" || lm == "insert" || lm == "update" || lm == "merge!" || lm == "store" || lm == "reverse!" || lm == "sort!" || lm == "each" || lm == "times" || lm == "upto" || lm == "downto"
-        compile_stmt(last)
-        if return_type != "void"
-          emit("  return " + c_return_default(return_type) + ";")
+        # The hardcoded list above is meant to catch builtin Array/Hash
+        # mutators conventionally called for side-effect. But several of
+        # these names (update, clear, concat, delete, each, pop, push, ...)
+        # are equally plausible on user classes — and there returning the
+        # call's value is the only correct behavior. If the receiver
+        # resolves to a user class and that class defines a method with
+        # the same name, treat the call as an ordinary expression.
+        last_recv = @nd_receiver[last]
+        is_user_method = 0
+        if last_recv < 0
+          if @current_class_idx >= 0
+            if cls_find_method_direct(@current_class_idx, lm) >= 0
+              is_user_method = 1
+            end
+          end
+        else
+          last_rt = base_type(infer_type(last_recv))
+          if is_obj_type(last_rt) == 1
+            recv_ci = find_class_idx(last_rt[4, last_rt.length - 4])
+            if recv_ci >= 0
+              if cls_find_method_direct(recv_ci, lm) >= 0
+                is_user_method = 1
+              end
+            end
+          end
         end
-        return
+        if is_user_method == 0
+          compile_stmt(last)
+          if return_type != "void"
+            emit("  return " + c_return_default(return_type) + ";")
+          end
+          return
+        end
       end
       # Receiver-based setter calls (obj.attr = val)
       if lm.end_with?("=") && lm != "==" && lm != "!=" && lm != "<=" && lm != ">="
