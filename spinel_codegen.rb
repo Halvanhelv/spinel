@@ -10262,6 +10262,31 @@ class Compiler
           end
         end
       end
+      # Push-promotion path (issue #91): an empty `[]` grows into an
+      # `obj_<C>_ptr_array` via later `push(Foo.new(...))` / `<< Foo.new(...)`
+      # calls. The literal-walk above doesn't see this because no
+      # `[Foo.new(...)]` literal exists. Inspect every push-style call
+      # and, if the argument's inferred type is `obj_<C>`, add `<C>`
+      # to the exclusion so it stays heap-allocated.
+      if @nd_type[nid] == "CallNode"
+        mname = @nd_name[nid]
+        if mname == "push" || mname == "<<" || mname == "unshift" || mname == "prepend"
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            push_args = get_args(args_id)
+            pk = 0
+            while pk < push_args.length
+              at_push = infer_type(push_args[pk])
+              if is_obj_type(at_push) == 1
+                if not_in(at_push, @ptr_array_stored_types) == 1
+                  @ptr_array_stored_types.push(at_push)
+                end
+              end
+              pk = pk + 1
+            end
+          end
+        end
+      end
       nid = nid + 1
     end
   end
