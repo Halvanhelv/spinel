@@ -770,10 +770,9 @@ class Compiler
   # expression for the proc to forward at a `&block`-taking call site
   # (a literal block compiles to sp_proc_new(...); a `&proc_var` is
   # the captured `sp_Proc *` local), or "" if the call site provides
-  # no block. Sets @needs_proc when a forwarded proc is emitted.
+  # no block.
   def block_forward_expr(nid)
     if has_literal_block(nid) == 1
-      @needs_proc = 1
       return compile_proc_literal(nid)
     end
     # Anonymous `&` forwarding (Ruby 3.1+): `inner(&)` where the
@@ -783,13 +782,11 @@ class Compiler
     blk = @nd_block[nid]
     if blk >= 0 && @nd_type[blk] == "BlockArgumentNode" && @nd_expression[blk] < 0
       if @current_method_block_param != ""
-        @needs_proc = 1
         return "lv_" + @current_method_block_param
       end
     end
     ba = find_block_arg(nid)
     if ba >= 0
-      @needs_proc = 1
       return compile_expr(ba)
     end
     ""
@@ -7126,10 +7123,8 @@ class Compiler
                 elsif promoted == "sym_str_hash"
                   @needs_sym_str_hash = 1
                 elsif promoted == "str_poly_hash"
-                  @needs_str_poly_hash = 1
                   @needs_rb_value = 1
                 elsif promoted == "sym_poly_hash"
-                  @needs_sym_poly_hash = 1
                   @needs_rb_value = 1
                 end
               end
@@ -11675,10 +11670,8 @@ class Compiler
                 @needs_sym_str_hash = 1
                 iv_ctor = "sp_SymStrHash_new()"
               elsif ivt == "str_poly_hash"
-                @needs_str_poly_hash = 1
                 iv_ctor = "sp_StrPolyHash_new()"
               elsif ivt == "sym_poly_hash"
-                @needs_sym_poly_hash = 1
                 iv_ctor = "sp_SymPolyHash_new()"
               end
             end
@@ -19780,10 +19773,8 @@ class Compiler
           @needs_sym_str_hash = 1
           ctor = "sp_SymStrHash_new()"
         elsif ivt == "str_poly_hash"
-          @needs_str_poly_hash = 1
           ctor = "sp_StrPolyHash_new()"
         elsif ivt == "sym_poly_hash"
-          @needs_sym_poly_hash = 1
           ctor = "sp_SymPolyHash_new()"
         end
         if ctor != ""
