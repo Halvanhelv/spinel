@@ -13978,6 +13978,25 @@ class Compiler
       end
       return "(" + self_arrow + sanitize_ivar(iname_w) + " = " + val + ")"
     end
+    if t == "LocalVariableWriteNode"
+      # `local = expr` used as an expression (e.g. inside a chained
+      # `@a = local = expr` write). Without this branch compile_expr
+      # falls through and returns the default "0", which silently
+      # zeroed the outer write — every `@_p_nz = ___a__ = __data__`
+      # in optcarrots OptimizedCodeBuilder CPU output became
+      # `iv__p_nz = 0`. Lower as a parenthesized C-style assignment.
+      val = compile_expr(@nd_expression[nid])
+      return "(" + fiber_var_ref(@nd_name[nid]) + " = " + val + ")"
+    end
+    if t == "LocalVariableOperatorWriteNode"
+      # `local OP= expr` used as an expression (e.g. ORA's
+      # `@_p_nz = ___a__ |= __data__`). Same shape as the chained
+      # write above — without this, the op-assign drops out and the
+      # outer write zeroes the ivar.
+      op = @nd_binop[nid]
+      val = compile_expr(@nd_expression[nid])
+      return "(" + fiber_var_ref(@nd_name[nid]) + " " + op + "= " + val + ")"
+    end
     if t == "ConstantReadNode"
       if @nd_name[nid] == "ARGV"
         return "sp_argv"
@@ -14072,8 +14091,37 @@ class Compiler
       body = @nd_body[nid]
       if body >= 0
         stmts = get_stmts(body)
-        if stmts.length > 0
-          return compile_expr(stmts.last)
+        if stmts.length == 1
+          return compile_expr(stmts[0])
+        end
+        if stmts.length > 1
+          # Multi-statement parens like `(stmt1; stmt2; ... ; expr)`
+          # in expression context. We must NOT lower this to a C
+          # comma-expression `(a, b, c)` because Cs `expr1 + expr2`
+          # has unspecified evaluation order between operands, and
+          # if either side has side effects (e.g. RTSs `(___sp__ =
+          # ___sp__+1 & 0xff; __ram__[0x100+sp])`), GCC can reorder
+          # so the increments fire out of order and the byte pulls
+          # come from the wrong stack slots.
+          # Strategy: emit the leading statements via emit() so they
+          # are sequenced C statements. Then evaluate the final
+          # expression and BIND it to a temp before returning, so
+          # that an enclosing expression (e.g. `parens1 + parens2`)
+          # cant interleave additional side effects from another
+          # parens between this ones evaluation and use.
+          k = 0
+          while k < stmts.length - 1
+            v = compile_expr(stmts[k])
+            if v != "" && v != "0"
+              emit("  " + v + ";")
+            end
+            k = k + 1
+          end
+          last_expr = compile_expr(stmts.last)
+          last_t = infer_type(stmts.last)
+          tmp = new_temp
+          emit("  " + c_type(last_t) + " " + tmp + " = " + last_expr + ";")
+          return tmp
         end
       end
       return "0"
