@@ -4203,6 +4203,23 @@ class Compiler
     $stderr.puts "warning: cannot resolve call to '" + mname + "' on " + recv_tag + " (emitting 0)"
   end
 
+  # Same dedupe pattern as warn_unresolved_call but for unknown
+  # ConstantReadNode names. Reuses @unresolved_call_warnings so a
+  # single program with both an undefined method and an undefined
+  # constant produces two distinct warnings, not interleaved noise.
+  def warn_unresolved_const(rname)
+    key = "_const_:" + rname
+    i = 0
+    while i < @unresolved_call_warnings.length
+      if @unresolved_call_warnings[i] == key
+        return
+      end
+      i = i + 1
+    end
+    @unresolved_call_warnings.push(key)
+    $stderr.puts "warning: uninitialized constant '" + rname + "' (emitting 0)"
+  end
+
   # Walk every class's parent chain. A cycle anywhere on the chain is
   # a fatal program error: bail with a clear message instead of letting
   # the recursive helpers loop forever. Self-inheritance (`class A < A`)
@@ -13549,13 +13566,19 @@ class Compiler
       # Built-in module-like constants (Math, File, ENV, …) and
       # registered classes / modules legitimately reach here as a
       # method-call receiver and don't need their own value at the
-      # use site. Any other unresolved constant means the user wrote
-      # a name we don't know about — reject it now with a clear
-      # NameError-style message instead of emitting a bare C
-      # identifier that the C compiler later trips over (issue #75).
+      # use site. Any other unresolved constant: warn and emit 0,
+      # paired with the warn-and-emit-0 fallback at unresolved method
+      # call sites (b17ec47). Hard error here used to be the design
+      # (issue #75) but it bails on programs whose unsupported
+      # idioms (e.g. `CLK_1, ..., CLK_8 = (1..8).map { ... }` —
+      # constants registered by a multi-assign-from-Range#map shape
+      # spinel doesn't yet detect) would otherwise compile silently
+      # to wrong-but-running C. Warn keeps the diagnostic surface
+      # consistent: every unresolved name produces one stderr line
+      # plus a `0` placeholder, leaving the user a clear punch list.
       if is_known_constant_name(rname) == 0
-        $stderr.puts "Error: uninitialized constant " + rname
-        exit(1)
+        warn_unresolved_const(rname)
+        return "0"
       end
       return rname
     end
