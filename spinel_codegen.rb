@@ -271,6 +271,13 @@ class Compiler
 
     # Symbol type Phase 2 Step 1: intern table (infrastructure only; unused yet).
     @sym_names = "".split(",")
+
+    # instance_eval block hoisting: parallel arrays indexed by synthetic
+    # function id N. Each lifted block becomes a file-scope static
+    # function `sp_ieval_<N>` that takes a typed `self` parameter.
+    @ieval_counter = 0
+    @ieval_class_idxs = []
+    @ieval_body_ids = []
   end
 
   # Backslash-n for C string literals - bootstrap-safe (avoids escape level issues)
@@ -4010,11 +4017,300 @@ class Compiler
       end
     }
 
+    # Pass 2.6: hoist `recv.instance_eval do ... end` blocks into
+    # file-scope static functions. Receiver-class flow analysis picks the
+    # receiver's class, the block body is later compiled as a function
+    # with a typed `self` parameter, and the call site is rewritten to
+    # invoke that function directly. v1: top-level locals previously
+    # assigned `ClassName.new`; no block params; no closures; no yield.
+    rewrite_instance_eval_calls
+
     # Pass 2.5: infer lambda parameter types from call sites
     infer_lambda_param_types
 
     # Pass 3: infer return types
     infer_all_returns
+  end
+
+  def rewrite_instance_eval_calls
+    @ieval_counter = 0
+    local_class = {}
+    # Walk the AST recursively from the root, respecting scope boundaries.
+    # `local_class` maps `name -> class_idx` for the current scope only.
+    # Method/lambda/class/module/block bodies are NOT entered: their
+    # locals belong to a different scope, so the top-level map must not
+    # apply to them. A reassignment to a non-`Class.new` RHS poisons the
+    # mapping for that name.
+    ieval_walk(@root_id, local_class)
+  end
+
+  def ieval_walk(nid, local_class)
+    if nid < 0
+      return
+    end
+    t = @nd_type[nid]
+    if t == "ProgramNode"
+      ieval_walk(@nd_body[nid], local_class)
+      return
+    end
+    if t == "StatementsNode"
+      stmts = parse_id_list(@nd_stmts[nid])
+      k = 0
+      while k < stmts.length
+        ieval_walk(stmts[k], local_class)
+        k = k + 1
+      end
+      return
+    end
+    if t == "LocalVariableWriteNode"
+      val_nid = @nd_expression[nid]
+      vname = @nd_name[nid]
+      if val_nid >= 0
+        ieval_walk(val_nid, local_class)
+        ci = ieval_expr_class_idx(val_nid)
+        if ci >= 0
+          local_class[vname] = ci
+        else
+          if local_class.key?(vname)
+            local_class.delete(vname)
+          end
+        end
+      end
+      return
+    end
+    if t == "CallNode"
+      if @nd_name[nid] == "instance_eval"
+        ieval_rewrite_call(nid, local_class)
+        # Don't descend into the lifted block body.
+        return
+      end
+      r = @nd_receiver[nid]
+      if r >= 0
+        ieval_walk(r, local_class)
+      end
+      a = @nd_arguments[nid]
+      if a >= 0
+        ieval_walk(a, local_class)
+      end
+      # Block bodies are a separate scope; don't recurse.
+      return
+    end
+    if t == "ArgumentsNode"
+      args = parse_id_list(@nd_args[nid])
+      k = 0
+      while k < args.length
+        ieval_walk(args[k], local_class)
+        k = k + 1
+      end
+      return
+    end
+    if t == "IfNode"
+      ieval_walk(@nd_predicate[nid], local_class)
+      ieval_walk(@nd_body[nid], local_class)
+      ieval_walk(@nd_subsequent[nid], local_class)
+      ieval_walk(@nd_else_clause[nid], local_class)
+      return
+    end
+    if t == "UnlessNode"
+      ieval_walk(@nd_predicate[nid], local_class)
+      ieval_walk(@nd_body[nid], local_class)
+      ieval_walk(@nd_else_clause[nid], local_class)
+      return
+    end
+    if t == "ElseNode"
+      ieval_walk(@nd_body[nid], local_class)
+      return
+    end
+    if t == "WhileNode"
+      ieval_walk(@nd_predicate[nid], local_class)
+      ieval_walk(@nd_body[nid], local_class)
+      return
+    end
+    if t == "UntilNode"
+      ieval_walk(@nd_predicate[nid], local_class)
+      ieval_walk(@nd_body[nid], local_class)
+      return
+    end
+    if t == "CaseNode"
+      ieval_walk(@nd_predicate[nid], local_class)
+      conds = parse_id_list(@nd_conditions[nid])
+      k = 0
+      while k < conds.length
+        ieval_walk(conds[k], local_class)
+        k = k + 1
+      end
+      ieval_walk(@nd_else_clause[nid], local_class)
+      return
+    end
+    if t == "WhenNode"
+      ieval_walk(@nd_body[nid], local_class)
+      return
+    end
+    if t == "BeginNode"
+      ieval_walk(@nd_body[nid], local_class)
+      ieval_walk(@nd_rescue_clause[nid], local_class)
+      ieval_walk(@nd_ensure_clause[nid], local_class)
+      return
+    end
+    # DefNode, LambdaNode, ClassNode, ModuleNode, BlockNode: not entered.
+    # Their bodies introduce new scopes; the top-level map must not leak
+    # in. Anything else: stop. Conservative — we won't rewrite.
+  end
+
+  def ieval_expr_class_idx(nid)
+    if @nd_type[nid] == "CallNode"
+      if @nd_name[nid] == "new"
+        recv = @nd_receiver[nid]
+        if recv >= 0
+          if @nd_type[recv] == "ConstantReadNode"
+            return find_class_idx(@nd_name[recv])
+          end
+          # `Foo::Bar.new`: Spinel's class registry is keyed by the leaf
+          # name, matching how `collect_class` records nested classes.
+          if @nd_type[recv] == "ConstantPathNode"
+            return find_class_idx(@nd_name[recv])
+          end
+        end
+      end
+    end
+    -1
+  end
+
+  def ieval_rewrite_call(nid, local_class)
+    if @nd_name[nid] != "instance_eval"
+      return
+    end
+    recv = @nd_receiver[nid]
+    blk = @nd_block[nid]
+    if recv < 0
+      return
+    end
+    if blk < 0
+      return
+    end
+    # Skip blocks with parameters: lifted function takes only `self`.
+    if @nd_parameters[blk] >= 0
+      return
+    end
+    if @nd_type[recv] != "LocalVariableReadNode"
+      return
+    end
+    vname = @nd_name[recv]
+    if local_class.key?(vname) == false
+      return
+    end
+    ci = local_class[vname]
+    body_id = @nd_body[blk]
+    # v1: bail if the block uses yield/block_given?. Lifting it as a
+    # plain function would lose the enclosing method's block plumbing.
+    # Spinel rejected such code before — leaving it rejected is no
+    # regression, and the support belongs in a follow-up.
+    if body_id >= 0 && body_has_yield(body_id) == 1
+      return
+    end
+    n = @ieval_counter
+    @ieval_counter = @ieval_counter + 1
+    @ieval_class_idxs.push(ci)
+    @ieval_body_ids.push(body_id)
+    # Mark the call site: the function name doubles as the synthetic id.
+    # compile_call_expr / compile_call_stmt recognise the prefix and
+    # emit a direct C call to `sp_ieval_<N>`.
+    @nd_name[nid] = "__sp_ieval_" + n.to_s
+    @nd_block[nid] = -1
+  end
+
+  def emit_ieval_funcs
+    n = 0
+    while n < @ieval_class_idxs.length
+      emit_ieval_func(n, @ieval_class_idxs[n], @ieval_body_ids[n])
+      n = n + 1
+    end
+  end
+
+  # Type inference: walk each lifted block body with `@current_class_idx`
+  # set to the receiver's class so bare self-calls inside the block
+  # propagate arg types to the class's methods. Without this pass, a
+  # block like `app.instance_eval { get("/") }` would fail to teach
+  # `Routes#get(path)` that `path` is a string. Sibling pass to
+  # `infer_class_body_call_types` for hoisted blocks.
+  def infer_ieval_body_call_types
+    n = 0
+    while n < @ieval_class_idxs.length
+      ci = @ieval_class_idxs[n]
+      bid = @ieval_body_ids[n]
+      if bid >= 0
+        @current_class_idx = ci
+        push_scope
+        scan_cls_method_calls(ci, bid)
+        scan_new_calls(bid)
+        pop_scope
+        @current_class_idx = -1
+      end
+      n = n + 1
+    end
+  end
+
+  def is_ieval_call_name(mname)
+    if mname.length <= 11
+      return 0
+    end
+    if mname[0, 11] == "__sp_ieval_"
+      return 1
+    end
+    0
+  end
+
+  def compile_ieval_call(nid)
+    mname = @nd_name[nid]
+    # Synthetic id is the suffix after the 11-char "__sp_ieval_" prefix.
+    suffix = mname[11, mname.length - 11]
+    "sp_ieval_" + suffix + "(" + compile_expr(@nd_receiver[nid]) + ")"
+  end
+
+  # v1 lifts blocks into void-returning functions (Ruby's
+  # instance_eval-as-expression value isn't supported yet). When a
+  # call appears in expression position, return the recv pointer as a
+  # truthy default via a comma expression so callers like
+  # `if obj.instance_eval { ... }` still type-check. Real expression
+  # support — return the block's last expression — is a v2 follow-up.
+  def compile_ieval_call_expr(nid)
+    "(" + compile_ieval_call(nid) + ", " + compile_expr(@nd_receiver[nid]) + ")"
+  end
+
+  def emit_ieval_func(n, ci, bid)
+    cname = @cls_names[ci]
+    @current_class_idx = ci
+    @current_method_name = "__sp_ieval_" + n.to_s
+    @current_method_return = "void"
+    @indent = 1
+    @in_gc_scope = 0
+    @in_yield_method = 0
+
+    if @cls_is_value_type[ci] == 1
+      emit_raw("static void sp_ieval_" + n.to_s + "(sp_" + cname + " self) {")
+    else
+      emit_raw("static void sp_ieval_" + n.to_s + "(sp_" + cname + " *self) {")
+    end
+
+    push_scope
+    if bid >= 0
+      declare_method_locals(bid, "".split(","))
+      if @needs_gc == 1
+        emit("  SP_GC_SAVE();")
+        @in_gc_scope = 1
+        if @cls_is_value_type[ci] == 0
+          emit("  SP_GC_ROOT(self);")
+        end
+      end
+      compile_body_return(bid, "void")
+    end
+    pop_scope
+
+    @current_class_idx = -1
+    @current_method_name = ""
+    @indent = 0
+    emit_raw("}")
+    emit_raw("")
   end
 
   def is_builtin_type_name(name)
@@ -8716,6 +9012,7 @@ class Compiler
     infer_main_call_types
     infer_function_body_call_types
     infer_class_body_call_types
+    infer_ieval_body_call_types
     detect_poly_locals
     # Iterative type inference: converge param types, return types, ivar types.
     # Stop early when the signature of these three arrays stops changing.
@@ -8790,6 +9087,7 @@ class Compiler
     emit_global_constants
     emit_raw("/*LAMBDA_INSERT_POINT*/")
     emit_class_methods
+    emit_ieval_funcs
     emit_toplevel_methods
     # Emit lambda functions before main (they are generated during compilation)
     # We emit them in emit_main after forward declarations
@@ -13760,6 +14058,14 @@ class Compiler
   def compile_call_expr(nid)
     mname = @nd_name[nid]
     recv = @nd_receiver[nid]
+
+    # Hoisted instance_eval block: emit a direct C call to the synthetic
+    # file-scope function. The receiver is a local variable known to
+    # carry a class instance (the rewriter checked this); pass it as the
+    # typed `self` argument.
+    if is_ieval_call_name(mname) == 1
+      return compile_ieval_call_expr(nid)
+    end
 
     # Fiber.new { block }
     if mname == "new" && recv >= 0
@@ -20040,6 +20346,13 @@ class Compiler
 
     # define_method is handled at collection time, skip at runtime
     if mname == "define_method"
+      return
+    end
+
+    # Hoisted instance_eval block (statement context): the lifted
+    # function returns void, so emit it as a plain statement.
+    if is_ieval_call_name(mname) == 1
+      emit("  " + compile_ieval_call(nid) + ";")
       return
     end
 
