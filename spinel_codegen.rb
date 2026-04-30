@@ -257,6 +257,19 @@ class Compiler
     # Module tracking: module_name -> body node id
     @module_names = "".split(",")
     @module_body_ids = []
+    # Module-level singleton accessors (issue #126, Stage 1):
+    #   `class << self; attr_accessor :foo; end` inside `module M`.
+    # Stage 1 only supports the static-fold case: each accessor is
+    # written exactly once with a constant-resolvable RHS (typically a
+    # module name). The folded value at the (module, accessor) key is
+    # then substituted at read sites, so `M.foo.method` lowers via
+    # the existing module-class-method dispatch path on the resolved
+    # constant. Keys are "<Module>.<accessor>"; `@module_acc_const`
+    # holds the resolved constant name (a module/class name) or "" if
+    # unresolved (writes are non-constant or there are multiple
+    # writes).
+    @module_acc_keys = "".split(",")
+    @module_acc_const = "".split(",")
     @pending_method_ref = ""
     @lambda_counter = 0
     @lambda_funcs = ""
@@ -1720,6 +1733,28 @@ class Compiler
   def infer_call_type(nid)
     mname = @nd_name[nid]
     recv = @nd_receiver[nid]
+
+    # Issue #126 Stage 1: `Module.accessor.<method>` resolves to
+    # `<ConstName>.<method>` via the constant fold. The return type
+    # needs the same substitution as the codegen path so `puts` and
+    # other typed dispatchers see the right type.
+    if recv >= 0 && @nd_type[recv] == "CallNode"
+      inner_recv = @nd_receiver[recv]
+      inner_mname = @nd_name[recv]
+      if inner_recv >= 0 && @nd_type[inner_recv] == "ConstantReadNode"
+        mod_name = @nd_name[inner_recv]
+        if module_name_exists(mod_name) == 1
+          idx = find_module_acc_idx(mod_name + "." + inner_mname)
+          if idx >= 0 && @module_acc_const[idx] != ""
+            resolved = @module_acc_const[idx]
+            mi = find_method_idx(resolved + "_cls_" + mname)
+            if mi >= 0
+              return @meth_return_types[mi]
+            end
+          end
+        end
+      end
+    end
 
     # Operators
     r = infer_operator_type(nid, mname, recv)
@@ -3988,6 +4023,73 @@ class Compiler
   end
 
   # ---- Collection pass ----
+  # Returns the module-singleton-accessor index for "<Module>.<accessor>",
+  # or -1 if not registered.
+  def find_module_acc_idx(key)
+    i = 0
+    while i < @module_acc_keys.length
+      if @module_acc_keys[i] == key
+        return i
+      end
+      i = i + 1
+    end
+    -1
+  end
+
+  # Issue #126 Stage 1: walk the AST for `Module.accessor = RHS` writes
+  # where (Module, accessor) was registered in `collect_module` as a
+  # singleton accessor (`class << self; attr_accessor :accessor; end`).
+  # When every visible write resolves to the same ConstantReadNode (a
+  # module or class name), record that name; later read sites substitute
+  # the constant for the chained dispatch. Mixed / non-constant / multi-
+  # value writes leave the entry unresolved, and the read site falls
+  # through to the existing (currently-broken) path — Stage 2 will pick
+  # those up via runtime sentinel dispatch.
+  def resolve_module_singleton_accessors
+    if @module_acc_keys.length == 0
+      return
+    end
+    nid = 0
+    while nid < @nd_type.length
+      if @nd_type[nid] == "CallNode"
+        mname = @nd_name[nid]
+        if mname.length > 1 && mname[mname.length - 1] == "="
+          recv = @nd_receiver[nid]
+          if recv >= 0 && @nd_type[recv] == "ConstantReadNode"
+            mod_name = @nd_name[recv]
+            if module_name_exists(mod_name) == 1
+              accessor = mname[0, mname.length - 1]
+              key = mod_name + "." + accessor
+              idx = find_module_acc_idx(key)
+              if idx >= 0
+                args_id = @nd_arguments[nid]
+                if args_id >= 0
+                  arg_ids = get_args(args_id)
+                  if arg_ids.length > 0 && @nd_type[arg_ids[0]] == "ConstantReadNode"
+                    rhs_name = @nd_name[arg_ids[0]]
+                    cur = @module_acc_const[idx]
+                    if cur == ""
+                      @module_acc_const[idx] = rhs_name
+                    elsif cur != rhs_name
+                      # Multiple distinct constants → leave unresolved
+                      # by marking with a sentinel empty string. The
+                      # read site falls through to the un-folded path.
+                      @module_acc_const[idx] = ""
+                    end
+                  else
+                    # Non-constant RHS: poisons the fold for this slot.
+                    @module_acc_const[idx] = ""
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+      nid = nid + 1
+    end
+  end
+
   # Walk every class's parent chain. A cycle anywhere on the chain is
   # a fatal program error: bail with a clear message instead of letting
   # the recursive helpers loop forever. Self-inheritance (`class A < A`)
@@ -4065,6 +4167,13 @@ class Compiler
     # invoke that function directly. v1: top-level locals previously
     # assigned `ClassName.new`; no block params; no closures; no yield.
     rewrite_instance_eval_calls
+
+    # Pass 2.7: resolve module-level singleton accessors via constant
+    # fold (issue #126, Stage 1). Single assignment of a constant
+    # name (typically a module/class) to `M.acc` or `@acc` inside
+    # `module M` is folded; reads later substitute the resolved
+    # constant.
+    resolve_module_singleton_accessors
 
     # Pass 2.5: infer lambda parameter types from call sites
     infer_lambda_param_types
@@ -5504,6 +5613,31 @@ class Compiler
         @const_types.push(ct)
         @const_expr_ids.push(expr_id)
         @const_scope_names.push(mname)
+      end
+      # `class << self; attr_accessor :foo; end` — register `foo` as a
+      # module-level singleton accessor. Stage 1 of issue #126: the
+      # accessor's value is resolved later via the constant-fold pass
+      # (rewrite_module_singleton_accessors) once we've seen all writes.
+      if @nd_type[sid] == "SingletonClassNode"
+        sbody = @nd_body[sid]
+        if sbody >= 0
+          sbody_stmts = get_stmts(sbody)
+          sbody_stmts.each { |sst|
+            if @nd_type[sst] == "CallNode" && @nd_name[sst] == "attr_accessor"
+              args_id = @nd_arguments[sst]
+              if args_id >= 0
+                arg_ids = get_args(args_id)
+                arg_ids.each { |aid|
+                  if @nd_type[aid] == "SymbolNode"
+                    accessor = @nd_content[aid]
+                    @module_acc_keys.push(mname + "." + accessor)
+                    @module_acc_const.push("")
+                  end
+                }
+              end
+            end
+          }
+        end
       end
     }
   end
@@ -14140,6 +14274,45 @@ class Compiler
     mname = @nd_name[nid]
     recv = @nd_receiver[nid]
 
+    # Issue #126 Stage 1: `Module.accessor.<method>` where
+    # (Module, accessor) was statically resolved by
+    # `resolve_module_singleton_accessors`. Substitute the resolved
+    # constant for the receiver and let the normal call dispatch handle
+    # the resulting `<Constant>.<method>` call. The substitution
+    # happens by synthesising a virtual ConstantReadNode-like dispatch
+    # in-place: we intercept at compile_call_expr's top, look at recv,
+    # and re-route through the resolved-constant call.
+    if recv >= 0 && @nd_type[recv] == "CallNode"
+      inner_recv = @nd_receiver[recv]
+      inner_mname = @nd_name[recv]
+      if inner_recv >= 0 && @nd_type[inner_recv] == "ConstantReadNode"
+        mod_name = @nd_name[inner_recv]
+        if module_name_exists(mod_name) == 1
+          idx = find_module_acc_idx(mod_name + "." + inner_mname)
+          if idx >= 0 && @module_acc_const[idx] != ""
+            resolved = @module_acc_const[idx]
+            # Build a temporary substitute receiver: a ConstantReadNode
+            # of the resolved name. Reusing alloc_node would mutate the
+            # AST, so instead we forge the call expression directly.
+            args_id = @nd_arguments[nid]
+            arg_strs = ""
+            if args_id >= 0
+              aargs = get_args(args_id)
+              k = 0
+              while k < aargs.length
+                if k > 0
+                  arg_strs = arg_strs + ", "
+                end
+                arg_strs = arg_strs + compile_expr(aargs[k])
+                k = k + 1
+              end
+            end
+            return "sp_" + resolved + "_cls_" + sanitize_name(mname) + "(" + arg_strs + ")"
+          end
+        end
+      end
+    end
+
     # Hoisted instance_eval block: emit a direct C call to the synthetic
     # file-scope function. The receiver is a local variable known to
     # carry a class instance (the rewriter checked this); pass it as the
@@ -20536,6 +20709,20 @@ class Compiler
     # define_method is handled at collection time, skip at runtime
     if mname == "define_method"
       return
+    end
+
+    # Issue #126 Stage 1: `Module.accessor = X` where the entry was
+    # statically folded. The read sites substitute the constant, so
+    # the write side has nothing to emit.
+    if mname.length > 1 && mname[mname.length - 1] == "=" && recv >= 0 && @nd_type[recv] == "ConstantReadNode"
+      mod_name = @nd_name[recv]
+      if module_name_exists(mod_name) == 1
+        accessor = mname[0, mname.length - 1]
+        idx = find_module_acc_idx(mod_name + "." + accessor)
+        if idx >= 0 && @module_acc_const[idx] != ""
+          return
+        end
+      end
     end
 
     # Hoisted instance_eval block (statement context): the lifted

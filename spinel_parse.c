@@ -178,6 +178,20 @@ static int flatten(pm_node_t *node) {
     R("body", n->body);
     break;
   }
+  case PM_SINGLETON_CLASS_NODE: {
+    /* `class << self; ...; end` — the singleton class block. We
+       only support `expression == SelfNode` today (i.e. the
+       enclosing class/module's singleton). The body is flattened
+       up one level so codegen sees `attr_accessor :x` / `def foo`
+       inside the parent ClassNode/ModuleNode body, and the
+       SingletonClassNode marker survives so dispatch can route
+       methods/accessors to the class-method path. */
+    pm_singleton_class_node_t *n = (pm_singleton_class_node_t *)node;
+    N("SingletonClassNode");
+    R("expression", n->expression);
+    R("body", n->body);
+    break;
+  }
   case PM_DEF_NODE: {
     pm_def_node_t *n = (pm_def_node_t *)node;
     N("DefNode");
