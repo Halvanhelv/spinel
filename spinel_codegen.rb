@@ -2584,6 +2584,9 @@ class Compiler
       return "int"
     end
     if mname == "tally"
+      if recv >= 0 && infer_type(recv) == "sym_array"
+        return "sym_int_hash"
+      end
       return "str_int_hash"
     end
     if mname == "values"
@@ -8392,6 +8395,14 @@ class Compiler
           end
         end
       end
+      # `sym_array.tally` returns a sym_int_hash. The runtime helper
+      # sp_SymArray_tally lives next to the sp_SymIntHash typedef which
+      # is gated on @needs_sym_int_hash, so flag the dependency.
+      if mname == "tally"
+        if @nd_receiver[nid] >= 0 && infer_type(@nd_receiver[nid]) == "sym_array"
+          @needs_sym_int_hash = 1
+        end
+      end
       # Methods that need string helpers only when receiver is string
       if mname == "+" || mname == "*" || mname == "reverse"
         if @nd_receiver[nid] >= 0
@@ -9960,6 +9971,13 @@ class Compiler
     emit_raw("static mrb_bool sp_SymIntHash_has_key(sp_SymIntHash*h,sp_sym k){mrb_int idx=(mrb_int)(((mrb_int)k)&h->mask);while(h->keys[idx]>=0){if(h->keys[idx]==k)return TRUE;idx=(idx+1)&h->mask;}return FALSE;}")
     emit_raw("static mrb_int sp_SymIntHash_length(sp_SymIntHash*h){return h->len;}")
     emit_raw("static void sp_SymIntHash_delete(sp_SymIntHash*h,sp_sym k){mrb_int idx=(mrb_int)(((mrb_int)k)&h->mask);while(h->keys[idx]>=0){if(h->keys[idx]==k){h->keys[idx]=-1;h->vals[idx]=0;h->len--;mrb_int j=(idx+1)&h->mask;while(h->keys[j]>=0){mrb_int nj=(mrb_int)(((mrb_int)h->keys[j])&h->mask);if((j>idx&&(nj<=idx||nj>j))||(j<idx&&nj<=idx&&nj>j)){h->keys[idx]=h->keys[j];h->vals[idx]=h->vals[j];h->keys[j]=-1;h->vals[j]=0;idx=j;}j=(j+1)&h->mask;}return;}idx=(idx+1)&h->mask;}}")
+    # sym_array.tally — emitted alongside sp_SymIntHash because the
+    # helper depends on the typedef. sym_array storage is sp_IntArray
+    # (sym ids stored as mrb_int); cast each element to sp_sym for the
+    # hash key. sp_SymIntHash_get returns 0 for missing keys (line 10176)
+    # so the has_key? guard is redundant — drop it for two lookups per
+    # element instead of three.
+    emit_raw("static sp_SymIntHash*sp_SymArray_tally(sp_IntArray*a){sp_SymIntHash*h=sp_SymIntHash_new();for(mrb_int i=0;i<a->len;i++){sp_sym k=(sp_sym)a->data[a->start+i];sp_SymIntHash_set(h,k,sp_SymIntHash_get(h,k)+1);}return h;}")
     emit_raw("")
   end
 
@@ -17039,6 +17057,12 @@ class Compiler
           return tmp
         end
         return "sp_IntArray_sort(" + rc + ")"
+      end
+      # tally: sym_array only — int_array would need an int_int_hash
+      # variant which doesn't exist yet. Result is sym_int_hash.
+      if mname == "tally" && recv_type == "sym_array"
+        @needs_sym_int_hash = 1
+        return "sp_SymArray_tally(" + rc + ")"
       end
       if mname == "first"
         return "sp_IntArray_get(" + rc + ", 0)"
