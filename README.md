@@ -361,6 +361,34 @@ them behind compile-time switches.
 - **Regexp**: Built-in engine, no external library needed.
 - **Bigint**: Built-in (from mruby-bigint), linked only when used.
 
+## Contributing
+
+Contributions are welcome. The issue tracker doubles as the roadmap —
+anything open is fair game; the most useful entry points are
+reproducer-shaped bug reports (a 5-line Ruby that fails in Spinel but
+passes in CRuby) and codegen fixes that close one such report.
+
+Workflow:
+
+- Open a focused PR. Small and contained merges faster than sweeping
+  refactors.
+- Make `make` close (`gen2.c == gen3.c`) and `make test` / `make bench`
+  pass before pushing.
+- Add a regression test under `test/` for any fix or new feature; the
+  harness compares Spinel's output against CRuby on the same source,
+  so the test usually doesn't need to assert anything beyond `puts`.
+- Reference issues with `Closes #N` / `Fixes #N` / `Refs #N` trailers
+  in the commit message.
+- If the work was assisted by an AI, add a `Co-Authored-By:` trailer
+  for the assistant alongside any human co-authors. The maintainer's
+  own AI-assisted commits use `Co-Authored-By: Claude Opus 4.7`.
+
+Adjacent ecosystem (community-built, not part of this repo):
+
+- [rubocop_spinel](https://github.com/gurgeous/rubocop_spinel) —
+  a RuboCop custom cop that flags Ruby code Spinel doesn't yet
+  support.
+
 ## History
 
 Spinel was originally implemented in C (18K lines, branch `c-version`),
