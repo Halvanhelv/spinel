@@ -155,6 +155,7 @@ class Compiler
     @hoisted_strlen_var = ""
     @hoisted_strlen_recv = ""
     @in_yield_method = 0
+    @current_method_yield_arity = 1
     @in_gc_scope = 0
 
     # Yield/block tracking (parallel with meth_names / cls_meth_names)
@@ -5251,6 +5252,80 @@ class Compiler
       end
     end
     0
+  end
+
+  # Walks `nid` for YieldNodes and returns max(`current`, max_args_of_yields).
+  # Mirrors body_has_yield's recursion shape. `current` carries the running
+  # max so callers can seed a floor (1, since every yield-using method needs
+  # at least one mrb_int slot in `_block`'s signature).
+  def body_max_yield_arity(nid, current)
+    if nid < 0
+      return current
+    end
+    if @nd_type[nid] == "YieldNode"
+      n = 0
+      if @nd_arguments[nid] >= 0
+        n = get_args(@nd_arguments[nid]).length
+      end
+      if n < 1
+        n = 1
+      end
+      if n > current
+        current = n
+      end
+    end
+    if @nd_type[nid] == "DefNode"
+      return current
+    end
+    if @nd_body[nid] >= 0
+      current = body_max_yield_arity(@nd_body[nid], current)
+    end
+    stmts = parse_id_list(@nd_stmts[nid])
+    k = 0
+    while k < stmts.length
+      current = body_max_yield_arity(stmts[k], current)
+      k = k + 1
+    end
+    if @nd_expression[nid] >= 0
+      current = body_max_yield_arity(@nd_expression[nid], current)
+    end
+    if @nd_predicate[nid] >= 0
+      current = body_max_yield_arity(@nd_predicate[nid], current)
+    end
+    if @nd_subsequent[nid] >= 0
+      current = body_max_yield_arity(@nd_subsequent[nid], current)
+    end
+    if @nd_else_clause[nid] >= 0
+      current = body_max_yield_arity(@nd_else_clause[nid], current)
+    end
+    if @nd_left[nid] >= 0
+      current = body_max_yield_arity(@nd_left[nid], current)
+    end
+    if @nd_right[nid] >= 0
+      current = body_max_yield_arity(@nd_right[nid], current)
+    end
+    if @nd_block[nid] >= 0
+      current = body_max_yield_arity(@nd_block[nid], current)
+    end
+    conds = parse_id_list(@nd_conditions[nid])
+    k = 0
+    while k < conds.length
+      current = body_max_yield_arity(conds[k], current)
+      k = k + 1
+    end
+    args = parse_id_list(@nd_args[nid])
+    k = 0
+    while k < args.length
+      current = body_max_yield_arity(args[k], current)
+      k = k + 1
+    end
+    if @nd_arguments[nid] >= 0
+      current = body_max_yield_arity(@nd_arguments[nid], current)
+    end
+    if @nd_receiver[nid] >= 0
+      current = body_max_yield_arity(@nd_receiver[nid], current)
+    end
+    current
   end
 
   # ---- Return type inference ----
@@ -10441,16 +10516,18 @@ class Compiler
   end
 
   def yield_params_suffix(mi)
+    csig = block_params_csig(method_yield_arity(mi))
     pd = method_params_decl(mi)
     if pd == ""
-      return "void (*_block)(mrb_int, void*), void *_benv"
+      return "void (*_block)(" + csig + ", void*), void *_benv"
     end
-    return ", void (*_block)(mrb_int, void*), void *_benv"
+    return ", void (*_block)(" + csig + ", void*), void *_benv"
   end
 
   def yield_params_suffix_cls(ci, midx)
     # For class instance methods (always have self first)
-    return ", void (*_block)(mrb_int, void*), void *_benv"
+    csig = block_params_csig(cls_method_yield_arity(ci, midx))
+    return ", void (*_block)(" + csig + ", void*), void *_benv"
   end
 
   def cls_method_has_yield(ci, midx)
@@ -10461,6 +10538,42 @@ class Compiler
       end
     end
     0
+  end
+
+  # Max number of args used in any `yield` inside the top-level method
+  # at @meth_body_ids[mi]. Floor of 1 — yield-using methods always have
+  # at least one mrb_int slot (the no-arg `yield` form is padded to 0).
+  def method_yield_arity(mi)
+    if mi < 0 || mi >= @meth_body_ids.length
+      return 1
+    end
+    body_max_yield_arity(@meth_body_ids[mi], 1)
+  end
+
+  # Same as method_yield_arity, but resolved through the class method
+  # body table @cls_meth_bodies (parallel to @cls_meth_has_yield).
+  def cls_method_yield_arity(ci, midx)
+    if ci < 0 || midx < 0
+      return 1
+    end
+    bodies = @cls_meth_bodies[ci].split(";")
+    if midx >= bodies.length
+      return 1
+    end
+    bid = bodies[midx].to_i
+    body_max_yield_arity(bid, 1)
+  end
+
+  # Comma-joined string of `arity` mrb_int slots — the variable-arity
+  # portion of the `_block` function-pointer signature.
+  def block_params_csig(arity)
+    csig = "mrb_int"
+    k = 1
+    while k < arity
+      csig = csig + ", mrb_int"
+      k = k + 1
+    end
+    csig
   end
 
   # Returns 1 if the (ci, midx) method declares a `&block` parameter,
@@ -11024,6 +11137,7 @@ class Compiler
     if midx >= 0
       if cls_method_has_yield(ci, midx) == 1
         @in_yield_method = 1
+        @current_method_yield_arity = cls_method_yield_arity(ci, midx)
       else
         @in_yield_method = 0
       end
@@ -11081,6 +11195,7 @@ class Compiler
     @current_method_name = ""
     @current_method_block_param = ""
     @in_yield_method = 0
+    @current_method_yield_arity = 1
     @indent = 0
     emit_raw("  return " + c_return_default(rt) + ";")
     emit_raw("}")
@@ -11204,6 +11319,7 @@ class Compiler
 
     if @meth_has_yield[mi] == 1
       @in_yield_method = 1
+      @current_method_yield_arity = method_yield_arity(mi)
     else
       @in_yield_method = 0
     end
@@ -11274,6 +11390,7 @@ class Compiler
     @current_method_name = ""
     @current_method_block_param = ""
     @in_yield_method = 0
+    @current_method_yield_arity = 1
     @indent = 0
     emit_raw("  return " + c_return_default(rt) + ";")
     emit_raw("}")
@@ -24206,23 +24323,21 @@ class Compiler
 
   def compile_yield_stmt(nid)
     args_id = @nd_arguments[nid]
-    arg_exprs = ""
+    emitted = "".split(",")
     if args_id >= 0
       aids = get_args(args_id)
       k = 0
       while k < aids.length
-        if k > 0
-          arg_exprs = arg_exprs + ", "
-        end
-        arg_exprs = arg_exprs + compile_expr(aids[k])
+        emitted.push(compile_expr(aids[k]))
         k = k + 1
       end
     end
-    if arg_exprs != ""
-      emit("  if (_block) _block(" + arg_exprs + ", _benv);")
-    else
-      emit("  if (_block) _block(0, _benv);")
+    # Pad to the enclosing method's max yield arity so the call matches
+    # the function-pointer signature emitted by yield_params_suffix.
+    while emitted.length < @current_method_yield_arity
+      emitted.push("0")
     end
+    emit("  if (_block) _block(" + emitted.join(", ") + ", _benv);")
   end
 
   def compile_yield_call_stmt(nid, mi)
@@ -24317,15 +24432,25 @@ class Compiler
     if t == "YieldNode"
       # Replace yield with the block body
       args_id = @nd_arguments[nid]
+      assigned = 0
       if args_id >= 0
         aids = get_args(args_id)
         k = 0
         while k < aids.length
           if k < bp_names.length
             emit("  lv_" + bp_names[k] + " = " + compile_expr_remap(aids[k], map_from, map_to) + ";")
+            assigned = assigned + 1
           end
           k = k + 1
         end
+      end
+      # Reset any block params that didn't receive a yield arg so a
+      # later smaller-arity yield in the same method doesn't leak the
+      # previous yield's values. Mirrors compile_yield_stmt's "0"
+      # padding on the function-pointer dispatch path.
+      while assigned < bp_names.length
+        emit("  lv_" + bp_names[assigned] + " = 0;")
+        assigned = assigned + 1
       end
       body = @nd_body[blk]
       if body >= 0
