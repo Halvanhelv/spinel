@@ -23056,22 +23056,20 @@ class Compiler
     @in_loop = 1
     rt = infer_type(@nd_receiver[nid])
     rc = compile_expr_gc_rooted(@nd_receiver[nid])
+    # Bind the seed to an outer-scope temp so the expression form can
+    # surface the final accumulator. CallNode seeds get GC-rooted by
+    # compile_expr_gc_rooted; literal/local seeds rely on the caller
+    # already holding a reference for the duration of the loop.
     obj_ct = "mrb_int"
+    obj_t = "int"
+    obj_arg_nid = -1
     args_id = @nd_arguments[nid]
     if args_id >= 0
       aargs = get_args(args_id)
       if aargs.length > 0
-        obj_ct = c_type(infer_type(aargs[0]))
-      end
-    end
-    # Root the seed: it lives across every loop iteration, and any
-    # allocation inside the block can trigger a GC that would otherwise
-    # sweep the freshly constructed seed object before the loop ends.
-    obj_arg_nid = -1
-    if args_id >= 0
-      aargs2 = get_args(args_id)
-      if aargs2.length > 0
-        obj_arg_nid = aargs2[0]
+        obj_arg_nid = aargs[0]
+        obj_t = infer_type(obj_arg_nid)
+        obj_ct = c_type(obj_t)
       end
     end
     obj_arg = compile_expr_gc_rooted(obj_arg_nid)
@@ -23098,6 +23096,7 @@ class Compiler
       @indent = @indent + 1
       push_scope
       declare_var(bp1, elem_type_of_array(rt))
+      declare_var(bp2, obj_t)
       compile_stmts_body(@nd_body[@nd_block[nid]])
       pop_scope
       @indent = @indent - 1
@@ -24391,18 +24390,25 @@ class Compiler
   end
 
   def compile_reduce_expr(nid)
-    # Emit the reduce loop as side effects, return accumulator
     compile_reduce_block(nid)
-    bp1 = get_block_param(nid, 0)
-    if bp1 == ""
-      bp1 = "_acc"
-    end
-    "lv_" + bp1
   end
 
   def compile_reduce_block(nid)
+    old = @in_loop
+    @in_loop = 1
+    @needs_gc = 1
     rc = compile_expr_gc_rooted(@nd_receiver[nid])
-    init_val = compile_arg0(nid)
+    # Hold on to the seed AST nid so we can `infer_type` it later for
+    # the accumulator's inner-scope registration.
+    seed_nid = -1
+    args_id = @nd_arguments[nid]
+    if args_id >= 0
+      aargs = get_args(args_id)
+      if aargs.length > 0
+        seed_nid = aargs[0]
+      end
+    end
+    init_val = compile_expr_gc_rooted(seed_nid)
     bp1 = get_block_param(nid, 0)
     bp2 = get_block_param(nid, 1)
     if bp1 == ""
@@ -24411,16 +24417,51 @@ class Compiler
     if bp2 == ""
       bp2 = "_x"
     end
-    emit("  lv_" + bp1 + " = " + init_val + ";")
     rt = infer_type(@nd_receiver[nid])
     pfx = array_c_prefix(rt)
     elem_t = elem_type_of_array(rt)
+    # bp1 takes the seed's type. Seed-less form is currently treated as
+    # 0-seeded (init_val resolves to "0" via compile_expr(-1)); seed_t
+    # falls back to elem_t to keep the type system consistent. This is
+    # not true Ruby first-element seeding — known limitation.
+    seed_t = elem_t
+    if seed_nid >= 0
+      seed_t = infer_type(seed_nid)
+    end
+    # See compile_each_slice_block for the typed-shadow + SP_GC_ROOT
+    # technique inside a C block scope. reduce additionally needs
+    # result_tmp because it's expression-form: the final value must
+    # survive past the inner scope's `}` for the caller to consume.
+    outer_t = find_var_type(bp1)
+    shadowed = 0
+    if outer_t != "" && outer_t != seed_t
+      shadowed = 1
+    end
+    acc_expr = "lv_" + bp1
+    if shadowed == 1
+      result_tmp = new_temp
+      seed_ct = c_type(seed_t)
+      # Evaluate init_val once and share it between result_tmp and the
+      # shadowed lv_<bp1>; some seed expressions (ArrayNode/HashNode
+      # literals) are not lifted to a temp by compile_expr_gc_rooted.
+      emit("  " + seed_ct + " " + result_tmp + " = " + init_val + ";")
+      emit("  {")
+      @indent = @indent + 1
+      emit("  SP_GC_SAVE();")
+      emit("  " + seed_ct + " lv_" + bp1 + " = " + result_tmp + ";")
+      if type_is_pointer(seed_t) == 1
+        emit("  SP_GC_ROOT(lv_" + bp1 + ");")
+      end
+      acc_expr = result_tmp
+    else
+      emit("  lv_" + bp1 + " = " + init_val + ";")
+    end
     tmp = new_temp
     emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_" + pfx + "_length(" + rc + "); " + tmp + "++) {")
     emit("    " + c_type(elem_t) + " lv_" + bp2 + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
     @indent = @indent + 1
     push_scope
-    declare_var(bp1, elem_t)
+    declare_var(bp1, seed_t)
     declare_var(bp2, elem_t)
     blk = @nd_block[nid]
     if blk >= 0
@@ -24437,6 +24478,13 @@ class Compiler
     pop_scope
     @indent = @indent - 1
     emit("  }")
+    if shadowed == 1
+      emit("  " + acc_expr + " = lv_" + bp1 + ";")
+      @indent = @indent - 1
+      emit("  }")
+    end
+    @in_loop = old
+    acc_expr
   end
 
   def compile_reject_expr(nid)
