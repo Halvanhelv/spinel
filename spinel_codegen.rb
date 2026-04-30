@@ -3988,6 +3988,34 @@ class Compiler
   end
 
   # ---- Collection pass ----
+  # Walk every class's parent chain. A cycle anywhere on the chain is
+  # a fatal program error: bail with a clear message instead of letting
+  # the recursive helpers loop forever. Self-inheritance (`class A < A`)
+  # is detected as the trivial 1-step cycle.
+  def detect_circular_inheritance
+    i = 0
+    while i < @cls_names.length
+      visited = "".split(",")
+      visited.push(@cls_names[i])
+      cur = @cls_parents[i]
+      while cur != ""
+        if not_in(cur, visited) == 0
+          $stderr.puts "Error: circular inheritance involving '" + @cls_names[i] + "' via '" + cur + "'"
+          exit(1)
+        end
+        visited.push(cur)
+        pi = find_class_idx(cur)
+        if pi < 0
+          # Unresolved parent — stop walking; this is a separate issue
+          # (the parent lookup falls through cleanly elsewhere).
+          break
+        end
+        cur = @cls_parents[pi]
+      end
+      i = i + 1
+    end
+  end
+
   def collect_all
     root = @root_id
     if @nd_type[root] != "ProgramNode"
@@ -4008,6 +4036,12 @@ class Compiler
         collect_class(sid)
       end
     }
+    # Pass 1.5: reject circular inheritance (`class A < B; class B < A`).
+    # Every parent-walking helper (cls_find_method, cls_ivar_type,
+    # is_class_or_ancestor, …) recurses through @cls_parents; a cycle
+    # would loop forever and hang the codegen instead of erroring out
+    # like CRuby. Issue #106.
+    detect_circular_inheritance
 
     # Pass 2: top-level methods, constants, define_method
     stmts.each { |sid|
