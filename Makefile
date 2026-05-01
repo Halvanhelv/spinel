@@ -49,6 +49,16 @@ TIMEOUT_BIN := $(shell command -v timeout 2>/dev/null || command -v gtimeout 2>/
 TIMEOUT10 := $(if $(TIMEOUT_BIN),$(TIMEOUT_BIN) 10,)
 TIMEOUT60 := $(if $(TIMEOUT_BIN),$(TIMEOUT_BIN) 60,)
 
+# Reference Ruby for `make test` / `make bench` output comparison.
+# Prefer `miniruby` (Ruby's bootstrap interpreter; matz's local copy is
+# 4.1.0dev with +PRISM, so newer features like `it` block param work)
+# when available; the test/bench harness falls back to `ruby` per-file
+# if miniruby exits non-zero — covers tests that `require` extension
+# libraries (stringio, etc.) which the bootstrap miniruby can't load.
+# Environments without miniruby use `ruby` directly. Override via
+# `REF_RUBY=ruby make test` if a specific primary is wanted.
+REF_RUBY ?= $(shell command -v miniruby >/dev/null 2>&1 && echo miniruby || echo ruby)
+
 # Prism library: prefer vendor/prism (fetched via `make deps`), then
 # fall back to the Prism gem if one is installed. Override by setting
 # PRISM_DIR=/path/to/prism on the command line.
@@ -166,7 +176,10 @@ test: spinel_parse$(EXE) $(SP_RT_LIB)
 	  ./spinel_codegen$(EXE) /tmp/_sp_t.ast /tmp/_sp_t.c 2>/dev/null && \
 	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_t.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_t_bin$(EXE) 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
-	    expected=$$($(TIMEOUT10) ruby "$$f" 2>/dev/null); \
+	    expected=$$($(TIMEOUT10) $(REF_RUBY) "$$f" 2>/dev/null); \
+	    if [ $$? -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
+	      expected=$$($(TIMEOUT10) ruby "$$f" 2>/dev/null); \
+	    fi; \
 	    actual=$$($(TIMEOUT10) /tmp/_sp_t_bin$(EXE) 2>/dev/null); \
 	    if [ "$$expected" = "$$actual" ]; then \
 	      pass=$$((pass+1)); \
@@ -190,8 +203,12 @@ bench: spinel_parse$(EXE) $(SP_RT_LIB)
 	  $(TIMEOUT10) ./spinel_codegen$(EXE) /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
 	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin$(EXE) 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
-	    expected=$$($(TIMEOUT60) ruby "$$f" 2>/dev/null); \
+	    expected=$$($(TIMEOUT60) $(REF_RUBY) "$$f" 2>/dev/null); \
 	    ruby_rc=$$?; \
+	    if [ $$ruby_rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
+	      expected=$$($(TIMEOUT60) ruby "$$f" 2>/dev/null); \
+	      ruby_rc=$$?; \
+	    fi; \
 	    if [ $$ruby_rc -eq 124 ]; then \
 	      echo "SKIP: $$bn (ruby timeout)"; skip=$$((skip+1)); \
 	    else \
