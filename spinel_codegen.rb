@@ -1765,6 +1765,27 @@ class Compiler
     mname = @nd_name[nid]
     recv = @nd_receiver[nid]
 
+    # `recv.__sp_ieval_<N>(...)`: the rewritten form of an
+    # `recv.instance_eval { ... }` call. v1 only fired on top-level call
+    # sites, where the call's value was always discarded — so its return
+    # type didn't matter and the warn-fallback "int" was harmless. Now
+    # that the rewrite can land inside a class method body whose tail
+    # expression IS the instance_eval call, the enclosing method's
+    # signature has to match the value the lift actually emits:
+    # `compile_ieval_call_expr` returns the receiver via a comma
+    # expression, so the type is recv's class. Read the synthetic id's
+    # registered class directly from `@ieval_class_idxs` rather than
+    # re-inferring recv — by the time this runs (compile-side type
+    # iteration), recv's type may have been refined and the registered
+    # class is the canonical answer.
+    if is_ieval_call_name(mname) == 1
+      suffix = mname[11, mname.length - 11]
+      n = suffix.to_i
+      if n >= 0 && n < @ieval_class_idxs.length
+        return "obj_" + @cls_names[@ieval_class_idxs[n]]
+      end
+    end
+
     # Issue #126: chain return type for `Module.accessor.<method>`.
     # All resolved candidates' class methods should agree on a return
     # type; if they disagree the chain becomes poly. Returning early
@@ -4414,11 +4435,42 @@ class Compiler
     local_class = {}
     # Walk the AST recursively from the root, respecting scope boundaries.
     # `local_class` maps `name -> class_idx` for the current scope only.
-    # Method/lambda/class/module/block bodies are NOT entered: their
-    # locals belong to a different scope, so the top-level map must not
-    # apply to them. A reassignment to a non-`Class.new` RHS poisons the
-    # mapping for that name.
+    # Method/lambda/module/block bodies are NOT entered for local tracking:
+    # their locals belong to a different scope. A reassignment to a
+    # non-`Class.new` RHS poisons the mapping for that name. ClassNode
+    # bodies are visited for the side effect of walking each instance
+    # method's body with `@current_class_idx` set, so an `@ivar.instance_eval { }`
+    # site inside a class method can resolve its receiver class via
+    # `cls_ivar_type`. The local_class map is intentionally not threaded
+    # into method bodies — locals there are out of scope, and the
+    # ivar-only extension does not (yet) try to type method-local copies
+    # of class instances.
     ieval_walk(@root_id, local_class)
+    ieval_walk_class_methods
+  end
+
+  # Visit each class's instance-method bodies with `@current_class_idx`
+  # set, so `@ivar.instance_eval { ... }` resolves recv's class through
+  # `cls_ivar_type`. Class methods (singleton-side) are intentionally
+  # excluded: they don't see the instance's @ivars, and `self` rebinding
+  # against a class object would be a different (singleton-class) lift.
+  def ieval_walk_class_methods
+    ci = 0
+    while ci < @cls_names.length
+      @current_class_idx = ci
+      bodies = @cls_meth_bodies[ci].split(";")
+      bj = 0
+      while bj < bodies.length
+        bid = bodies[bj].to_i
+        if bid >= 0
+          empty_locals = {}
+          ieval_walk(bid, empty_locals)
+        end
+        bj = bj + 1
+      end
+      @current_class_idx = -1
+      ci = ci + 1
+    end
   end
 
   def ieval_walk(nid, local_class)
@@ -4569,14 +4621,30 @@ class Compiler
     if @nd_parameters[blk] >= 0
       return
     end
-    if @nd_type[recv] != "LocalVariableReadNode"
+    ci = -1
+    if @nd_type[recv] == "LocalVariableReadNode"
+      vname = @nd_name[recv]
+      if local_class.key?(vname)
+        ci = local_class[vname]
+      end
+    elsif @nd_type[recv] == "InstanceVariableReadNode"
+      # `@ivar.instance_eval { }` inside a class method. ieval_walk_class_methods
+      # sets @current_class_idx so cls_ivar_type returns the ivar's stored
+      # type — "obj_<Class>" when the ivar was bound to `Class.new` (and
+      # not since widened to poly). Strip the "obj_" prefix to look up
+      # the class index, the same shape `is_obj_type` / `base_type`
+      # gates use elsewhere in the codegen for object-typed values.
+      if @current_class_idx >= 0
+        it = cls_ivar_type(@current_class_idx, @nd_name[recv])
+        bt = base_type(it)
+        if is_obj_type(bt) == 1
+          ci = find_class_idx(bt[4, bt.length - 4])
+        end
+      end
+    end
+    if ci < 0
       return
     end
-    vname = @nd_name[recv]
-    if local_class.key?(vname) == false
-      return
-    end
-    ci = local_class[vname]
     body_id = @nd_body[blk]
     # v1: bail if the block uses yield/block_given?. Lifting it as a
     # plain function would lose the enclosing method's block plumbing.
@@ -11440,6 +11508,23 @@ class Compiler
         j = j + 1
       end
       i = i + 1
+    end
+    # Hoisted instance_eval block functions: emit prototypes here. v1
+    # fired only on top-level call sites, where the call always followed
+    # the corresponding `static void sp_ieval_<N>(...)` definition (both
+    # land in `emit_main` / after `emit_class_methods`). Now that ivar
+    # receivers can put the call inside a class method body — emitted
+    # before `emit_ieval_funcs` runs — the call would be an implicit
+    # declaration without these prototypes.
+    n = 0
+    while n < @ieval_class_idxs.length
+      icn = @cls_names[@ieval_class_idxs[n]]
+      if @cls_is_value_type[@ieval_class_idxs[n]] == 1
+        emit_raw("static void sp_ieval_" + n.to_s + "(sp_" + icn + " self);")
+      else
+        emit_raw("static void sp_ieval_" + n.to_s + "(sp_" + icn + " *self);")
+      end
+      n = n + 1
     end
     emit_raw("")
   end
