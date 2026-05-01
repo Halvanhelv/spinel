@@ -22287,6 +22287,29 @@ class Compiler
             return 1
           end
         end
+        # Typed array Array#clear — zero the length (and start
+        # for IntArray, which uses a sliding window). Capacity
+        # and the backing buffer stay; subsequent pushes refill
+        # the slots from index 0.
+        if rt == "int_array" || rt == "sym_array"
+          rc = compile_expr_gc_rooted(recv)
+          emit("  " + rc + "->len = 0; " + rc + "->start = 0;")
+          return 1
+        end
+        if rt == "float_array" || rt == "poly_array" || is_ptr_array_type(rt) == 1
+          rc = compile_expr_gc_rooted(recv)
+          emit("  " + rc + "->len = 0;")
+          return 1
+        end
+        if rt == "str_array"
+          rc = compile_expr_gc_rooted(recv)
+          # StrArray has an inline-storage optimization: data may
+          # point to inline_data (small) or a malloc'd buffer.
+          # Either way, zeroing len is a clean reset — the next
+          # push refills from index 0.
+          emit("  " + rc + "->len = 0;")
+          return 1
+        end
       end
     end
 
