@@ -16364,6 +16364,15 @@ class Compiler
         @needs_rb_value = 1
         return "sp_poly_pow(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
       end
+      if lt == "int" && mname == "pow"
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          a = get_args(args_id)
+          if a.length >= 2
+            return "sp_powmod(" + compile_expr(recv) + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+          end
+        end
+      end
       if lt == "int"
         return "((mrb_int)pow((double)" + compile_expr(recv) + ", (double)" + compile_arg0(nid) + "))"
       end
