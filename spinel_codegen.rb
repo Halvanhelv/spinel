@@ -2165,13 +2165,14 @@ class Compiler
     if mname == "to_f"
       return "float"
     end
-    if mname == "ceil"
-      return "int"
-    end
-    if mname == "floor"
-      return "int"
-    end
-    if mname == "round"
+    # Float#ceil(n)/floor(n)/round(n)/truncate(n) with n given return
+    # Float; zero-arg / Integer#ceil etc. return Integer. (truncate's arm
+    # used to live next to nan?/infinite? — folded in here for one place
+    # to update.)
+    if mname == "ceil" || mname == "floor" || mname == "round" || mname == "truncate"
+      if @nd_arguments[nid] >= 0
+        return "float"
+      end
       return "int"
     end
     if mname == "upcase" || mname == "downcase"
@@ -2581,9 +2582,6 @@ class Compiler
       return "bool"
     end
     if mname == "infinite?"
-      return "int"
-    end
-    if mname == "truncate"
       return "int"
     end
     if mname == "tally"
@@ -16852,13 +16850,29 @@ class Compiler
     if mname == "to_i"
       return "(mrb_int)(" + rc + ")"
     end
+    # ceil/floor/round/truncate with precision arg use a GCC stmt-expr so
+    # the argument expression is compiled-and-emitted once on the Ruby
+    # side and pow(10, n) is evaluated once at runtime — the original
+    # form double-evaluated both, which broke any side-effecting arg.
     if mname == "ceil"
+      if @nd_arguments[nid] >= 0
+        arg = compile_arg0(nid)
+        return "({ double _f = pow(10, " + arg + "); ceil((" + rc + ") * _f) / _f; })"
+      end
       return "(mrb_int)ceil(" + rc + ")"
     end
     if mname == "floor"
+      if @nd_arguments[nid] >= 0
+        arg = compile_arg0(nid)
+        return "({ double _f = pow(10, " + arg + "); floor((" + rc + ") * _f) / _f; })"
+      end
       return "(mrb_int)floor(" + rc + ")"
     end
     if mname == "round"
+      if @nd_arguments[nid] >= 0
+        arg = compile_arg0(nid)
+        return "({ double _f = pow(10, " + arg + "); round((" + rc + ") * _f) / _f; })"
+      end
       return "(mrb_int)round(" + rc + ")"
     end
     if mname == "abs"
@@ -16874,6 +16888,10 @@ class Compiler
       return "(isinf(" + rc + ") ? (" + rc + " < 0 ? -1 : 1) : 0)"
     end
     if mname == "truncate"
+      if @nd_arguments[nid] >= 0
+        arg = compile_arg0(nid)
+        return "({ double _f = pow(10, " + arg + "); trunc((" + rc + ") * _f) / _f; })"
+      end
       return "(mrb_int)trunc(" + rc + ")"
     end
     if mname == "fdiv"
