@@ -694,6 +694,18 @@ static void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (a->len >= a->ca
 static mrb_int sp_PolyArray_length(sp_PolyArray *a) { return a->len; }
 static sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (i < 0) i += a->len; return a->data[i]; }
 static sp_PolyArray *sp_PolyArray_slice(sp_PolyArray *a, mrb_int start, mrb_int len) { if (start < 0) start += a->len; if (start < 0) start = 0; sp_PolyArray *b = sp_PolyArray_new(); if (start >= a->len || len <= 0) return b; if (start + len > a->len) len = a->len - start; for (mrb_int i = 0; i < len; i++) sp_PolyArray_push(b, a->data[start + i]); return b; }
+static sp_PolyArray *sp_PolyArray_slice_bang(sp_PolyArray *a, mrb_int from, mrb_int n) {
+  if (from < 0) from += a->len;
+  if (from < 0) from = 0;
+  if (from > a->len) from = a->len;
+  if (n < 0) n = 0;
+  if (from + n > a->len) n = a->len - from;
+  sp_PolyArray *r = sp_PolyArray_new();
+  for (mrb_int i = 0; i < n; i++) sp_PolyArray_push(r, a->data[from + i]);
+  for (mrb_int i = from; i + n < a->len; i++) a->data[i] = a->data[i + n];
+  a->len -= n;
+  return r;
+}
 static sp_PolyArray *sp_PolyArray_dup(sp_PolyArray *a) { sp_PolyArray *b = sp_PolyArray_new(); for (mrb_int i = 0; i < a->len; i++) sp_PolyArray_push(b, a->data[i]); return b; }
 static void sp_PolyArray_shuffle_bang(sp_PolyArray *a) { for (mrb_int i = a->len - 1; i > 0; i--) { mrb_int j = (mrb_int)(rand() % (i + 1)); sp_RbVal t = a->data[i]; a->data[i] = a->data[j]; a->data[j] = t; } }
 static void sp_PolyArray_rotate_bang(sp_PolyArray*a,mrb_int n){if(a->len<=0)return;n=((n%a->len)+a->len)%a->len;if(n==0)return;sp_RbVal*tmp=(sp_RbVal*)malloc(sizeof(sp_RbVal)*a->len);for(mrb_int i=0;i<a->len;i++)tmp[i]=a->data[(i+n)%a->len];for(mrb_int i=0;i<a->len;i++)a->data[i]=tmp[i];free(tmp);}
@@ -782,6 +794,64 @@ static mrb_bool sp_file_exist(const char *path) { FILE *f = fopen(path, "r"); if
 static void sp_file_delete(const char *path) { remove(path); }
 static const char *sp_backtick(const char *cmd) { FILE *p = popen(cmd, "r"); if (!p) return sp_str_empty; char *buf = sp_str_alloc_raw(4096); size_t n = fread(buf, 1, 4095, p); buf[n] = 0; pclose(p); return buf; }
 static const char *sp_file_basename(const char *path) { const char *s = strrchr(path, '/'); if (s) return s + 1; return path; }
+
+/* `arr.slice!(from, n)` — returns a fresh array of `n` elements
+   starting at `from` and removes them from `a`. IntArray uses its
+   `start` field for an O(1) head peel (from == 0); the others
+   shift the tail down to fill the hole. */
+static sp_IntArray *sp_IntArray_slice_bang(sp_IntArray *a, mrb_int from, mrb_int n) {
+  if (from < 0) from += a->len;
+  if (from < 0) from = 0;
+  if (from > a->len) from = a->len;
+  if (n < 0) n = 0;
+  if (from + n > a->len) n = a->len - from;
+  sp_IntArray *r = sp_IntArray_new();
+  for (mrb_int i = 0; i < n; i++) sp_IntArray_push(r, a->data[a->start + from + i]);
+  if (from == 0) {
+    a->start += n;
+    a->len -= n;
+  } else {
+    for (mrb_int i = from; i + n < a->len; i++) a->data[a->start + i] = a->data[a->start + i + n];
+    a->len -= n;
+  }
+  return r;
+}
+static sp_FloatArray *sp_FloatArray_slice_bang(sp_FloatArray *a, mrb_int from, mrb_int n) {
+  if (from < 0) from += a->len;
+  if (from < 0) from = 0;
+  if (from > a->len) from = a->len;
+  if (n < 0) n = 0;
+  if (from + n > a->len) n = a->len - from;
+  sp_FloatArray *r = sp_FloatArray_new();
+  for (mrb_int i = 0; i < n; i++) sp_FloatArray_push(r, a->data[from + i]);
+  for (mrb_int i = from; i + n < a->len; i++) a->data[i] = a->data[i + n];
+  a->len -= n;
+  return r;
+}
+static sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, mrb_int from, mrb_int n) {
+  if (from < 0) from += a->len;
+  if (from < 0) from = 0;
+  if (from > a->len) from = a->len;
+  if (n < 0) n = 0;
+  if (from + n > a->len) n = a->len - from;
+  sp_StrArray *r = sp_StrArray_new();
+  for (mrb_int i = 0; i < n; i++) sp_StrArray_push(r, a->data[from + i]);
+  for (mrb_int i = from; i + n < a->len; i++) a->data[i] = a->data[i + n];
+  a->len -= n;
+  return r;
+}
+static sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, mrb_int from, mrb_int n) {
+  if (from < 0) from += a->len;
+  if (from < 0) from = 0;
+  if (from > a->len) from = a->len;
+  if (n < 0) n = 0;
+  if (from + n > a->len) n = a->len - from;
+  sp_PtrArray *r = sp_PtrArray_new_scan(a->scan_elem);
+  for (mrb_int i = 0; i < n; i++) sp_PtrArray_push(r, a->data[from + i]);
+  for (mrb_int i = from; i + n < a->len; i++) a->data[i] = a->data[i + n];
+  a->len -= n;
+  return r;
+}
 
 typedef struct sp_Proc { void *fn; void *cap; void (*cap_scan)(void *); } sp_Proc;
 static void sp_Proc_scan(void *p) { sp_Proc *pr = (sp_Proc *)p; if (pr->cap && pr->cap_scan) pr->cap_scan(pr->cap); }

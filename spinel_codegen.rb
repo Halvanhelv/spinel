@@ -2353,6 +2353,14 @@ class Compiler
       end
       return "int_array"
     end
+    if mname == "slice!"
+      # Mirrors Array#slice (with !) — returns an array of the same
+      # element type as the receiver.
+      if recv >= 0
+        return infer_type(recv)
+      end
+      return "int_array"
+    end
     if mname == "to_sym" || mname == "intern"
       return "symbol"
     end
@@ -17233,6 +17241,41 @@ class Compiler
     # the receiver pointer used as if it were an `sp_IntArray *`.
     if is_array_type(recv_type) == 0
       return ""
+    end
+    # arr.slice!(from, n) — returns a fresh array of `n` elements
+    # starting at `from` and removes them from the receiver. Each
+    # array type lowers to its own runtime helper that mutates the
+    # backing buffer in place. sym_array shares the IntArray helper
+    # since symbols are stored as interned int IDs.
+    if mname == "slice!"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length >= 2
+          from_e = compile_expr(aargs[0])
+          n_e = compile_expr(aargs[1])
+          if recv_type == "int_array" || recv_type == "sym_array"
+            @needs_int_array = 1
+            return "sp_IntArray_slice_bang(" + rc + ", " + from_e + ", " + n_e + ")"
+          end
+          if recv_type == "float_array"
+            @needs_float_array = 1
+            return "sp_FloatArray_slice_bang(" + rc + ", " + from_e + ", " + n_e + ")"
+          end
+          if recv_type == "str_array"
+            @needs_str_array = 1
+            return "sp_StrArray_slice_bang(" + rc + ", " + from_e + ", " + n_e + ")"
+          end
+          if is_ptr_array_type(recv_type) == 1
+            @needs_ptr_array = 1
+            return "sp_PtrArray_slice_bang(" + rc + ", " + from_e + ", " + n_e + ")"
+          end
+          if recv_type == "poly_array"
+            @needs_poly_array = 1
+            return "sp_PolyArray_slice_bang(" + rc + ", " + from_e + ", " + n_e + ")"
+          end
+        end
+      end
     end
     # Array#inspect and Array#to_s (CRuby aliases them for arrays, so
     # the two share one definition via compile_inspect_for). Guard on
