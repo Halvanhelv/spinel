@@ -7166,6 +7166,29 @@ class Compiler
     ""
   end
 
+  # Issue #133: block-param-aware lookup used by scan_locals's
+  # empty-hash promotion. When `nid` reads a local variable that
+  # scan_locals itself has just collected (e.g. a block param like
+  # `|k, v|`), prefer the type recorded in `types[]` over
+  # `infer_type` — the block param hasn't been `declare_var`'d in
+  # scope yet, so a bare infer_type falls back to "int" and breaks
+  # the promotion of the surrounding `out[k] = v` write.
+  def scan_locals_arg_type(nid, names, types, params)
+    if nid >= 0 && @nd_type[nid] == "LocalVariableReadNode"
+      lname = @nd_name[nid]
+      k = 0
+      while k < names.length
+        if names[k] == lname
+          if k < types.length
+            return types[k]
+          end
+        end
+        k = k + 1
+      end
+    end
+    infer_type(nid)
+  end
+
   # Does class `ci` provide `mname` as a reader, writer, or method?
   # Walks parent classes for inherited members.
   def class_has_method(ci, mname)
@@ -7827,6 +7850,12 @@ class Compiler
                   ltypes[mk] = ltypes2[lk]
                   set_var_type(lnames[mk], ltypes2[lk])
                 end
+              elsif (ltypes2[lk] == "str_poly_hash" || ltypes2[lk] == "sym_poly_hash") && ltypes[mk] != ltypes2[lk]
+                # Issue #133: 2nd pass discovered the iterated value is
+                # poly (each-rebuild over a poly_hash whose source type
+                # wasn't known on 1st pass). Upgrade.
+                ltypes[mk] = ltypes2[lk]
+                set_var_type(lnames[mk], ltypes2[lk])
               end
             end
             mk = mk + 1
@@ -7931,14 +7960,33 @@ class Compiler
             declare_var(rlnames[rlk], rltypes[rlk])
             rlk = rlk + 1
           end
-          # Second pass with locals in scope
+          # Second pass: full scan_locals so the empty-hash promotion
+          # path (issue #133) sees the in-scope param/local types and
+          # promotes `out = {}` correctly when the iterated value is
+          # poly. The full scanner also marks polymorphic locals if it
+          # encounters disagreeing concrete-literal writes; that's a
+          # superset of scan_locals_first_type's "never-poly" rule but
+          # produces strictly more accurate types for return inference.
           rlnames2 = "".split(",")
           rltypes2 = "".split(",")
-          scan_locals_first_type(bid, rlnames2, rltypes2, pnames)
+          scan_locals(bid, rlnames2, rltypes2, pnames)
           rlk2 = 0
           while rlk2 < rlnames2.length
-            if rltypes2[rlk2] != "int"
-              set_var_type(rlnames2[rlk2], rltypes2[rlk2])
+            cur = ""
+            mk2 = 0
+            while mk2 < rlnames.length
+              if rlnames[mk2] == rlnames2[rlk2]
+                cur = rltypes[mk2]
+              end
+              mk2 = mk2 + 1
+            end
+            if rltypes2[rlk2] != "int" && rltypes2[rlk2] != cur
+              # Same merge widening as the top-level path: hash variants
+              # escalate to poly_hash, int/nil → concrete, etc.
+              if cur == "int" || cur == "nil" ||
+                 ((rltypes2[rlk2] == "str_poly_hash" || rltypes2[rlk2] == "sym_poly_hash") && cur != rltypes2[rlk2])
+                set_var_type(rlnames2[rlk2], rltypes2[rlk2])
+              end
             end
             rlk2 = rlk2 + 1
           end
@@ -12488,6 +12536,13 @@ class Compiler
               ltypes[k] = ltypes2[j] + "?"
             end
             set_var_type(lnames[k], ltypes[k])
+          elsif (ltypes2[j] == "str_poly_hash" || ltypes2[j] == "sym_poly_hash") && ltypes[k] != ltypes2[j]
+            # Issue #133: empty-hash promotion in 2nd pass discovered the
+            # iterated value type is poly (each-rebuild over a poly_hash
+            # whose source type wasn't known on 1st pass). Upgrade the
+            # 1st pass's intermediate non-poly variant.
+            ltypes[k] = ltypes2[j]
+            set_var_type(lnames[k], ltypes2[j])
           end
         end
         k = k + 1
@@ -13094,14 +13149,41 @@ class Compiler
             if aargs.length >= 2
               ki = 0
               while ki < names.length
-                if names[ki] == hname && types[ki] == "str_int_hash"
-                  if ki < @scan_empty_hash_flags.length && @scan_empty_hash_flags[ki] == "1"
-                    key_type = infer_type(aargs[0])
-                    val_type = infer_type(aargs[aargs.length - 1])
+                if names[ki] == hname
+                  cur = types[ki]
+                  # An empty-hash-tracked local is still "promotable"
+                  # while it sits on str_int_hash (the default empty
+                  # shape) OR on any non-poly hash variant we previously
+                  # promoted it to from str_int_hash. Issue #133: a
+                  # later pass discovers the iterated value type is
+                  # actually poly (each-rebuild over a poly_hash whose
+                  # source type wasn't known at first scan), and we
+                  # need to escalate sym_int_hash → sym_poly_hash etc.
+                  promotable = (cur == "str_int_hash" ||
+                                cur == "str_str_hash" ||
+                                cur == "int_str_hash" ||
+                                cur == "sym_int_hash" ||
+                                cur == "sym_str_hash")
+                  if promotable && ki < @scan_empty_hash_flags.length && @scan_empty_hash_flags[ki] == "1"
+                    # Issue #133: block params (e.g. `|k, v|` in
+                    # `each`) aren't yet `declare_var`'d when scan_locals
+                    # walks the block body, so a bare `infer_type(v)`
+                    # falls back to "int" even though scan_locals has
+                    # already collected v's actual type into `types[]`.
+                    # Prefer scan_locals's local types array when the
+                    # argument is a LocalVariableReadNode we've recorded;
+                    # fall back to infer_type for everything else.
+                    key_type = scan_locals_arg_type(aargs[0], names, types, params)
+                    val_type = scan_locals_arg_type(aargs[aargs.length - 1], names, types, params)
                     promoted = promote_empty_hash_for(key_type, val_type)
-                    if promoted != "" && promoted != "str_int_hash"
+                    if promoted != "" && promoted != cur
                       types[ki] = promoted
-                      @scan_empty_hash_flags[ki] = ""
+                      # Clear the flag only when reaching the terminal
+                      # poly_hash variant — int/str variants still need
+                      # to be re-promotable on a later poly write.
+                      if promoted == "str_poly_hash" || promoted == "sym_poly_hash"
+                        @scan_empty_hash_flags[ki] = ""
+                      end
                       if promoted == "str_str_hash"
                         @needs_str_str_hash = 1
                       elsif promoted == "int_str_hash"
