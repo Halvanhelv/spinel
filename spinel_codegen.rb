@@ -177,6 +177,12 @@ class Compiler
     @instance_eval_self_var = ""
     @instance_eval_self_type = ""
 
+    # During default-arg substitution, when the callee's default
+    # expression is inlined into the caller, `self_arrow` consults
+    # this override to route `self->iv_X` against the call's
+    # explicit receiver instead of the caller's self.
+    @self_override = ""
+
     # Yield/block tracking (parallel with meth_names / cls_meth_names)
     @meth_has_yield = []
     @cls_meth_has_yield = "".split(",")
@@ -10553,12 +10559,35 @@ class Compiler
   end
 
   def self_arrow
+    # `@self_override` lets default-arg substitution redirect `self`
+    # to an explicit receiver expression: when a callee's default
+    # expression is inlined into the caller, `self` would otherwise
+    # resolve to the caller's `self`, but the default was authored
+    # against the callee's instance. Store the bare expression
+    # (e.g. `lv_f`) and append the arrow / dot here.
+    if @self_override != nil && @self_override != ""
+      if @current_class_idx >= 0 && @cls_is_value_type[@current_class_idx] == 1
+        return @self_override + "."
+      end
+      return @self_override + "->"
+    end
     if @current_class_idx >= 0
       if @cls_is_value_type[@current_class_idx] == 1
         return "self."
       end
     end
     "self->"
+  end
+
+  # The C expression that should be used wherever bare `self`
+  # would normally appear (e.g. as the first arg to a same-class
+  # method dispatch). Defaults to `"self"`; default-arg inlining
+  # overrides it via `@self_override`.
+  def self_expr
+    if @self_override != nil && @self_override != ""
+      return @self_override
+    end
+    "self"
   end
 
   def subtree_has_ivar_write(nid)
@@ -15651,7 +15680,7 @@ class Compiler
             bp = "0"
           end
         end
-        return "sp_" + owner + "_" + sanitize_name(mname) + "(self" + build_call_tail(ca, bp) + ")"
+        return "sp_" + owner + "_" + sanitize_name(mname) + "(" + self_expr + build_call_tail(ca, bp) + ")"
       end
       # Check attr_readers (bare method call like `x` meaning self.x)
       readers = @cls_attr_readers[@current_class_idx].split(";")
@@ -20246,11 +20275,31 @@ class Compiler
         end
         result = result + aexpr
       else
-        # Caller omitted this trailing arg — emit the method's default.
+        # Caller omitted this trailing arg — emit the method's
+        # default expression. The default was authored in the
+        # callee's class scope, so any `self` / `@ivar` references
+        # need to resolve against the call's receiver, not the
+        # caller's self. Switch @current_class_idx and override
+        # `self_arrow` for the duration of the inline expansion.
         if k < defaults.length
           def_id = defaults[k].to_i
           if def_id >= 0
+            recv_for_default = @nd_receiver[nid]
+            saved_ci = @current_class_idx
+            saved_override = @self_override
+            if recv_for_default >= 0
+              # Materialize the recv into a C expression. Wrap in
+              # parens so any cast/operator chain stays self-
+              # contained when consumed as `(<recv>)->iv_X` (via
+              # `self_arrow`) or as the first arg of a same-class
+              # method call (via `self_expr`).
+              recv_c = compile_expr_gc_rooted(recv_for_default)
+              @self_override = "(" + recv_c + ")"
+              @current_class_idx = target_ci
+            end
             result = result + compile_expr(def_id)
+            @current_class_idx = saved_ci
+            @self_override = saved_override
           else
             result = result + "0"
           end
