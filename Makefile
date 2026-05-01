@@ -13,9 +13,11 @@ CC       ?= cc
 # fires on the inlined `h->cap *= 2` in sp_*Hash_grow when the inliner
 # can't bound h->cap. The pattern is bounded in practice (cap doubles
 # from a small power of two until memory runs out, never approaches
-# 2^60), but gcc tracks signed-overflow UB conservatively. Other
-# compilers don't have the warning.
-CFLAGS   = -O2 -Wno-all -Wno-alloc-size-larger-than
+# 2^60), but gcc tracks signed-overflow UB conservatively. Clang
+# doesn't have that warning; without `-Wno-unknown-warning-option`
+# first, clang would turn the unknown -Wno- into a -Werror failure on
+# every cc invocation in `make test` / `make bench`.
+CFLAGS   = -O2 -Wno-all -Wno-unknown-warning-option -Wno-alloc-size-larger-than
 # Bootstrap-only flags: spinel_codegen runs on the developer's machine
 # only, so we can use -O3 -flto for ~5-10% extra wall-clock without
 # constraining users (whose generated C is built with plain CFLAGS).
