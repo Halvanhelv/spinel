@@ -4453,6 +4453,12 @@ class Compiler
 
   def rewrite_instance_eval_calls
     @ieval_counter = 0
+    # Widen class-method ptypes through obj-typed receivers before the
+    # walk so a method-param receiver (e.g. `def configure(app);
+    # app.instance_eval { } end` invoked as `cfg.configure(routes)`)
+    # has `app` typed as obj_<C>. Surgical fork — see the helper for
+    # why we don't just call scan_new_calls here.
+    propagate_recv_method_arg_types_for_ieval
     local_class = {}
     # Walk the AST recursively from the root, respecting scope boundaries.
     # `local_class` maps `name -> class_idx` for the current scope only.
@@ -4475,17 +4481,60 @@ class Compiler
   # `cls_ivar_type`. Class methods (singleton-side) are intentionally
   # excluded: they don't see the instance's @ivars, and `self` rebinding
   # against a class object would be a different (singleton-class) lift.
+  #
+  # Per-method scope: declare each method's params (with the ptypes
+  # widened by infer_param_types_from_callsites at Pass 2.55) and the
+  # body locals from scan_locals_first_type, so a LocalVariableReadNode
+  # receiver inside the body can resolve its class via find_var_type.
+  # That covers `def configure(app); app.instance_eval { } end` and
+  # also method-local copies whose RHS is statically classifiable
+  # (e.g., `routes = Routes.new`). Method returns whose call type
+  # depends on infer_all_returns having run are still out of reach
+  # at this Pass 2.6 timing — that's the next follow-up.
   def ieval_walk_class_methods
     ci = 0
     while ci < @cls_names.length
       @current_class_idx = ci
       bodies = @cls_meth_bodies[ci].split(";")
+      all_params = @cls_meth_params[ci].split("|")
+      all_ptypes = @cls_meth_ptypes[ci].split("|")
       bj = 0
       while bj < bodies.length
         bid = bodies[bj].to_i
         if bid >= 0
+          push_scope
+          pnames = "".split(",")
+          ptypes = "".split(",")
+          if bj < all_params.length
+            pnames = all_params[bj].split(",")
+          end
+          if bj < all_ptypes.length
+            ptypes = all_ptypes[bj].split(",")
+          end
+          k = 0
+          while k < pnames.length
+            pt = "int"
+            if k < ptypes.length
+              pt = ptypes[k]
+            end
+            declare_var(pnames[k], pt)
+            k = k + 1
+          end
+          # Body locals: scan_locals_first_type matches what
+          # infer_all_returns does in its class-methods preamble
+          # (Pass 3). Pulls in `routes = Routes.new` with type
+          # obj_Routes when the RHS is statically classifiable.
+          lnames = "".split(",")
+          ltypes = "".split(",")
+          scan_locals_first_type(bid, lnames, ltypes, pnames)
+          lk = 0
+          while lk < lnames.length
+            declare_var(lnames[lk], ltypes[lk])
+            lk = lk + 1
+          end
           empty_locals = {}
           ieval_walk(bid, empty_locals)
+          pop_scope
         end
         bj = bj + 1
       end
@@ -4647,6 +4696,18 @@ class Compiler
       vname = @nd_name[recv]
       if local_class.key?(vname)
         ci = local_class[vname]
+      else
+        # Inside a class instance method, the v1 top-level local_class
+        # map is intentionally empty. Fall back to find_var_type so a
+        # method param (or scan_locals-typed local) resolves through
+        # the scope chain that ieval_walk_class_methods sets up. The
+        # is_obj_type / base_type strip is the same shape used in the
+        # ivar branch and at every other obj_-prefix site in this file.
+        vt = find_var_type(vname)
+        bt = base_type(vt)
+        if is_obj_type(bt) == 1
+          ci = find_class_idx(bt[4, bt.length - 4])
+        end
       end
     elsif @nd_type[recv] == "InstanceVariableReadNode"
       # `@ivar.instance_eval { }` inside a class method. ieval_walk_class_methods
@@ -6256,6 +6317,133 @@ class Compiler
   def infer_constructor_types
     # Scan AST for ClassName.new(args) calls and infer param types
     scan_new_calls(@root_id)
+  end
+
+  # Narrow pre-pass for `rewrite_instance_eval_calls`: walk top-level
+  # CallNodes shaped `recv.method(args)` where recv resolves to an
+  # obj_<C> via top-level scope, and let scan_new_calls' receiver-method
+  # branch widen the class method's ptypes. Without this, a method-param
+  # receiver inside `def configure(app); app.instance_eval { } end`
+  # has `app` ptype stuck at "int" at Pass 2.6 time — the existing
+  # `infer_main_call_types` does the same scope-wrap but only runs in
+  # `compile()` after `collect_all` returns.
+  #
+  # Why not reuse `infer_main_call_types`: that pass also runs the
+  # top-level-method branch and the constructor branch, both of which
+  # detect_poly_params later refines via different rules. Running them
+  # twice (once at Pass 2.55, once in compile()) re-orders the inputs
+  # detect_poly_params sees and demonstrably regresses
+  # `test/poly_dispatch_builtin_all.rb` (lenof's poly param drops to
+  # int_array when the early run primes ptypes ahead of the iterative
+  # loop). This pre-pass scans the same AST but skips both other
+  # branches; it only widens class-method ptypes through obj-typed
+  # receivers — the exact piece rewrite_instance_eval_calls needs.
+  def propagate_recv_method_arg_types_for_ieval
+    push_scope
+    if @nd_type[@root_id] == "ProgramNode"
+      tl_body = @nd_body[@root_id]
+      if tl_body >= 0
+        empty_params = "".split(",")
+        tl_lnames = "".split(",")
+        tl_ltypes = "".split(",")
+        scan_locals_first_type(tl_body, tl_lnames, tl_ltypes, empty_params)
+        ti = 0
+        while ti < tl_lnames.length
+          declare_var(tl_lnames[ti], tl_ltypes[ti])
+          ti = ti + 1
+        end
+      end
+    end
+    walk_recv_method_calls(@root_id)
+    pop_scope
+  end
+
+  # Surgical fork of scan_new_calls: only the `obj.method(args)` branch,
+  # only when `obj`'s static type is obj_<C>. Mirrors the cls_meth_ptypes
+  # widening at lines ~6603-6615 of scan_new_calls (the same int->concrete
+  # promotion gate) and falls through to recursion. Other branches of
+  # scan_new_calls (constructor and top-level method) are deliberately
+  # absent — running them earlier than master's compile() pipeline
+  # interacts badly with detect_poly_params (see commentary above).
+  def walk_recv_method_calls(nid)
+    if nid < 0
+      return
+    end
+    if @nd_type[nid] == "CallNode"
+      mname = @nd_name[nid]
+      recv = @nd_receiver[nid]
+      if recv >= 0
+        rt = infer_type(recv)
+        if is_obj_type(rt) == 1
+          cname = rt[4, rt.length - 4]
+          ci = find_class_idx(cname)
+          if ci >= 0
+            owner_ci = ci
+            midx = cls_find_method_direct(ci, mname)
+            if midx < 0
+              owner = find_method_owner(ci, mname)
+              if owner != "" && owner != cname
+                owner_ci = find_class_idx(owner)
+                if owner_ci >= 0
+                  midx = cls_find_method_direct(owner_ci, mname)
+                end
+              end
+            end
+            if midx >= 0
+              args_id = @nd_arguments[nid]
+              if args_id >= 0
+                arg_ids = get_args(args_id)
+                all_ptypes = @cls_meth_ptypes[owner_ci].split("|")
+                if midx < all_ptypes.length
+                  ptypes = all_ptypes[midx].split(",")
+                  kk = 0
+                  while kk < arg_ids.length
+                    at = infer_type(arg_ids[kk])
+                    if kk < ptypes.length
+                      if ptypes[kk] == "int"
+                        if at != "int"
+                          ptypes[kk] = at
+                        end
+                      end
+                    end
+                    kk = kk + 1
+                  end
+                  all_ptypes[midx] = ptypes.join(",")
+                  @cls_meth_ptypes[owner_ci] = all_ptypes.join("|")
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    walk_recv_method_calls(@nd_body[nid])
+    stmts = parse_id_list(@nd_stmts[nid])
+    k = 0
+    while k < stmts.length
+      walk_recv_method_calls(stmts[k])
+      k = k + 1
+    end
+    walk_recv_method_calls(@nd_expression[nid])
+    walk_recv_method_calls(@nd_arguments[nid])
+    args = parse_id_list(@nd_args[nid])
+    k = 0
+    while k < args.length
+      walk_recv_method_calls(args[k])
+      k = k + 1
+    end
+    walk_recv_method_calls(@nd_predicate[nid])
+    walk_recv_method_calls(@nd_subsequent[nid])
+    walk_recv_method_calls(@nd_else_clause[nid])
+    walk_recv_method_calls(@nd_rescue_clause[nid])
+    walk_recv_method_calls(@nd_ensure_clause[nid])
+    walk_recv_method_calls(@nd_receiver[nid])
+    conds = parse_id_list(@nd_conditions[nid])
+    k = 0
+    while k < conds.length
+      walk_recv_method_calls(conds[k])
+      k = k + 1
+    end
   end
 
   # Merge `at` (inferred from a new call-site argument) into the

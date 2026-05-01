@@ -147,3 +147,63 @@ cfgr = Configure.new
 ret = cfgr.setup
 puts ret.entries.length  # 1
 puts ret.entries[0]      # GET /tail
+
+# ---- 10. Receiver from a method param ----
+# v2 wider-receiver (params): the param's class comes from the caller,
+# not the body. infer_param_types_from_callsites widens Wire#wire_param's
+# `r` ptype from "int" to obj_Routes when it sees `w.wire_param(shared)`
+# at top level (with `w` declared in scope so the receiver-method
+# branch fires). ieval_walk_class_methods then declares `r: obj_Routes`
+# in scope, and find_var_type resolves the LocalVariableReadNode
+# receiver inside the method body.
+class Wire
+  def wire_param(r)
+    r.instance_eval do
+      get("/param")
+    end
+  end
+end
+
+w = Wire.new
+shared = Routes.new
+w.wire_param(shared)
+puts shared.entries.length  # 1
+puts shared.entries[0]      # GET /param
+
+# ---- 11. Param receiver in tail position ----
+# Same as §10 but the lift is the method body's last expression so
+# the wire_param signature has to match the comma-expression return
+# value. infer_call_type's synthetic-name early case (PR #15
+# follow-up landed in PR #158) handles this once the rewrite fires.
+class WireTail
+  def wire_param(r)
+    r.instance_eval { get("/tail-param") }
+  end
+end
+
+w2 = WireTail.new
+shared2 = Routes.new
+ret2 = w2.wire_param(shared2)
+puts ret2.entries.length  # 1
+puts ret2.entries[0]      # GET /tail-param
+
+# ---- 12. Method-local copy of a class instance ----
+# scan_locals_first_type sees `routes = Routes.new` and declares
+# `routes : obj_Routes` in scope. The method-param case (§10) and
+# this method-local case both flow through the same find_var_type
+# fallback added to ieval_rewrite_call's LocalVariableReadNode branch.
+class WireLocal
+  def setup
+    routes = Routes.new
+    routes.instance_eval do
+      get("/local")
+      post("/local")
+    end
+    routes
+  end
+end
+
+ret3 = WireLocal.new.setup
+puts ret3.entries.length  # 2
+puts ret3.entries[0]      # GET /local
+puts ret3.entries[1]      # POST /local
