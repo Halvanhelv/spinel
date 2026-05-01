@@ -1,14 +1,14 @@
 # Test system features needed for ccm
 
+# system()
+system("echo hello_from_system")  # hello_from_system
+
 # ENV
 puts ENV['HOME'] != nil  # true
 
 # Dir.home
 home = Dir.home
 puts home.length > 0  # true
-
-# system()
-system("echo hello_from_system")  # hello_from_system
 
 # backtick
 result = `echo backtick_test`.strip
