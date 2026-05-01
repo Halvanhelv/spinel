@@ -1029,7 +1029,9 @@ class Compiler
       return ""
     end
     idx = name.rindex("_")
-    if idx < 0
+    # CRuby returns nil when not found; spinel runtime returns -1.
+    # Treat both as "no underscore — root scope".
+    if idx == nil || idx < 0
       return ""
     end
     name[0, idx]
@@ -6344,8 +6346,92 @@ class Compiler
     "poly"
   end
 
+  # Resolve a ClassNode AST id to its registered index in
+  # @cls_names, walking the same module-prefix chain that
+  # `resolve_const_read_name` / `find_class_idx` use at emit
+  # time. Returns -1 when the class isn't in @cls_names (e.g. a
+  # nested `class << self` body that hasn't been registered as a
+  # regular class).
+  def class_node_to_idx(nid)
+    cp = @nd_constant_path[nid]
+    if cp < 0
+      return -1
+    end
+    flat = const_ref_flat_name(cp)
+    if flat == ""
+      return -1
+    end
+    resolved = resolve_const_read_name(flat)
+    ci = find_class_idx(resolved)
+    if ci >= 0
+      return ci
+    end
+    find_class_idx(flat)
+  end
+
+  # Set @current_class_idx / @current_lexical_scope to the class
+  # introduced by `nid` (a ClassNode). No-op when the class isn't
+  # registered. Caller is responsible for save/restore.
+  def enter_class_scope_from_node(nid)
+    ci = class_node_to_idx(nid)
+    if ci >= 0
+      @current_class_idx = ci
+      @current_lexical_scope = @cls_names[ci]
+    end
+  end
+
+  # Append the module name introduced by `nid` (a ModuleNode) to
+  # `@current_lexical_scope`. Caller is responsible for save/
+  # restore. Mirrors the prefix pattern that
+  # `collect_module_with_prefix` uses for nested module names.
+  def enter_module_scope_from_node(nid)
+    cp = @nd_constant_path[nid]
+    if cp < 0
+      return
+    end
+    mname_s = const_ref_flat_name(cp)
+    if mname_s == ""
+      return
+    end
+    if @current_lexical_scope != ""
+      @current_lexical_scope = @current_lexical_scope + "_" + mname_s
+    else
+      @current_lexical_scope = mname_s
+    end
+  end
+
   def scan_new_calls(nid)
     if nid < 0
+      return
+    end
+    # When we descend into a class body, pin @current_class_idx so
+    # any `infer_type(@ivar)` in the args of a nested .new call
+    # resolves against this class's ivar table. Without this scope
+    # set-up, arguments like `@cpu` inside `Foo.initialize`'s
+    # body that contains `Bar.new(@cpu, ...)` infer as "int" (the
+    # default for an InstanceVariableReadNode with no scope), which
+    # then wedges Bar.initialize's first param at int even after
+    # multiple iterations of the fixpoint loop.
+    if @nd_type[nid] == "ClassNode"
+      saved_ci = @current_class_idx
+      saved_scope = @current_lexical_scope
+      enter_class_scope_from_node(nid)
+      body = @nd_body[nid]
+      if body >= 0
+        scan_new_calls(body)
+      end
+      @current_class_idx = saved_ci
+      @current_lexical_scope = saved_scope
+      return
+    end
+    if @nd_type[nid] == "ModuleNode"
+      saved_scope2 = @current_lexical_scope
+      enter_module_scope_from_node(nid)
+      body = @nd_body[nid]
+      if body >= 0
+        scan_new_calls(body)
+      end
+      @current_lexical_scope = saved_scope2
       return
     end
     if @nd_type[nid] == "CallNode"
