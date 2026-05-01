@@ -98,3 +98,52 @@ puts fresh.port  # 11
 fresh = Config.new
 fresh.instance_eval { self.port = 22 }
 puts fresh.port  # 22
+
+# ---- 8. Receiver from instance variable inside a class method ----
+# v2 wider-receiver (ivars): @ivar receiver. cls_ivar_type returns the
+# ivar's stored type; @current_class_idx is set by ieval_walk_class_methods
+# when entering each class's instance method bodies, so the lift can
+# resolve `@routes` to obj_Routes without going through a local copy.
+class Boot
+  attr_accessor :routes
+
+  def initialize
+    @routes = Routes.new
+  end
+
+  def install
+    @routes.instance_eval do
+      get("/ivar")
+      post("/ivar")
+    end
+  end
+end
+
+boot = Boot.new
+boot.install
+puts boot.routes.entries.length  # 2
+puts boot.routes.entries[0]      # GET /ivar
+puts boot.routes.entries[1]      # POST /ivar
+
+# ---- 9. Ivar receiver in tail position of a class method ----
+# Same lift but the instance_eval call is the method body's last
+# expression. The pre-existing v1 path always emitted the lift in
+# statement form; here it must round-trip through compile_ieval_call_expr
+# (the comma-expression form) so the enclosing method can still
+# return the receiver. Sister-class with a typed return signature.
+class Configure
+  attr_accessor :routes
+
+  def initialize
+    @routes = Routes.new
+  end
+
+  def setup
+    @routes.instance_eval { get("/tail") }
+  end
+end
+
+cfgr = Configure.new
+ret = cfgr.setup
+puts ret.entries.length  # 1
+puts ret.entries[0]      # GET /tail
