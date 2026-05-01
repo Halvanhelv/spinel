@@ -2931,6 +2931,19 @@ class Compiler
           end
           return "string"
         end
+        if rt == "poly_array"
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            a = get_args(args_id)
+            if a.length >= 1 && @nd_type[a[0]] == "RangeNode"
+              return "poly_array"
+            end
+            if a.length >= 2
+              return "poly_array"
+            end
+          end
+          return "poly"
+        end
         if is_ptr_array_type(rt) == 1
           return ptr_array_elem_type(rt)
         end
@@ -6154,6 +6167,20 @@ class Compiler
         return "int"
       end
       return at
+    end
+    if is_array_type(old_pt) == 1 && is_array_type(at) == 1
+      if old_pt == "poly_array" || at == "poly_array"
+        @needs_rb_value = 1
+        return "poly_array"
+      end
+      if old_pt == "int_array"
+        return at
+      end
+      if at == "int_array"
+        return old_pt
+      end
+      @needs_rb_value = 1
+      return "poly_array"
     end
     if at == "int"
       # Numeric compat: int + float is safe in both directions.
@@ -12436,6 +12463,15 @@ class Compiler
             if names[ki] == lname
               if types[ki] != at
                 if types[ki] != "poly"
+                  if is_array_type(types[ki]) == 1 && is_array_type(at) == 1
+                    types[ki] = unify_call_types(types[ki], at, @nd_expression[nid])
+                    if types[ki] == "poly_array"
+                      @needs_rb_value = 1
+                      @needs_gc = 1
+                    end
+                    ki = ki + 1
+                    next
+                  end
                   # Genuine polymorphism: both the first write and this
                   # write were explicit literals, and their types differ.
                   # This catches `x = 1; x = "hello"` which the legacy
@@ -17409,6 +17445,14 @@ class Compiler
       if mname == "[]"
         return "sp_PolyArray_get(" + rc + ", " + compile_arg0(nid) + ")"
       end
+      if mname == "push"
+        arg_id = -1
+        aargs = get_args(@nd_arguments[nid])
+        if aargs.length > 0
+          arg_id = aargs[0]
+        end
+        return "(sp_PolyArray_push(" + rc + ", " + box_expr_to_poly(arg_id) + "), 0)"
+      end
     end
     ""
   end
@@ -19767,7 +19811,7 @@ class Compiler
       # early here also preserves the scope's already-promoted type
       # (issue #58, #85) — the fall-through path below would clobber
       # vt with infer_type([])'s "int_array" via set_var_type.
-      if vt == "str_array" || vt == "float_array" || vt == "sym_array" || is_ptr_array_type(vt) == 1
+      if vt == "str_array" || vt == "float_array" || vt == "sym_array" || vt == "poly_array" || is_ptr_array_type(vt) == 1
         expr_id = @nd_expression[nid]
         if expr_id >= 0 && @nd_type[expr_id] == "ArrayNode"
           elems = parse_id_list(@nd_elements[expr_id])
@@ -19785,6 +19829,10 @@ class Compiler
               @needs_int_array = 1
               @needs_gc = 1
               emit("  " + vref + " = sp_IntArray_new();")
+            elsif vt == "poly_array"
+              @needs_rb_value = 1
+              @needs_gc = 1
+              emit("  " + vref + " = sp_PolyArray_new();")
             else
               @needs_gc = 1
               emit("  " + vref + " = sp_PtrArray_new();")
