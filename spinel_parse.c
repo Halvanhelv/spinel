@@ -394,7 +394,15 @@ static int flatten(pm_node_t *node) {
     pm_assoc_node_t *n = (pm_assoc_node_t *)node;
     N("AssocNode");
     R("key", n->key);
-    R("value", n->value);
+    /* Hash shorthand `{ x: }` lowers to an AssocNode whose value is a
+       PM_IMPLICIT_NODE wrapping the actual LocalVariableReadNode (or
+       MethodCallNode for an undeclared name). Unwrap one level here so
+       the codegen never sees the implicit wrapper. */
+    pm_node_t *val = n->value;
+    if (val && PM_NODE_TYPE_P(val, PM_IMPLICIT_NODE)) {
+      val = ((pm_implicit_node_t *)val)->value;
+    }
+    R("value", val);
     break;
   }
   case PM_KEYWORD_HASH_NODE: {
@@ -743,6 +751,26 @@ static int flatten(pm_node_t *node) {
     R("call", n->call);
     break;
   }
+  case PM_MATCH_REQUIRED_NODE: {
+    /* Rightward assignment: `expr => var` (Ruby 3.0+). When the
+       pattern is a single LocalVariableTargetNode, this is just
+       `var = expr` and we lower it to a LocalVariableWriteNode so
+       the codegen reuses the regular assignment path. Full pattern
+       matching (array / hash patterns, pinned vars) is out of scope
+       and falls through to the unknown-node passthrough. */
+    pm_match_required_node_t *n = (pm_match_required_node_t *)node;
+    if (n->pattern && PM_NODE_TYPE_P(n->pattern, PM_LOCAL_VARIABLE_TARGET_NODE)) {
+      pm_local_variable_target_node_t *t = (pm_local_variable_target_node_t *)n->pattern;
+      N("LocalVariableWriteNode");
+      NAME("name", t->name);
+      R("value", n->value);
+    } else {
+      N("MatchRequiredNode");
+      R("value", n->value);
+      R("pattern", n->pattern);
+    }
+    break;
+  }
   case PM_ALTERNATION_PATTERN_NODE: {
     pm_alternation_pattern_node_t *n = (pm_alternation_pattern_node_t *)node;
     N("AlternationPatternNode");
@@ -769,7 +797,20 @@ static int flatten(pm_node_t *node) {
     break;
   }
   case PM_IT_PARAMETERS_NODE:
-    N("ItParametersNode");
+    /* Ruby 3.4 implicit `it` is semantically `_1` — lower to a
+       NumberedParametersNode so the codegen's existing
+       NumberedParametersNode arity path (get_block_param) handles it
+       transparently. The block body's `it` references separately
+       become PM_IT_LOCAL_VARIABLE_READ_NODE, also lowered below. */
+    N("NumberedParametersNode");
+    I("maximum", 1);
+    break;
+  case PM_IT_LOCAL_VARIABLE_READ_NODE:
+    /* `it` inside the block body. Lowered to a regular
+       LocalVariableReadNode named "_1" so it pairs with the
+       lowered NumberedParametersNode { maximum: 1 } above. */
+    N("LocalVariableReadNode");
+    S("name", escape_str((const uint8_t *)"_1", 2));
     break;
   default: {
     /* Fallback: emit unknown node type */
