@@ -272,6 +272,7 @@ static mrb_float sp_FloatArray_max(sp_FloatArray*a){if(a->len==0)return 0;mrb_fl
 static mrb_float sp_FloatArray_sum(sp_FloatArray*a){mrb_float s=0;for(mrb_int i=0;i<a->len;i++)s+=a->data[i];return s;}
 static void sp_FloatArray_replace(sp_FloatArray*dst,sp_FloatArray*src){dst->len=0;if(src->len>dst->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)dst-sizeof(sp_gc_hdr));sp_gc_bytes-=sizeof(mrb_float)*dst->cap;h->size-=sizeof(mrb_float)*dst->cap;void*nd=realloc(dst->data,sizeof(mrb_float)*src->len);if(!nd){perror("realloc");exit(1);}dst->data=(mrb_float*)nd;dst->cap=src->len;h->size+=sizeof(mrb_float)*dst->cap;sp_gc_bytes+=sizeof(mrb_float)*dst->cap;}memcpy(dst->data,src->data,sizeof(mrb_float)*src->len);dst->len=src->len;}
 static inline mrb_float sp_FloatArray_pop(sp_FloatArray*a){return a->data[--a->len];}
+static inline mrb_float sp_FloatArray_shift(sp_FloatArray*a){if(a->len==0)return 0.0;mrb_float v=a->data[0];for(mrb_int i=0;i+1<a->len;i++)a->data[i]=a->data[i+1];a->len--;return v;}
 static inline mrb_int sp_FloatArray_length(sp_FloatArray*a){return a->len;}
 static inline mrb_bool sp_FloatArray_empty(sp_FloatArray*a){return a->len==0;}
 static inline mrb_float sp_FloatArray_get(sp_FloatArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[i];}

@@ -2669,6 +2669,9 @@ class Compiler
         if rt == "sym_array"
           return "symbol"
         end
+        if rt == "float_array"
+          return "float"
+        end
       end
       return "int"
     end
@@ -17877,6 +17880,9 @@ class Compiler
       end
       if mname == "pop"
         return "sp_FloatArray_pop(" + rc + ")"
+      end
+      if mname == "shift"
+        return "sp_FloatArray_shift(" + rc + ")"
       end
       if mname == "empty?"
         return "sp_FloatArray_empty(" + rc + ")"
