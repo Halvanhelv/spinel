@@ -193,10 +193,14 @@ test: spinel_parse$(EXE) $(SP_RT_LIB)
 	      expected=$$($(TIMEOUT10) ruby "$$f" 2>/dev/null); \
 	    fi; \
 	    actual=$$($(TIMEOUT10) /tmp/_sp_t_bin$(EXE) 2>/dev/null); \
+	    expected=$$(printf "%s" "$$expected" | tr -d '\r'); \
+	    actual=$$(printf "%s" "$$actual" | tr -d '\r'); \
 	    if [ "$$expected" = "$$actual" ]; then \
 	      pass=$$((pass+1)); \
 	    else \
-	      echo "FAIL: $$bn"; fail=$$((fail+1)); \
+	      echo "FAIL: $$bn"; \
+	      printf '%s\n%s\n%s\n%s\n' "--- expected ---" "$$expected" "--- actual ---" "$$actual"; \
+	      fail=$$((fail+1)); \
 	    fi; \
 	  else \
 	    echo "ERR:  $$bn"; err=$$((err+1)); \
@@ -226,10 +230,14 @@ bench: spinel_parse$(EXE) $(SP_RT_LIB)
 	      echo "SKIP: $$bn (ruby timeout)"; skip=$$((skip+1)); \
 	    else \
 	      actual=$$($(TIMEOUT60) /tmp/_sp_b_bin$(EXE) 2>/dev/null); \
+	      expected=$$(printf "%s" "$$expected" | tr -d '\r'); \
+	      actual=$$(printf "%s" "$$actual" | tr -d '\r'); \
 	      if [ "$$expected" = "$$actual" ]; then \
 	        pass=$$((pass+1)); \
 	      else \
-	        echo "FAIL: $$bn"; fail=$$((fail+1)); \
+	        echo "FAIL: $$bn"; \
+	        printf '%s\n%s\n%s\n%s\n' "--- expected ---" "$$expected" "--- actual ---" "$$actual"; \
+	        fail=$$((fail+1)); \
 	      fi; \
 	    fi; \
 	  else \

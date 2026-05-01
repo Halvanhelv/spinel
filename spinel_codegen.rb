@@ -1533,7 +1533,7 @@ class Compiler
       return "bool"
     end
     if t == "OrNode"
-      return infer_type(@nd_left[nid])
+      return or_result_type(nid)
     end
     if t == "ParenthesesNode"
       body = @nd_body[nid]
@@ -1991,6 +1991,14 @@ class Compiler
     lt = ""
     if recv >= 0
       lt = infer_type(recv)
+      if lt == "poly"
+        if mname == "+" || mname == "-" || mname == "*" || mname == "/" || mname == "%" || mname == "**"
+          return "poly"
+        end
+        if mname == "<<" || mname == ">>" || mname == "&" || mname == "|" || mname == "^" || mname == "-@"
+          return "poly"
+        end
+      end
       # Bigint operators return bigint
       if lt == "bigint"
         if mname == "+" || mname == "-" || mname == "*" || mname == "/" || mname == "%"
@@ -2960,6 +2968,9 @@ class Compiler
         if rt == "mutable_str"
           return "string"
         end
+        if rt == "poly"
+          return "poly"
+        end
         if rt == "int_array"
           # a[range] / a[start, len] returns a slice (still int_array);
           # bare a[i] returns the element.
@@ -3311,6 +3322,9 @@ class Compiler
       if rt == "poly"
         if mname == "nil?"
           return "bool"
+        end
+        if mname == "[]"
+          return "poly"
         end
         # Scan every user class that defines this method. If they all
         # agree on the return type, the call has that concrete type.
@@ -13887,10 +13901,54 @@ class Compiler
   # side effects then yields 1.
   def compile_cond_expr(nid)
     expr = compile_expr(nid)
-    if nid >= 0 && is_value_type_obj(infer_type(nid)) == 1
+    t = infer_type(nid)
+    if t == "poly"
+      return "sp_poly_truthy(" + expr + ")"
+    end
+    if t == "nil"
+      return "FALSE"
+    end
+    if is_nullable_type(t) == 1
+      return "(" + expr + " != NULL)"
+    end
+    if nid >= 0 && is_value_type_obj(t) == 1
       return "((" + expr + "), 1)"
     end
     expr
+  end
+
+  def truthy_c_expr(t, expr)
+    if t == "poly"
+      return "sp_poly_truthy(" + expr + ")"
+    end
+    if t == "bool"
+      return expr
+    end
+    if t == "nil"
+      return "FALSE"
+    end
+    if is_nullable_type(t) == 1 || type_is_pointer(t) == 1
+      return "(" + expr + " != NULL)"
+    end
+    "((" + expr + "), TRUE)"
+  end
+
+  def or_result_type(nid)
+    lt = infer_type(@nd_left[nid])
+    rt = infer_type(@nd_right[nid])
+    if lt == rt
+      return lt
+    end
+    if lt == "nil"
+      return rt
+    end
+    if rt == "nil"
+      if is_nullable_pointer_type(lt) == 1 && is_nullable_type(lt) == 0
+        return lt + "?"
+      end
+      return lt
+    end
+    "poly"
   end
 
   # ---- Expression compiler ----
@@ -14078,7 +14136,32 @@ class Compiler
       return "(" + compile_expr(@nd_left[nid]) + " && " + compile_expr(@nd_right[nid]) + ")"
     end
     if t == "OrNode"
-      return "(" + compile_expr(@nd_left[nid]) + " || " + compile_expr(@nd_right[nid]) + ")"
+      left_nid = @nd_left[nid]
+      right_nid = @nd_right[nid]
+      lt = infer_type(left_nid)
+      rt = infer_type(right_nid)
+      ot = or_result_type(nid)
+      if ot != "bool" || lt != "bool" || rt != "bool"
+        if ot == "poly"
+          @needs_rb_value = 1
+        end
+        left_tmp = new_temp
+        emit("  " + c_type(lt) + " " + left_tmp + " = " + compile_expr(left_nid) + ";")
+        left_expr = left_tmp
+        right_expr = compile_expr(right_nid)
+        if ot == "poly"
+          left_expr = box_value_to_poly(lt, left_expr)
+          right_expr = box_value_to_poly(rt, right_expr)
+        elsif base_type(lt) != base_type(ot)
+          left_expr = c_default_val(ot)
+        elsif base_type(rt) != base_type(ot)
+          if rt == "nil"
+            right_expr = c_default_val(ot)
+          end
+        end
+        return "(" + truthy_c_expr(lt, left_tmp) + " ? " + left_expr + " : " + right_expr + ")"
+      end
+      return "(" + compile_expr(left_nid) + " || " + compile_expr(right_nid) + ")"
     end
     if t == "ParenthesesNode"
       body = @nd_body[nid]
@@ -15910,6 +15993,10 @@ class Compiler
     # Operators
     if mname == "**" || mname == "pow"
       lt = infer_type(recv)
+      if lt == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_pow(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
       if lt == "int"
         return "((mrb_int)pow((double)" + compile_expr(recv) + ", (double)" + compile_arg0(nid) + "))"
       end
@@ -15921,6 +16008,13 @@ class Compiler
         return "sp_str_concat(" + compile_expr(recv) + "->data, " + compile_arg0(nid) + ")"
       end
       if lt == "string"
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          arg_ids = get_args(args_id)
+          if arg_ids.length > 0 && infer_type(arg_ids[0]) == "poly"
+            return "sp_str_concat(" + compile_expr(recv) + ", sp_poly_to_s(" + compile_expr(arg_ids[0]) + "))"
+          end
+        end
         # Flatten chained string concat: a + b + c → sp_str_concat3(a,b,c)
         parts = collect_concat_chain(nid)
         if parts.length == 3
@@ -16018,6 +16112,10 @@ class Compiler
     end
     if mname == "/"
       lt = infer_type(recv)
+      if lt == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_div(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
       if lt == "float"
         return "(" + compile_expr(recv) + " / " + compile_arg0(nid) + ")"
       end
@@ -16036,6 +16134,10 @@ class Compiler
     end
     if mname == "%"
       lt = infer_type(recv)
+      if lt == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_mod(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
       if lt == "string" || lt == "mutable_str"
         args_id = @nd_arguments[nid]
         if args_id >= 0
@@ -16112,6 +16214,12 @@ class Compiler
     end
     if mname == "<"
       lt = infer_type(recv)
+      arg_id = get_args(@nd_arguments[nid])[0]
+      at = infer_type(arg_id)
+      if lt == "poly" || at == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_lt(" + box_value_to_poly(lt, compile_expr(recv)) + ", " + box_value_to_poly(at, compile_expr(arg_id)) + ")"
+      end
       if lt == "string"
         cc = try_char_cmp(nid, "<")
         if cc != ""
@@ -16123,6 +16231,12 @@ class Compiler
     end
     if mname == ">"
       lt = infer_type(recv)
+      arg_id = get_args(@nd_arguments[nid])[0]
+      at = infer_type(arg_id)
+      if lt == "poly" || at == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_gt(" + box_value_to_poly(lt, compile_expr(recv)) + ", " + box_value_to_poly(at, compile_expr(arg_id)) + ")"
+      end
       if lt == "string"
         cc = try_char_cmp(nid, ">")
         if cc != ""
@@ -16130,14 +16244,16 @@ class Compiler
         end
         return "(strcmp(" + compile_expr(recv) + ", " + compile_arg0(nid) + ") > 0)"
       end
-      if lt == "poly"
-        @needs_rb_value = 1
-        return "sp_poly_gt(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
-      end
       return "(" + compile_expr(recv) + " > " + compile_arg0(nid) + ")"
     end
     if mname == "<="
       lt = infer_type(recv)
+      arg_id = get_args(@nd_arguments[nid])[0]
+      at = infer_type(arg_id)
+      if lt == "poly" || at == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_le(" + box_value_to_poly(lt, compile_expr(recv)) + ", " + box_value_to_poly(at, compile_expr(arg_id)) + ")"
+      end
       if lt == "string"
         cc = try_char_cmp(nid, "<=")
         if cc != ""
@@ -16149,6 +16265,12 @@ class Compiler
     end
     if mname == ">="
       lt = infer_type(recv)
+      arg_id = get_args(@nd_arguments[nid])[0]
+      at = infer_type(arg_id)
+      if lt == "poly" || at == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_ge(" + box_value_to_poly(lt, compile_expr(recv)) + ", " + box_value_to_poly(at, compile_expr(arg_id)) + ")"
+      end
       if lt == "string"
         cc = try_char_cmp(nid, ">=")
         if cc != ""
@@ -16180,6 +16302,12 @@ class Compiler
       return compile_eq(nid, "!=")
     end
     if mname == "!"
+      lt = infer_type(recv)
+      if lt == "poly"
+        tmp = new_temp
+        emit("  sp_RbVal " + tmp + " = " + compile_expr(recv) + ";")
+        return "(!" + truthy_c_expr(lt, tmp) + ")"
+      end
       return "(!" + compile_expr(recv) + ")"
     end
     if mname == "between?"
@@ -16237,18 +16365,38 @@ class Compiler
         rc = compile_expr_gc_rooted(recv)
         return "(sp_PtrArray_push(" + rc + ", " + compile_arg0(nid) + "), " + rc + ")"
       end
+      if lt == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_shl(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
       return "(" + compile_expr(recv) + " << " + compile_arg0(nid) + ")"
     end
     if mname == ">>"
+      if infer_type(recv) == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_shr(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
       return "(" + compile_expr(recv) + " >> " + compile_arg0(nid) + ")"
     end
     if mname == "&"
+      if infer_type(recv) == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_band(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
       return "(" + compile_expr(recv) + " & " + compile_arg0(nid) + ")"
     end
     if mname == "|"
+      if infer_type(recv) == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_bor(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
       return "(" + compile_expr(recv) + " | " + compile_arg0(nid) + ")"
     end
     if mname == "^"
+      if infer_type(recv) == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_bxor(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
       return "(" + compile_expr(recv) + " ^ " + compile_arg0(nid) + ")"
     end
     if mname == "~"
@@ -16256,6 +16404,10 @@ class Compiler
     end
     if mname == "-@"
       rt = infer_type(recv)
+      if rt == "poly"
+        @needs_rb_value = 1
+        return "sp_poly_neg(" + compile_expr(recv) + ")"
+      end
       if rt == "float"
         return "(-" + compile_expr(recv) + ")"
       end
@@ -19048,6 +19200,10 @@ class Compiler
   end
 
   def poly_dispatch_return_type(mname)
+    if mname == "[]"
+      @needs_rb_value = 1
+      return "poly"
+    end
     common = ""
     ci = 0
     while ci < @cls_names.length
@@ -19266,6 +19422,22 @@ class Compiler
     if arg_id >= 0
       rc = compile_expr(arg_id)
     end
+    if lt == "poly" || at == "poly"
+      @needs_rb_value = 1
+      left = lc
+      right = rc
+      if lt != "poly"
+        left = box_value_to_poly(lt, lc)
+      end
+      if at != "poly"
+        right = box_value_to_poly(at, rc)
+      end
+      if op == "=="
+        return "sp_poly_eq(" + left + ", " + right + ")"
+      else
+        return "(!sp_poly_eq(" + left + ", " + right + "))"
+      end
+    end
     # Symbol equality: distinct from all non-symbol types in Ruby.
     if lt == "symbol"
       if at == "symbol"
@@ -19330,6 +19502,44 @@ class Compiler
   # Mirrors box_expr_to_poly but operates on a raw (type, value) pair so
   # callers that already have temps don't have to re-emit the expr.
   def box_value_to_poly(at, val)
+    nullable = is_nullable_type(at)
+    raw_at = at
+    at = base_type(at)
+    if nullable == 1 && is_nullable_pointer_type(raw_at) == 1
+      if at == "string"
+        return "sp_box_nullable_str(" + val + ")"
+      end
+      if at == "int_array"
+        return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_INT_ARRAY)"
+      end
+      if at == "float_array"
+        return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_FLT_ARRAY)"
+      end
+      if at == "str_array"
+        return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_STR_ARRAY)"
+      end
+      if at == "sym_array"
+        return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_SYM_ARRAY)"
+      end
+      if is_ptr_array_type(at) == 1
+        return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_PTR_ARRAY)"
+      end
+      if at == "proc" || at == "lambda"
+        return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_PROC)"
+      end
+      if is_obj_type(at) == 1
+        cname = at[4, at.length - 4]
+        ci = find_class_idx(cname)
+        return "sp_box_nullable_obj(" + val + ", " + ci.to_s + ")"
+      end
+      if type_is_pointer(at) == 1
+        return "sp_box_nullable_obj((void *)(" + val + "), 0)"
+      end
+    end
+    box_non_nullable_value_to_poly(at, val)
+  end
+
+  def box_non_nullable_value_to_poly(at, val)
     if at == "poly"
       return val
     end
@@ -19351,8 +19561,6 @@ class Compiler
     if at == "symbol"
       return "sp_box_sym(" + val + ")"
     end
-    # Built-in pointer types route through sp_box_obj with a reserved
-    # negative cls_id (mirrors box_expr_to_poly).
     if at == "int_array"
       return "sp_box_int_array(" + val + ")"
     end
@@ -19375,6 +19583,9 @@ class Compiler
       cname = at[4, at.length - 4]
       ci = find_class_idx(cname)
       return "sp_box_obj(" + val + ", " + ci.to_s + ")"
+    end
+    if type_is_pointer(at) == 1
+      return "sp_box_obj((void *)(" + val + "), 0)"
     end
     "sp_box_int(" + val + ")"
   end
@@ -19420,110 +19631,11 @@ class Compiler
     end
     at = infer_type(nid)
     val = compile_expr(nid)
-    if at == "poly"
-      return val
-    end
-    if at == "int"
-      return "sp_box_int(" + val + ")"
-    end
-    if at == "string"
-      return "sp_box_str(" + val + ")"
-    end
-    if at == "float"
-      return "sp_box_float(" + val + ")"
-    end
-    if at == "bool"
-      return "sp_box_bool(" + val + ")"
-    end
-    if at == "nil"
-      return "sp_box_nil()"
-    end
-    if at == "symbol"
-      return "sp_box_sym(" + val + ")"
-    end
-    if is_obj_type(at) == 1
-      cname = at[4, at.length - 4]
-      ci = find_class_idx(cname)
-      return "sp_box_obj(" + val + ", " + ci.to_s + ")"
-    end
-    # Built-in pointer types: route through sp_box_obj with a reserved
-    # negative cls_id (SP_BUILTIN_*) so dispatch is uniform.
-    if at == "int_array"
-      return "sp_box_int_array(" + val + ")"
-    end
-    if at == "float_array"
-      return "sp_box_float_array(" + val + ")"
-    end
-    if at == "str_array"
-      return "sp_box_str_array(" + val + ")"
-    end
-    if at == "sym_array"
-      return "sp_box_sym_array(" + val + ")"
-    end
-    if is_ptr_array_type(at) == 1
-      return "sp_box_ptr_array(" + val + ")"
-    end
-    if at == "proc" || at == "lambda"
-      return "sp_box_proc(" + val + ")"
-    end
-    # Other pointer types (hashes, mutable strings, etc.) — box with a
-    # neutral cls_id of 0 rather than truncating the pointer to int.
-    if type_is_pointer(at) == 1
-      return "sp_box_obj((void *)(" + val + "), 0)"
-    end
-    "sp_box_int(" + val + ")"
+    box_value_to_poly(at, val)
   end
 
   def box_val_to_poly(val, at)
-    if at == "poly"
-      return val
-    end
-    if at == "int"
-      return "sp_box_int(" + val + ")"
-    end
-    if at == "string"
-      return "sp_box_str(" + val + ")"
-    end
-    if at == "float"
-      return "sp_box_float(" + val + ")"
-    end
-    if at == "bool"
-      return "sp_box_bool(" + val + ")"
-    end
-    if at == "nil"
-      return "sp_box_nil()"
-    end
-    if at == "symbol"
-      return "sp_box_sym(" + val + ")"
-    end
-    if at == "int_array"
-      return "sp_box_int_array(" + val + ")"
-    end
-    if at == "float_array"
-      return "sp_box_float_array(" + val + ")"
-    end
-    if at == "str_array"
-      return "sp_box_str_array(" + val + ")"
-    end
-    if at == "sym_array"
-      return "sp_box_sym_array(" + val + ")"
-    end
-    if is_ptr_array_type(at) == 1
-      return "sp_box_ptr_array(" + val + ")"
-    end
-    if is_obj_type(at) == 1
-      cname = at[4, at.length - 4]
-      ci = find_class_idx(cname)
-      return "sp_box_obj(" + val + ", " + ci.to_s + ")"
-    end
-    # Other pointer types (hashes, mutable strings, etc.) — box with a
-    # neutral cls_id of 0. Round-tripping back to the original concrete
-    # type is the caller's problem; this just makes the assignment
-    # type-check rather than silently truncating a pointer to mrb_int.
-    if type_is_pointer(at) == 1
-      return "sp_box_obj((void *)(" + val + "), 0)"
-    end
-    "sp_box_int(" + val + ")"
+    box_value_to_poly(at, val)
   end
 
   # Emit a runtime loop that pushes every element of the array `src_expr`
