@@ -3143,6 +3143,11 @@ class Compiler
     if recv >= 0
       if @nd_type[recv] == "ConstantReadNode"
         rcname = @nd_name[recv]
+        if rcname == "Process"
+          if mname == "clock_gettime"
+            return "float"
+          end
+        end
         if rcname == "File"
           if mname == "read"
             return "string"
@@ -18572,6 +18577,13 @@ class Compiler
       if rcname == "Time"
         if mname == "now"
           return "((mrb_int)time(NULL))"
+        end
+      end
+      # Process.clock_gettime — assume CLOCK_MONOTONIC; the clock_id
+      # arg is not modeled. Returns seconds as a float.
+      if rcname == "Process"
+        if mname == "clock_gettime"
+          return "({ struct timespec _ts; clock_gettime(CLOCK_MONOTONIC, &_ts); (mrb_float)_ts.tv_sec + (mrb_float)_ts.tv_nsec / 1e9; })"
         end
       end
       # ENV
