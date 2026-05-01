@@ -22250,6 +22250,42 @@ class Compiler
       end
     end
 
+    # rotate!(n) — defaults to n=1 like Ruby.
+    if mname == "rotate!"
+      if recv >= 0
+        rt = infer_type(recv)
+        rot_pfx = ""
+        if rt == "int_array" || rt == "sym_array"
+          rot_pfx = "IntArray"
+        end
+        if rt == "float_array"
+          rot_pfx = "FloatArray"
+        end
+        if rt == "str_array"
+          rot_pfx = "StrArray"
+        end
+        if is_ptr_array_type(rt) == 1
+          rot_pfx = "PtrArray"
+        end
+        if rt == "poly_array"
+          rot_pfx = "PolyArray"
+        end
+        if rot_pfx != ""
+          args_id = @nd_arguments[nid]
+          n_expr = "1"
+          if args_id >= 0
+            aargs = get_args(args_id)
+            if aargs.length > 0
+              n_expr = compile_expr(aargs[0])
+            end
+          end
+          rc = compile_expr_gc_rooted(recv)
+          emit("  sp_" + rot_pfx + "_rotate_bang(" + rc + ", " + n_expr + ");")
+          return 1
+        end
+      end
+    end
+
     # reverse! / sort!
     if mname == "reverse!"
       if recv >= 0
