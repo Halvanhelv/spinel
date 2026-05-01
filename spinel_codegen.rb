@@ -19056,9 +19056,12 @@ class Compiler
         yc = "(sp_sym)sp_IntArray_get((sp_IntArray *)" + recv_tmp + ".v.p, " + a0 + ")"
         emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_SYM_ARRAY) " + result_tmp + " = sp_box_sym(" + yc + ");")
       end
-      # PtrArray's element type is class-specific (sp_<C> *) so a
-      # uniform poly result needs sp_box_obj — but we don't have a
-      # cls_id here. Defer (the issue notes this is more involved).
+      # PtrArray dispatch — get returns a void* which we cast to
+      # mrb_int when the receiver is poly. Callers that immediately
+      # do `<obj>.reset`-style dispatch expect a pointer back.
+      pc = "(mrb_int)sp_PtrArray_get((sp_PtrArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+      prhs = is_poly_ret == 1 ? "sp_box_obj((void *)" + pc + ", 0)" : pc
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_PTR_ARRAY) " + result_tmp + " = " + prhs + ";")
     end
     # `length` / `size` — every built-in array exposes its own
     # `_length` helper (sym_array shares IntArray's). PtrArray is
