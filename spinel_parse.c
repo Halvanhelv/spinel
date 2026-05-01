@@ -743,6 +743,26 @@ static int flatten(pm_node_t *node) {
     R("call", n->call);
     break;
   }
+  case PM_MATCH_REQUIRED_NODE: {
+    /* Rightward assignment: `expr => var` (Ruby 3.0+). When the
+       pattern is a single LocalVariableTargetNode, this is just
+       `var = expr` and we lower it to a LocalVariableWriteNode so
+       the codegen reuses the regular assignment path. Full pattern
+       matching (array / hash patterns, pinned vars) is out of scope
+       and falls through to the unknown-node passthrough. */
+    pm_match_required_node_t *n = (pm_match_required_node_t *)node;
+    if (n->pattern && PM_NODE_TYPE_P(n->pattern, PM_LOCAL_VARIABLE_TARGET_NODE)) {
+      pm_local_variable_target_node_t *t = (pm_local_variable_target_node_t *)n->pattern;
+      N("LocalVariableWriteNode");
+      NAME("name", t->name);
+      R("value", n->value);
+    } else {
+      N("MatchRequiredNode");
+      R("value", n->value);
+      R("pattern", n->pattern);
+    }
+    break;
+  }
   case PM_ALTERNATION_PATTERN_NODE: {
     pm_alternation_pattern_node_t *n = (pm_alternation_pattern_node_t *)node;
     N("AlternationPatternNode");
