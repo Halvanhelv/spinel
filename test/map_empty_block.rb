@@ -18,3 +18,9 @@ puts ["a", "b", "c", "d"].map {}.length   # 4
 
 # poly_array#map
 puts [1, "two", :three].map {}.length     # 3
+
+# ptr_array#map (homogeneous obj_X[])
+class Box
+  def initialize(v); @v = v; end
+end
+puts [Box.new(1), Box.new(2), Box.new(3)].map {}.length  # 3
