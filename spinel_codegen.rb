@@ -27421,6 +27421,73 @@ class Compiler
       pop_scope
       return tmp_arr
     end
+    # ptr_array recv #map: iterate sp_PtrArray_get and build a fresh
+    # accumulator. Like poly_array (handled above), master fell
+    # through to "0" for ptr_array recv, so any `.map { ... }` on a
+    # typed `obj_X[]` ivar/local got NULL-derefed downstream.
+    if is_ptr_array_type(rt) == 1
+      @needs_gc = 1
+      @needs_ptr_array = 1
+      elem_t = ptr_array_elem_type(rt)
+      block_ret_p = "int"
+      blk_p = @nd_block[nid]
+      if blk_p >= 0
+        body_p = @nd_body[blk_p]
+        if body_p >= 0
+          stmts_p = get_stmts(body_p)
+          if stmts_p.length > 0
+            block_ret_p = infer_type(stmts_p.last)
+          end
+        end
+      end
+      push_scope
+      if block_ret_p == "string"
+        @needs_str_array = 1
+        emit("  sp_StrArray *" + tmp_arr + " = sp_StrArray_new();")
+      elsif block_ret_p == "float"
+        @needs_float_array = 1
+        emit("  sp_FloatArray *" + tmp_arr + " = sp_FloatArray_new();")
+      elsif block_ret_p == "int" || block_ret_p == "bool"
+        @needs_int_array = 1
+        emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
+      else
+        # obj/ptr/poly block return: keep a PtrArray of the result.
+        emit("  sp_PtrArray *" + tmp_arr + " = sp_PtrArray_new();")
+      end
+      emit("  SP_GC_ROOT(" + tmp_arr + ");")
+      emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_PtrArray_length(" + rc + "); " + tmp_i + "++) {")
+      declare_var(bp1, elem_t)
+      cast_t = c_type(elem_t)
+      emit("    lv_" + bp1 + " = (" + cast_t + ")sp_PtrArray_get(" + rc + ", " + tmp_i + ");")
+      @indent = @indent + 1
+      if blk_p >= 0
+        body_p2 = @nd_body[blk_p]
+        if body_p2 >= 0
+          stmts_p2 = get_stmts(body_p2)
+          k_p = 0
+          while k_p < stmts_p2.length - 1
+            compile_stmt(stmts_p2[k_p])
+            k_p = k_p + 1
+          end
+          if stmts_p2.length > 0
+            lastv_p = compile_expr(stmts_p2.last)
+            if block_ret_p == "string"
+              emit("  sp_StrArray_push(" + tmp_arr + ", " + lastv_p + ");")
+            elsif block_ret_p == "float"
+              emit("  sp_FloatArray_push(" + tmp_arr + ", " + lastv_p + ");")
+            elsif block_ret_p == "int" || block_ret_p == "bool"
+              emit("  sp_IntArray_push(" + tmp_arr + ", " + lastv_p + ");")
+            else
+              emit("  sp_PtrArray_push(" + tmp_arr + ", (void *)(" + lastv_p + "));")
+            end
+          end
+        end
+      end
+      @indent = @indent - 1
+      emit("  }")
+      pop_scope
+      return tmp_arr
+    end
     "0"
   end
 
