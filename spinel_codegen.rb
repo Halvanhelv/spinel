@@ -5082,7 +5082,34 @@ class Compiler
           end
         end
       else
-        parent = @nd_name[sp]
+        parent = const_ref_flat_name(sp)
+        if parent == ""
+          parent = @nd_name[sp]
+        end
+        # Resolve the parent class name against the same module-prefix
+        # chain that was used to register the child. `class Sub < Base`
+        # inside `module M` should land on `M_Base` (the registered
+        # name), not bare "Base", or `emit_class_fields` later fails
+        # `find_class_idx` and silently drops every inherited field.
+        if module_prefix != "" && const_ref_is_relative(sp) == 1
+          if find_class_idx(parent) < 0
+            mp = module_prefix
+            while mp != ""
+              cand = mp + "_" + parent
+              if find_class_idx(cand) >= 0
+                parent = cand
+                mp = ""
+              else
+                idx = mp.rindex("_")
+                if idx < 0
+                  mp = ""
+                else
+                  mp = mp[0, idx]
+                end
+              end
+            end
+          end
+        end
       end
     end
 
