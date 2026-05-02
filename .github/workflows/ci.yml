@@ -40,8 +40,11 @@ jobs:
       - name: Fetch libprism sources
         run: make deps
 
-      - name: Build (parse + regexp + bootstrap)
-        run: make -j$(getconf _NPROCESSORS_ONLN) all
+      # CI builds spinel_codegen for testing only — `-O3 -flto` adds
+      # link time on every job (especially Windows) without buying us
+      # anything CI cares about. LTO=0 keeps the local-dev default.
+      - name: Build (parse + regexp + codegen)
+        run: make -j$(getconf _NPROCESSORS_ONLN) LTO=0 all
 
       - name: Run tests
         run: make test
@@ -62,6 +65,9 @@ jobs:
         with:
           msystem: MINGW64
           update: false
+          # Reuse the pacman package set across runs — saves ~1m of
+          # download/install on every job.
+          cache: true
           install: >-
             base-devel
             mingw-w64-x86_64-toolchain
@@ -78,14 +84,26 @@ jobs:
           ruby --version
           make --version | head -1
 
+      - name: Resolve MSYS2 gem dir
+        id: gemdir
+        run: echo "path=$(ruby -e 'puts Gem.dir')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache prism gem
+        id: cache-prism
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.gemdir.outputs.path }}
+          key: prism-mingw64-1.9.0
+
       - name: Install prism gem (codegen bootstrap step 2 needs it)
+        if: steps.cache-prism.outputs.cache-hit != 'true'
         run: gem install prism -v 1.9.0
 
       - name: Fetch libprism sources
         run: make deps
 
-      - name: Build (parse + regexp + bootstrap)
-        run: make -j$(nproc) all
+      - name: Build (parse + regexp + codegen)
+        run: make -j$(nproc) LTO=0 all
 
       - name: Run tests
         run: make test
