@@ -179,6 +179,12 @@ class Compiler
     @const_expr_ids = []
     @const_scope_names = "".split(",")
 
+    # `redo` -- labeled-goto target stack. Each loop emitter pushes
+    # a fresh label name when entering an iteration body and pops on
+    # exit; a `redo` jumps to the top of the innermost label.
+    @redo_label_stack = "".split(",")
+    @redo_label_counter = 0
+
     # ---- Scope stack for local variables ----
     @scope_names = "".split(",")
     @scope_types = "".split(",")
@@ -24894,6 +24900,19 @@ class Compiler
       emit("  cvar_" + qname + " = " + val + ";")
       return
     end
+    if t == "RedoNode"
+      # `redo` -- jump to the top of the current iteration without
+      # advancing the iterator or re-evaluating the loop guard. The
+      # loop emitter installs a label via push_redo_label /
+      # emit_redo_label; we goto the innermost.
+      if @redo_label_stack.length == 0
+        $stderr.puts "Spinel: `redo` outside of a loop"
+        exit(1)
+      end
+      lbl = @redo_label_stack.last
+      emit("  goto " + lbl + ";")
+      return
+    end
     if t == "LocalVariableWriteNode"
       lname = @nd_name[nid]
       # Check for method(:name) assignment
@@ -29804,11 +29823,38 @@ class Compiler
     if bp1 != ""
       declare_var(bp1, "int")
     end
+    redo_label = push_redo_label
+    emit_redo_label(redo_label)
     compile_stmts_body(@nd_body[@nd_block[nid]])
+    pop_redo_label
     pop_scope
     @indent = @indent - 1
     emit("  }")
     @in_loop = old
+  end
+
+  # `redo` label-stack helpers. Each loop emitter wraps its body
+  # between push_redo_label / emit_redo_label / pop_redo_label so
+  # `redo` knows which label to jump to. Labels are unique per loop
+  # body via @redo_label_counter.
+  def push_redo_label
+    @redo_label_counter = @redo_label_counter + 1
+    lbl = "sp_redo_" + @redo_label_counter.to_s
+    @redo_label_stack.push(lbl)
+    lbl
+  end
+
+  def pop_redo_label
+    if @redo_label_stack.length > 0
+      @redo_label_stack.pop
+    end
+  end
+
+  # Emit the C label that `redo` jumps to. C requires labels to be
+  # followed by a statement; `;` lets a subsequent `}` stay valid
+  # even if the body is empty.
+  def emit_redo_label(lbl)
+    emit("    " + lbl + ": ;")
   end
 
   def compile_upto_block(nid)
