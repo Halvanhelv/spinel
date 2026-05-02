@@ -12832,7 +12832,11 @@ class Compiler
         declare_method_locals(bid, pnames)
         stmts = get_stmts(bid)
         stmts.each { |sid|
-          if @nd_type[sid] != "SuperNode"
+          # SuperNode (`super(...)`) and ForwardingSuperNode (bare
+          # `super`) are emitted directly above as the parent
+          # `_initialize` call. Skip them here so compile_stmt
+          # doesn't emit a dummy `0;` for the AST node.
+          if @nd_type[sid] != "SuperNode" && @nd_type[sid] != "ForwardingSuperNode"
             compile_stmt(sid)
           end
         }
@@ -14846,16 +14850,23 @@ class Compiler
           # that an enclosing expression (e.g. `parens1 + parens2`)
           # cant interleave additional side effects from another
           # parens between this ones evaluation and use.
+          # Leading statements must use compile_stmt so side-effecting
+          # calls that return "0" via compile_expr (puts, print, raise,
+          # writer assignments, ...) actually emit their effect rather
+          # than degenerating to `  0;`.
           k = 0
           while k < stmts.length - 1
-            v = compile_expr(stmts[k])
-            if v != "" && v != "0"
-              emit("  " + v + ";")
-            end
+            compile_stmt(stmts[k])
             k = k + 1
           end
-          last_expr = compile_expr(stmts.last)
           last_t = infer_type(stmts.last)
+          if last_t == "void"
+            # Final statement has no value — emit it for its effect and
+            # report 0 as the parens' value.
+            compile_stmt(stmts.last)
+            return "0"
+          end
+          last_expr = compile_expr(stmts.last)
           tmp = new_temp
           emit("  " + c_type(last_t) + " " + tmp + " = " + last_expr + ";")
           return tmp
@@ -20057,11 +20068,13 @@ class Compiler
         yc = "(sp_sym)sp_IntArray_get((sp_IntArray *)" + recv_tmp + ".v.p, " + a0 + ")"
         emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_SYM_ARRAY) " + result_tmp + " = sp_box_sym(" + yc + ");")
       end
-      # PtrArray dispatch — get returns a void* which we cast to
-      # mrb_int when the receiver is poly. Callers that immediately
-      # do `<obj>.reset`-style dispatch expect a pointer back.
-      pc = "(mrb_int)sp_PtrArray_get((sp_PtrArray *)" + recv_tmp + ".v.p, " + a0 + ")"
-      prhs = is_poly_ret == 1 ? "sp_box_obj((void *)" + pc + ", 0)" : pc
+      # PtrArray dispatch — sp_PtrArray_get returns void*, which is
+      # implicitly convertible to any pointer for the non-poly path
+      # (result_tmp may be `sp_Foo *`) and accepted directly by
+      # sp_box_obj for the poly path. Casting through mrb_int would
+      # fail to compile when result_tmp is a pointer type.
+      pc = "sp_PtrArray_get((sp_PtrArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+      prhs = is_poly_ret == 1 ? "sp_box_obj(" + pc + ", 0)" : pc
       emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_PTR_ARRAY) " + result_tmp + " = " + prhs + ";")
     end
     # `length` / `size` — every built-in array exposes its own
