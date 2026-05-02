@@ -230,7 +230,9 @@ static inline void _sp_gc_root_pop(int *added) { if (*added) sp_gc_nroots--; }
 #define SP_GC_MARK_STACK_MAX (1024*64)
 static void**sp_gc_mark_stack=NULL;static int sp_gc_mark_top=0;
 static void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if(pm==0xfe){((char*)obj)[-1]=(char)0xfc;return;}if(pm==0xfc||pm==0xff)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(h->marked)return;h->marked=1;if(h->scan){if(sp_gc_mark_stack&&sp_gc_mark_top<SP_GC_MARK_STACK_MAX){sp_gc_mark_stack[sp_gc_mark_top++]=obj;}else{h->scan(obj);}}}
-static void sp_gc_mark_all(void){if(!sp_gc_mark_stack)sp_gc_mark_stack=(void**)malloc(sizeof(void*)*SP_GC_MARK_STACK_MAX);sp_gc_mark_top=0;for(int i=0;i<sp_gc_nroots;i++){void*obj=*sp_gc_roots[i];if(obj)sp_gc_mark(obj);}while(sp_gc_mark_top>0){void*obj=sp_gc_mark_stack[--sp_gc_mark_top];sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(h->scan)h->scan(obj);}}
+/* Forward decl: defined alongside the regex globals it marks. */
+static void sp_re_mark_globals(void);
+static void sp_gc_mark_all(void){if(!sp_gc_mark_stack)sp_gc_mark_stack=(void**)malloc(sizeof(void*)*SP_GC_MARK_STACK_MAX);sp_gc_mark_top=0;for(int i=0;i<sp_gc_nroots;i++){void*obj=*sp_gc_roots[i];if(obj)sp_gc_mark(obj);}sp_re_mark_globals();while(sp_gc_mark_top>0){void*obj=sp_gc_mark_stack[--sp_gc_mark_top];sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(h->scan)h->scan(obj);}}
 static void sp_gc_cleanup(int*p){sp_gc_nroots=*p;}
 #define SP_GC_NBUCKETS 32
 static sp_gc_hdr*sp_gc_buckets[SP_GC_NBUCKETS];
@@ -582,6 +584,30 @@ static const char *sp_re_captures[10] = {0};
 static int sp_re_caps[64];
 static const char *sp_re_last_str = "";
 
+/* Symbolic back-references populated alongside the numbered captures.
+   Read by codegen's BackReferenceReadNode arm:
+     $&  -> sp_re_match_str (the whole matched substring)
+     $`  -> sp_re_match_pre  (substring before the match)
+     $'  -> sp_re_match_post (substring after the match)
+   $~ falls back to $& since Spinel has no MatchData wrapper. */
+static const char *sp_re_match_str = NULL;
+static const char *sp_re_match_pre = NULL;
+static const char *sp_re_match_post = NULL;
+
+/* Mark the regex globals as live during GC. Each holds a pointer to a
+   string allocated via sp_str_alloc_raw on the str-heap; without this
+   sp_str_sweep would reap them on the next collect, leaving dangling
+   pointers in $1..$9, $&, $`, $'. sp_mark_string is null-safe and
+   no-ops on non-heap strings (the empty-string default of
+   sp_re_last_str), so it's safe to call unconditionally. */
+static void sp_re_mark_globals(void) {
+  sp_mark_string(sp_re_last_str);
+  for (int i = 0; i < 10; i++) sp_mark_string(sp_re_captures[i]);
+  sp_mark_string(sp_re_match_str);
+  sp_mark_string(sp_re_match_pre);
+  sp_mark_string(sp_re_match_post);
+}
+
 static void sp_re_set_captures(const char *str, int *caps, int ncaps) {
   sp_re_last_str = str;
   for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
@@ -592,6 +618,26 @@ static void sp_re_set_captures(const char *str, int *caps, int ncaps) {
       memcpy(buf, str+caps[i*2], len); buf[len] = 0;
       sp_re_captures[i] = buf;
     }
+  }
+  /* Populate the symbolic back-references from caps[0]/[1] (the whole
+     match span). NULL when the match failed; the codegen ternary
+     falls back to "". */
+  sp_re_match_str = NULL;
+  sp_re_match_pre = NULL;
+  sp_re_match_post = NULL;
+  if (ncaps >= 1 && caps[0] >= 0 && caps[1] >= 0) {
+    int slen = (int)strlen(str);
+    int mlen = caps[1] - caps[0];
+    char *m = sp_str_alloc_raw(mlen + 1);
+    memcpy(m, str + caps[0], mlen); m[mlen] = 0;
+    sp_re_match_str = m;
+    char *pre = sp_str_alloc_raw(caps[0] + 1);
+    memcpy(pre, str, caps[0]); pre[caps[0]] = 0;
+    sp_re_match_pre = pre;
+    int post_len = slen - caps[1];
+    char *post = sp_str_alloc_raw(post_len + 1);
+    memcpy(post, str + caps[1], post_len); post[post_len] = 0;
+    sp_re_match_post = post;
   }
 }
 
