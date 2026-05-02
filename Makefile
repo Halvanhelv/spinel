@@ -91,7 +91,7 @@ PRISM_SRC    = $(wildcard $(PRISM_DIR)/src/*.c) $(wildcard $(PRISM_DIR)/src/util
 PRISM_OBJ    = $(patsubst $(PRISM_DIR)/src/%.c,build/prism/%.o,$(PRISM_SRC))
 PRISM_LIB    = build/libprism.a
 
-.PHONY: all parse bootstrap codegen test bench clean install uninstall deps
+.PHONY: all parse bootstrap codegen test test-run clean-test-results bench clean install uninstall deps
 
 all: parse regexp spinel_codegen$(EXE)
 
@@ -193,44 +193,68 @@ bootstrap: spinel_codegen$(EXE)
 
 # ---- Test ----
 
-test: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
+TESTS := $(wildcard test/*.rb)
+TEST_TARGETS := $(patsubst test/%.rb,build/test-results/%.ok,$(TESTS))
+
+test: clean-test-results
+	@$(MAKE) --no-print-directory test-run
+
+test-run: $(TEST_TARGETS)
 	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi
-	@total=$$(ls test/*.rb | wc -l); \
-	if [ -t 1 ]; then tty=1; else tty=0; fi; \
-	pass=0; fail=0; err=0; i=0; \
-	for f in test/*.rb; do \
-	  i=$$((i+1)); \
-	  bn=$$(basename "$$f" .rb); \
-	  if [ "$$tty" = 1 ]; then printf '\r\033[K  [%d/%d] %s' "$$i" "$$total" "$$bn"; fi; \
-	  ./spinel_parse$(EXE) "$$f" /tmp/_sp_t.ast 2>/dev/null && \
-	  ./spinel_codegen$(EXE) /tmp/_sp_t.ast /tmp/_sp_t.c 2>/dev/null && \
-	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_t.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_t_bin$(EXE) 2>/dev/null; \
-	  if [ $$? -eq 0 ]; then \
-	    $(TIMEOUT10) $(REF_RUBY) "$$f" >/tmp/_sp_t_exp 2>/dev/null; \
-	    ruby_rc=$$?; \
-	    if [ $$ruby_rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
-	      $(TIMEOUT10) ruby "$$f" >/tmp/_sp_t_exp 2>/dev/null; \
-	    fi; \
-	    $(TIMEOUT10) /tmp/_sp_t_bin$(EXE) >/tmp/_sp_t_act 2>/dev/null; \
-	    LC_ALL=C sed 's/\r$$//' /tmp/_sp_t_exp >/tmp/_sp_t_exp.n; \
-	    LC_ALL=C sed 's/\r$$//' /tmp/_sp_t_act >/tmp/_sp_t_act.n; \
-	    if cmp -s /tmp/_sp_t_exp.n /tmp/_sp_t_act.n; then \
-	      pass=$$((pass+1)); \
-	    else \
-	      if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
-	      echo "FAIL: $$bn"; \
-	      diff -u /tmp/_sp_t_exp.n /tmp/_sp_t_act.n 2>&1 | head -40; \
-	      fail=$$((fail+1)); \
-	    fi; \
-	  else \
-	    if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
-	    echo "ERR:  $$bn"; err=$$((err+1)); \
+	@if [ -t 1 ]; then printf '\n'; fi
+	@pass=$$(grep -l '^PASS' build/test-results/*.ok 2>/dev/null | wc -l); \
+	fail=$$(grep -l '^FAIL' build/test-results/*.ok 2>/dev/null | wc -l); \
+	err=$$(grep -l '^ERR' build/test-results/*.ok 2>/dev/null | wc -l); \
+	for f in build/test-results/*.ok; do \
+	  bn=$$(basename "$$f" .ok); \
+	  status=$$(cat "$$f"); \
+	  if [ "$$status" = FAIL ]; then \
+	    echo "FAIL: $$bn"; \
+	    head -40 "$$f.diff"; \
+	  elif [ "$$status" = ERR ]; then \
+	    echo "ERR:  $$bn"; \
 	  fi; \
 	done; \
-	if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
-	rm -f /tmp/_sp_t.ast /tmp/_sp_t.c /tmp/_sp_t_bin$(EXE) /tmp/_sp_t_exp /tmp/_sp_t_act /tmp/_sp_t_exp.n /tmp/_sp_t_act.n; \
 	echo "Tests: $$pass pass, $$fail fail, $$err error"; \
 	if [ $$fail -ne 0 ] || [ $$err -ne 0 ]; then exit 1; fi
+
+build/test-results/%.ok: test/%.rb spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
+	@mkdir -p build/test-results
+	@tmpdir=$$(mktemp -d /tmp/spinel-test.XXXXXX); \
+	ast=$$tmpdir/test.ast; \
+	cfile=$$tmpdir/test.c; \
+	bin=$$tmpdir/test_bin$(EXE); \
+	exp=$$tmpdir/expected; \
+	act=$$tmpdir/actual; \
+	rm -f "$@.diff"; \
+	./spinel_parse$(EXE) "$<" "$$ast" 2>/dev/null && \
+	./spinel_codegen$(EXE) "$$ast" "$$cfile" 2>/dev/null && \
+	$(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib "$$cfile" $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+	if [ $$? -eq 0 ]; then \
+	  $(TIMEOUT10) $(REF_RUBY) "$<" >"$$exp" 2>/dev/null; \
+	  ruby_rc=$$?; \
+	  if [ $$ruby_rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
+	    $(TIMEOUT10) ruby "$<" >"$$exp" 2>/dev/null; \
+	  fi; \
+	  $(TIMEOUT10) "$$bin" >"$$act" 2>/dev/null; \
+	  LC_ALL=C sed 's/\r$$//' "$$exp" >"$$exp.n"; \
+	  LC_ALL=C sed 's/\r$$//' "$$act" >"$$act.n"; \
+	  if cmp -s "$$exp.n" "$$act.n"; then \
+	    echo PASS > "$@"; \
+	    if [ -t 1 ]; then printf .; fi; \
+	  else \
+	    echo FAIL > "$@"; \
+	    diff -u "$$exp.n" "$$act.n" > "$@.diff" 2>&1 || true; \
+	    if [ -t 1 ]; then printf F; fi; \
+	  fi; \
+	else \
+	  echo ERR > "$@"; \
+	  if [ -t 1 ]; then printf E; fi; \
+	fi; \
+	rm -rf "$$tmpdir"
+
+clean-test-results:
+	@rm -rf build/test-results
 
 bench: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi
