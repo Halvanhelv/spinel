@@ -226,12 +226,15 @@ test: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	echo "Tests: $$pass pass, $$fail fail, $$err error"; \
 	if [ $$fail -ne 0 ] || [ $$err -ne 0 ]; then exit 1; fi
 
-bench: spinel_parse$(EXE) $(SP_RT_LIB)
-	@if [ ! -f spinel_codegen$(EXE) ]; then echo "Run 'make' or 'make spinel_codegen' first"; exit 1; fi
+bench: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi
-	@pass=0; fail=0; err=0; skip=0; \
+	@total=$$(ls benchmark/*.rb | wc -l); \
+	if [ -t 1 ]; then tty=1; else tty=0; fi; \
+	pass=0; fail=0; err=0; skip=0; i=0; \
 	for f in benchmark/*.rb; do \
+	  i=$$((i+1)); \
 	  bn=$$(basename "$$f" .rb); \
+	  if [ "$$tty" = 1 ]; then printf '\r\033[K  [%d/%d] %s' "$$i" "$$total" "$$bn"; fi; \
 	  $(TIMEOUT10) ./spinel_parse$(EXE) "$$f" /tmp/_sp_b.ast 2>/dev/null && \
 	  $(TIMEOUT10) ./spinel_codegen$(EXE) /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
 	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin$(EXE) 2>/dev/null; \
@@ -243,6 +246,7 @@ bench: spinel_parse$(EXE) $(SP_RT_LIB)
 	      ruby_rc=$$?; \
 	    fi; \
 	    if [ $$ruby_rc -eq 124 ]; then \
+	      if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
 	      echo "SKIP: $$bn (ruby timeout)"; skip=$$((skip+1)); \
 	    else \
 	      actual=$$($(TIMEOUT60) /tmp/_sp_b_bin$(EXE) 2>/dev/null); \
@@ -251,15 +255,18 @@ bench: spinel_parse$(EXE) $(SP_RT_LIB)
 	      if [ "$$expected" = "$$actual" ]; then \
 	        pass=$$((pass+1)); \
 	      else \
+	        if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
 	        echo "FAIL: $$bn"; \
 	        printf '%s\n%s\n%s\n%s\n' "--- expected ---" "$$expected" "--- actual ---" "$$actual"; \
 	        fail=$$((fail+1)); \
 	      fi; \
 	    fi; \
 	  else \
+	    if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
 	    echo "ERR:  $$bn"; err=$$((err+1)); \
 	  fi; \
 	done; \
+	if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
 	rm -f /tmp/_sp_b.ast /tmp/_sp_b.c /tmp/_sp_b_bin$(EXE); \
 	echo "Benchmarks: $$pass pass, $$fail fail, $$err error, $$skip skip"; \
 	if [ $$fail -ne 0 ] || [ $$err -ne 0 ]; then exit 1; fi
