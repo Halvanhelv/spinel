@@ -3545,6 +3545,11 @@ class Compiler
             return "float"
           end
         end
+        if rcname == "Time"
+          if mname == "now"
+            return "float"
+          end
+        end
         if rcname == "File"
           if mname == "read" || mname == "binread"
             return "string"
@@ -17106,6 +17111,9 @@ class Compiler
         if mname == "to_i"
           return "(mrb_int)(self)"
         end
+        if mname == "to_f"
+          return "(self)"
+        end
         if mname == "to_s"
           return "sp_float_to_s(self)"
         end
@@ -18867,6 +18875,9 @@ class Compiler
     if mname == "to_i"
       return "(mrb_int)(" + rc + ")"
     end
+    if mname == "to_f"
+      return "(" + rc + ")"
+    end
     # ceil/floor/round/truncate with precision arg use a GCC stmt-expr so
     # the argument expression is compiled-and-emitted once on the Ruby
     # side and pow(10, n) is evaluated once at runtime — the original
@@ -20311,10 +20322,12 @@ class Compiler
           return "sp_file_basename(" + compile_arg0(nid) + ")"
         end
       end
-      # Time
+      # Time.now — wall-clock seconds-since-epoch as float, matching
+      # CRuby's Time#to_f semantics so `Time.now.to_f * 1000` actually
+      # yields milliseconds with sub-second precision.
       if rcname == "Time"
         if mname == "now"
-          return "((mrb_int)time(NULL))"
+          return "({ struct timespec _ts; clock_gettime(CLOCK_REALTIME, &_ts); (mrb_float)_ts.tv_sec + (mrb_float)_ts.tv_nsec / 1e9; })"
         end
       end
       # Process.clock_gettime — assume CLOCK_MONOTONIC; the clock_id
