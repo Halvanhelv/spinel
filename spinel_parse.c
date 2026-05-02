@@ -43,6 +43,8 @@ static void out_add(const char *fmt, ...) {
 
 /* ---- Name from constant pool ---- */
 static const pm_parser_t *g_parser;
+static const char *g_source_file = "";
+static char *g_source_file_escaped = NULL;  /* escape_str(g_source_file), set once at init */
 
 static char *cstr(pm_constant_id_t id) {
   if (id == 0) return strdup("");
@@ -695,6 +697,16 @@ static int flatten(pm_node_t *node) {
     I("start_line", (long long)line);
     break;
   }
+  case PM_SOURCE_FILE_NODE: {
+    /* `__FILE__`. Spinel inlines `require`/`require_relative` at parse
+       time so we cannot recover the per-call-site source file; we
+       always return the toplevel script path passed to spinel_parse,
+       documented in test/source_file.rb. The escaped form is cached
+       in g_source_file_escaped at init since it never changes. */
+    N("SourceFileNode");
+    emit_str(id, "content", g_source_file_escaped);
+    break;
+  }
   case PM_SPLAT_NODE: {
     pm_splat_node_t *n = (pm_splat_node_t *)node;
     N("SplatNode");
@@ -1218,6 +1230,8 @@ int main(int argc, char **argv) {
   }
 
   g_parser = &parser;
+  g_source_file = source_file;
+  g_source_file_escaped = escape_str((const uint8_t *)g_source_file, strlen(g_source_file));
 
   /* Flatten AST to text */
   lines = NULL;
@@ -1249,6 +1263,8 @@ int main(int argc, char **argv) {
   pm_node_destroy(&parser, root);
   pm_parser_free(&parser);
   free(source);
+  free(g_source_file_escaped);  /* paired with the escape_str() in init */
+  g_source_file_escaped = NULL;
   sp_includes_free();
   return 0;
 }
