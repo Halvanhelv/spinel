@@ -2452,7 +2452,10 @@ class Compiler
           return "string"
         end
       end
-      return "int"
+      # Issue #204: don't claim "int" for fetch on receivers we don't
+      # recognize as a built-in collection — let later dispatch resolve
+      # a user-defined `def fetch` against the receiver class.
+      return ""
     end
     if mname == "has_key?" || mname == "key?" || mname == "member?"
       return "bool"
@@ -2580,7 +2583,11 @@ class Compiler
           return "string"
         end
       end
-      return "int"
+      # Issue #204: same as fetch above — fall through so a user-
+      # defined `def find` (canonical ActiveRecord finder shape) wins
+      # over the built-in collection dispatch when the receiver isn't
+      # a built-in collection.
+      return ""
     end
     if mname == "keys"
       if recv >= 0
