@@ -14488,6 +14488,20 @@ class Compiler
       end
       return "(" + self_arrow + sanitize_ivar(iname_w) + " = " + val + ")"
     end
+    if t == "LocalVariableOrWriteNode"
+      # `local ||= expr` in expression context. Lower as
+      # `(local = local ? local : expr)` so the side effect runs
+      # only on a falsy current value.
+      vref = fiber_var_ref(@nd_name[nid])
+      val = compile_expr(@nd_expression[nid])
+      return "(" + vref + " = " + vref + " ? " + vref + " : (" + val + "))"
+    end
+    if t == "LocalVariableAndWriteNode"
+      # `local &&= expr` in expression context.
+      vref = fiber_var_ref(@nd_name[nid])
+      val = compile_expr(@nd_expression[nid])
+      return "(" + vref + " = " + vref + " ? (" + val + ") : " + vref + ")"
+    end
     if t == "ConstantReadNode"
       if @nd_name[nid] == "ARGV"
         return "sp_argv"
@@ -21434,6 +21448,18 @@ class Compiler
       if op == "^"
         emit("  " + vref + " ^= " + val + ";")
       end
+      return
+    end
+    if t == "LocalVariableOrWriteNode"
+      vref = fiber_var_ref(@nd_name[nid])
+      val = compile_expr(@nd_expression[nid])
+      emit("  if (!(" + vref + ")) " + vref + " = " + val + ";")
+      return
+    end
+    if t == "LocalVariableAndWriteNode"
+      vref = fiber_var_ref(@nd_name[nid])
+      val = compile_expr(@nd_expression[nid])
+      emit("  if (" + vref + ") " + vref + " = " + val + ";")
       return
     end
     if t == "InstanceVariableWriteNode"

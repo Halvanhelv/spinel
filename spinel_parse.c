@@ -261,6 +261,20 @@ static int flatten(pm_node_t *node) {
     R("value", n->value);
     break;
   }
+  case PM_LOCAL_VARIABLE_OR_WRITE_NODE: {
+    pm_local_variable_or_write_node_t *n = (pm_local_variable_or_write_node_t *)node;
+    N("LocalVariableOrWriteNode");
+    NAME("name", n->name);
+    R("value", n->value);
+    break;
+  }
+  case PM_LOCAL_VARIABLE_AND_WRITE_NODE: {
+    pm_local_variable_and_write_node_t *n = (pm_local_variable_and_write_node_t *)node;
+    N("LocalVariableAndWriteNode");
+    NAME("name", n->name);
+    R("value", n->value);
+    break;
+  }
   case PM_LOCAL_VARIABLE_TARGET_NODE: {
     pm_local_variable_target_node_t *n = (pm_local_variable_target_node_t *)node;
     N("LocalVariableTargetNode");
