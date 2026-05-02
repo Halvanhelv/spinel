@@ -1273,6 +1273,53 @@ class Compiler
   end
 
   # Get method return type from class
+  # Issue #208: walk the parent chain looking for a class method
+  # (`def self.<mname>`) named `mname`. Returns the class index that
+  # defines it, or -1 if not found. Used so `Leaf.all` resolves to
+  # `Base.all` (and emits `sp_Base_cls_all(...)`) when Leaf inherits
+  # from Base without overriding `.all`. Mirrors cls_method_return's
+  # parent walk for instance methods.
+  def cls_cmethod_owner(ci, mname)
+    if ci < 0
+      return -1
+    end
+    cmnames = @cls_cmeth_names[ci].split(";")
+    cj = 0
+    while cj < cmnames.length
+      if cmnames[cj] == mname
+        return ci
+      end
+      cj = cj + 1
+    end
+    if @cls_parents[ci] != ""
+      pi = find_class_idx(@cls_parents[ci])
+      if pi >= 0
+        return cls_cmethod_owner(pi, mname)
+      end
+    end
+    -1
+  end
+
+  def cls_cmethod_return_inherited(ci, mname)
+    owner = cls_cmethod_owner(ci, mname)
+    if owner < 0
+      return ""
+    end
+    cmnames = @cls_cmeth_names[owner].split(";")
+    cm_returns = @cls_cmeth_returns[owner].split(";")
+    cj = 0
+    while cj < cmnames.length
+      if cmnames[cj] == mname
+        if cj < cm_returns.length
+          return cm_returns[cj]
+        end
+        return ""
+      end
+      cj = cj + 1
+    end
+    ""
+  end
+
   def cls_method_return(ci, mname)
     names = @cls_meth_names[ci].split(";")
     returns = @cls_meth_returns[ci].split(";")
@@ -3251,16 +3298,13 @@ class Compiler
           if mname == "new"
             return "obj_" + rcname
           end
-          cmnames = @cls_cmeth_names[ci2].split(";")
-          cm_returns = @cls_cmeth_returns[ci2].split(";")
-          cj = 0
-          while cj < cmnames.length
-            if cmnames[cj] == mname
-              if cj < cm_returns.length && cm_returns[cj] != "" && cm_returns[cj] != "int"
-                return cm_returns[cj]
-              end
-            end
-            cj = cj + 1
+          # Issue #208: walk the parent chain so an inherited
+          # `def self.<mname>` on a base class resolves correctly
+          # when called on the subclass (e.g. `Leaf.all` →
+          # `Base.all`'s return type).
+          inherited_rt = cls_cmethod_return_inherited(ci2, mname)
+          if inherited_rt != "" && inherited_rt != "int"
+            return inherited_rt
           end
         end
         # Issue #127: same lookup for module class methods. They live in
@@ -19696,21 +19740,21 @@ class Compiler
         end
         mi2 = mi2 + 1
       end
-      # Class method dispatch (def self.xxx)
+      # Class method dispatch (def self.xxx). Issue #208: walk the
+      # parent chain so `Leaf.all` resolves to `Base.all`'s emitter
+      # (`sp_Base_cls_all`, not `sp_Leaf_cls_all` which is never
+      # generated when Leaf doesn't override).
       ci3 = find_class_idx(rcname)
       if ci3 >= 0
-        cmnames = @cls_cmeth_names[ci3].split(";")
-        cj = 0
-        while cj < cmnames.length
-          if cmnames[cj] == mname
-            ca = compile_call_args(nid)
-            if ca != ""
-              return "sp_" + rcname + "_cls_" + sanitize_name(mname) + "(" + ca + ")"
-            else
-              return "sp_" + rcname + "_cls_" + sanitize_name(mname) + "()"
-            end
+        owner_ci = cls_cmethod_owner(ci3, mname)
+        if owner_ci >= 0
+          owner_name = @cls_names[owner_ci]
+          ca = compile_call_args(nid)
+          if ca != ""
+            return "sp_" + owner_name + "_cls_" + sanitize_name(mname) + "(" + ca + ")"
+          else
+            return "sp_" + owner_name + "_cls_" + sanitize_name(mname) + "()"
           end
-          cj = cj + 1
         end
       end
     end
