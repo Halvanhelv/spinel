@@ -810,7 +810,19 @@ static void sp_file_write(const char *path, const char *data) { FILE *f = fopen(
 static mrb_bool sp_file_exist(const char *path) { FILE *f = fopen(path, "r"); if (f) { fclose(f); return TRUE; } return FALSE; }
 static void sp_file_delete(const char *path) { remove(path); }
 static const char *sp_backtick(const char *cmd) { FILE *p = popen(cmd, "r"); if (!p) return sp_str_empty; char *buf = sp_str_alloc_raw(4096); size_t n = fread(buf, 1, 4095, p); buf[n] = 0; pclose(p); return buf; }
-static const char *sp_file_basename(const char *path) { const char *s = strrchr(path, '/'); if (s) return s + 1; return path; }
+static const char *sp_file_basename(const char *path) {
+  const char *s = strrchr(path, '/');
+  const char *base = s ? s + 1 : path;
+  /* sp_gc_mark looks at byte[-1] to distinguish heap strings (`\xfe`)
+     from literals (`\xff`). A `s+1` mid-path pointer has whatever the
+     '/' was before it — and for an arbitrary string that's not a tag,
+     so the GC tries to dereference it as a heap header and segfaults.
+     Return a fresh sp_str_alloc'd copy so the prefix marker is right. */
+  size_t n = strlen(base);
+  char *buf = sp_str_alloc(n);
+  memcpy(buf, base, n + 1);
+  return buf;
+}
 
 typedef struct sp_Proc { void *fn; void *cap; void (*cap_scan)(void *); } sp_Proc;
 static void sp_Proc_scan(void *p) { sp_Proc *pr = (sp_Proc *)p; if (pr->cap && pr->cap_scan) pr->cap_scan(pr->cap); }
