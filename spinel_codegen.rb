@@ -11858,6 +11858,9 @@ class Compiler
   end
 
   def ivar_is_gc_ptr(t)
+    if t == "poly"
+      return 1
+    end
     if is_obj_type(t) == 1
       if is_value_type_obj(t) == 1
         return 0
@@ -11891,6 +11894,14 @@ class Compiler
     0
   end
 
+  def emit_gc_mark_ivar(field, t)
+    if t == "poly"
+      emit_raw("  sp_mark_rbval(" + field + ");")
+    else
+      emit_raw("  if (" + field + ") sp_gc_mark((void *)" + field + ");")
+    end
+  end
+
   def emit_gc_scan_functions
     i = 0
     while i < @cls_names.length
@@ -11904,7 +11915,7 @@ class Compiler
         while j < names.length
           if j < types.length
             if ivar_is_gc_ptr(types[j]) == 1
-              emit_raw("  if (self->" + sanitize_ivar(names[j]) + ") sp_gc_mark((void *)self->" + sanitize_ivar(names[j]) + ");")
+              emit_gc_mark_ivar("self->" + sanitize_ivar(names[j]), types[j])
             end
           end
           j = j + 1
@@ -11919,7 +11930,7 @@ class Compiler
             while pj < pnames.length
               if pj < ptypes.length
                 if ivar_is_gc_ptr(ptypes[pj]) == 1
-                  emit_raw("  if (self->" + sanitize_ivar(pnames[pj]) + ") sp_gc_mark((void *)self->" + sanitize_ivar(pnames[pj]) + ");")
+                  emit_gc_mark_ivar("self->" + sanitize_ivar(pnames[pj]), ptypes[pj])
                 end
               end
               pj = pj + 1
@@ -12521,9 +12532,9 @@ class Compiler
             ivar_name = @nd_name[sid]
             ivar = sanitize_ivar(ivar_name)
             expr_id_iv = @nd_expression[sid]
-            # Match the special-case in compile_stmt: an empty `{}`
+            # Match the special-case in compile_stmt: empty `{}` / `[]`
             # assigned to an ivar promoted by scan_writer_calls needs
-            # the matching `sp_*Hash_new()` constructor (issue #64).
+            # the matching container constructor.
             ivt = cls_ivar_type(@current_class_idx, ivar_name)
             iv_ctor = ""
             if is_empty_hash_literal(expr_id_iv) == 1 && ivt != "" && ivt != "str_int_hash"
@@ -12544,6 +12555,9 @@ class Compiler
               elsif ivt == "sym_poly_hash"
                 iv_ctor = "sp_SymPolyHash_new()"
               end
+            end
+            if iv_ctor == "" && is_empty_array_literal(expr_id_iv) == 1 && ivt != ""
+              iv_ctor = empty_array_new_for_type(ivt)
             end
             if iv_ctor != ""
               @needs_gc = 1
@@ -21439,11 +21453,10 @@ class Compiler
     if t == "InstanceVariableWriteNode"
       iname = @nd_name[nid]
       expr_id = @nd_expression[nid]
-      # Empty `{}` literal assigned to an ivar that scan_writer_calls
-      # has promoted to a non-default hash type. compile_hash_literal
-      # always returns `sp_StrIntHash_new()` for empty `{}`, so without
-      # this special-case the ivar slot's type and the initializer's
-      # type disagree (issue #64).
+      # Empty `{}` / `[]` literal assigned to an ivar that scan_writer_calls
+      # has promoted to a non-default container type. The literal emitters use
+      # default empty container types, so without this special-case the ivar
+      # slot's type and the initializer's type can disagree.
       ivt = ""
       if @current_class_idx >= 0
         ivt = cls_ivar_type(@current_class_idx, iname)
@@ -21467,6 +21480,14 @@ class Compiler
         elsif ivt == "sym_poly_hash"
           ctor = "sp_SymPolyHash_new()"
         end
+        if ctor != ""
+          @needs_gc = 1
+          emit("  " + self_arrow + sanitize_ivar(iname) + " = " + ctor + ";")
+          return
+        end
+      end
+      if is_empty_array_literal(expr_id) == 1 && ivt != ""
+        ctor = empty_array_new_for_type(ivt)
         if ctor != ""
           @needs_gc = 1
           emit("  " + self_arrow + sanitize_ivar(iname) + " = " + ctor + ";")
