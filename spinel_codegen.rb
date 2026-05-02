@@ -2608,6 +2608,9 @@ class Compiler
     if mname == "odd?"
       return "bool"
     end
+    if mname == "allbits?"
+      return "bool"
+    end
     if mname == "zero?"
       return "bool"
     end
@@ -18782,6 +18785,10 @@ class Compiler
     end
     if mname == "odd?"
       return "((" + rc + ") % 2 != 0)"
+    end
+    if mname == "allbits?"
+      mask = compile_arg0(nid)
+      return "(((" + rc + ") & (" + mask + ")) == (" + mask + "))"
     end
     if mname == "zero?"
       return "((" + rc + ") == 0)"
