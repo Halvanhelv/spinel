@@ -3191,7 +3191,7 @@ class Compiler
           end
         end
         if rcname == "File"
-          if mname == "read"
+          if mname == "read" || mname == "binread"
             return "string"
           end
           if mname == "exist?"
@@ -17680,6 +17680,28 @@ class Compiler
     if mname == "bytes"
       @needs_int_array = 1
       @needs_gc = 1
+      # `File.binread(path).bytes` — sp_str_bytes uses null-termination
+      # so it stops at the first 0x00 byte, which is wrong for binary
+      # data (e.g. .nes ROM files). Pattern-match the chained call
+      # and emit a single binread-to-IntArray helper that reads with
+      # the file's actual byte count.
+      r = @nd_receiver[nid]
+      if r >= 0 && @nd_type[r] == "CallNode"
+        rmname = @nd_name[r]
+        if rmname == "binread"
+          rr = @nd_receiver[r]
+          if rr >= 0 && @nd_type[rr] == "ConstantReadNode" && @nd_name[rr] == "File"
+            rargs = @nd_arguments[r]
+            if rargs >= 0
+              ras = get_args(rargs)
+              if ras.length >= 1
+                @needs_file_io = 1
+                return "sp_file_binread_bytes(" + compile_expr(ras[0]) + ")"
+              end
+            end
+          end
+        end
+      end
       return "sp_str_bytes(" + rc + ")"
     end
     if mname == "hex"
@@ -19546,7 +19568,7 @@ class Compiler
       end
       # File operations
       if rcname == "File"
-        if mname == "read"
+        if mname == "read" || mname == "binread"
           return "sp_file_read(" + compile_arg0(nid) + ")"
         end
         if mname == "exist?"
