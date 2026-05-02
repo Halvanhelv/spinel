@@ -25867,6 +25867,12 @@ class Compiler
       if block_ret == "string"
         @needs_str_array = 1
         emit("  sp_StrArray *" + tmp_arr + " = sp_StrArray_new();")
+        # Root the accumulator: a nested map block (e.g. each
+        # iteration allocates many inner objects via sp_*_new) can
+        # trigger GC between pushes; without rooting, the outer
+        # accumulator is collected mid-loop and the next push
+        # corrupts the freed buffer.
+        emit("  SP_GC_ROOT(" + tmp_arr + ");")
         emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
         if bp_is_lambda == 1
           emit("    sp_Val * lv_" + bp1 + " = (sp_Val *)sp_IntArray_get(" + rc + ", " + tmp_i + ");")
@@ -25892,6 +25898,7 @@ class Compiler
         return tmp_arr
       else
         emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
+        emit("  SP_GC_ROOT(" + tmp_arr + ");")
         emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_IntArray_length(" + rc + "); " + tmp_i + "++) {")
         if bp_is_lambda == 1
           emit("    sp_Val * lv_" + bp1 + " = (sp_Val *)sp_IntArray_get(" + rc + ", " + tmp_i + ");")
@@ -25938,6 +25945,7 @@ class Compiler
       if block_ret == "int"
         @needs_int_array = 1
         emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
+        emit("  SP_GC_ROOT(" + tmp_arr + ");")
         emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_StrArray_length(" + rc + "); " + tmp_i + "++) {")
         # Declare lv_<bp> with the block-local type inside the for body
         # so it C-shadows any outer same-named local (Ruby block-local
@@ -25967,6 +25975,7 @@ class Compiler
       end
       @needs_str_array = 1
       emit("  sp_StrArray *" + tmp_arr + " = sp_StrArray_new();")
+      emit("  SP_GC_ROOT(" + tmp_arr + ");")
       emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_StrArray_length(" + rc + "); " + tmp_i + "++) {")
       # Block-local C decl, see note in the int-block branch above.
       emit("    const char *lv_" + bp1 + " = sp_StrArray_get(" + rc + ", " + tmp_i + ");")
