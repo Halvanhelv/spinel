@@ -2067,6 +2067,9 @@ class Compiler
         if lt == "float"
           return "float"
         end
+        if is_typed_array_type(lt)
+          return lt
+        end
         # Check RHS for float promotion
         args_id = @nd_arguments[nid]
         if args_id >= 0
@@ -2139,6 +2142,14 @@ class Compiler
         end
         # Array `<<` returns the recv (so `(arr << x) << y` chains).
         if is_array_type(lt) == 1
+          return lt
+        end
+      end
+      return "int"
+    end
+    if mname == "&" || mname == "|"
+      if recv >= 0
+        if is_typed_array_type(lt)
           return lt
         end
       end
@@ -3110,24 +3121,10 @@ class Compiler
       end
       return "int"
     end
-    if mname == "intersection"
+    if mname == "intersection" || mname == "union" || mname == "difference"
       if recv >= 0
         rt = infer_type(recv)
-        return rt if rt == "int_array" || rt == "sym_array" || rt == "str_array" || rt == "float_array"
-      end
-      return ""
-    end
-    if mname == "union"
-      if recv >= 0
-        rt = infer_type(recv)
-        return rt if rt == "int_array" || rt == "sym_array" || rt == "str_array" || rt == "float_array"
-      end
-      return ""
-    end
-    if mname == "difference"
-      if recv >= 0
-        rt = infer_type(recv)
-        return rt if rt == "int_array" || rt == "sym_array" || rt == "str_array" || rt == "float_array"
+        return rt if is_typed_array_type(rt)
       end
       return ""
     end
@@ -4268,6 +4265,43 @@ class Compiler
       return 1
     end
     0
+  end
+
+  # The four typed arrays that have set-op runtime helpers
+  # (sp_*_intersect / _union / _difference). poly_array and ptr_array
+  # are deliberately excluded — element equality isn't available there.
+  def is_typed_array_type(t)
+    t == "int_array" || t == "sym_array" || t == "str_array" || t == "float_array"
+  end
+
+  # Returns "" to fall through to the literal C operator; otherwise the
+  # typed-array helper call. `op` is one of "intersect"/"union"/"difference".
+  # `lt` is the pre-computed receiver type from the caller.
+  def compile_array_setop_expr(nid, recv, op, lt)
+    if !is_typed_array_type(lt)
+      if is_array_type(lt) == 1
+        $stderr.puts "warning: Array set-op '" + op + "' is not supported on " + lt + " (falling through)"
+      end
+      return ""
+    end
+    args_id = @nd_arguments[nid]
+    if args_id < 0
+      return ""
+    end
+    aargs = get_args(args_id)
+    if aargs.length == 0
+      return ""
+    end
+    # Strict equality (not is_array_type): nullable variants and
+    # cross-type RHS aren't handled by the helpers, and the fall-through
+    # would emit a C arithmetic/bitwise op on array pointers.
+    rt = infer_type(aargs[0])
+    if rt != lt
+      $stderr.puts "warning: Array set-op '" + op + "' RHS type " + rt + " does not match LHS " + lt + " (falling through)"
+      return ""
+    end
+    mark_array_runtime_needs(lt)
+    "sp_" + array_c_prefix(lt) + "_" + op + "(" + compile_expr_gc_rooted(recv) + ", " + compile_arg0(nid) + ")"
   end
 
   # Set the right @needs_<runtime> flag for the given array type.
@@ -16869,6 +16903,10 @@ class Compiler
         @needs_rb_value = 1
         return "sp_poly_sub(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(args_id)[0]) + ")"
       end
+      r = compile_array_setop_expr(nid, recv, "difference", lt)
+      if r != ""
+        return r
+      end
       return "(" + compile_expr(recv) + " - " + compile_arg0(nid) + ")"
     end
     if mname == "*"
@@ -17167,16 +17205,26 @@ class Compiler
       return "(" + compile_expr(recv) + " >> " + compile_arg0(nid) + ")"
     end
     if mname == "&"
-      if infer_type(recv) == "poly"
+      lt = infer_type(recv)
+      if lt == "poly"
         @needs_rb_value = 1
         return "sp_poly_band(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
+      r = compile_array_setop_expr(nid, recv, "intersect", lt)
+      if r != ""
+        return r
       end
       return "(" + compile_expr(recv) + " & " + compile_arg0(nid) + ")"
     end
     if mname == "|"
-      if infer_type(recv) == "poly"
+      lt = infer_type(recv)
+      if lt == "poly"
         @needs_rb_value = 1
         return "sp_poly_bor(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
+      end
+      r = compile_array_setop_expr(nid, recv, "union", lt)
+      if r != ""
+        return r
       end
       return "(" + compile_expr(recv) + " | " + compile_arg0(nid) + ")"
     end
@@ -18757,51 +18805,14 @@ class Compiler
       if mname == "count"
         return "sp_IntArray_length(" + rc + ")"
       end
-      # intersection: supported for int/sym/str/float arrays.
-      # poly_array and ptr_array fall through (element equality not available at codegen level).
-      # Only the first argument is compiled; multi-argument form (Ruby 2.7+) is not supported.
       if mname == "intersection"
-        arg = compile_arg0(nid)
-        tmp = new_temp
-        itmp = new_temp
-        emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
-        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_IntArray_length(" + rc + "); " + itmp + "++) {")
-        emit("    mrb_int _v = sp_IntArray_get(" + rc + ", " + itmp + ");")
-        emit("    if (sp_IntArray_include(" + arg + ", _v) && !sp_IntArray_include(" + tmp + ", _v)) sp_IntArray_push(" + tmp + ", _v);")
-        emit("  }")
-        return tmp
+        return "sp_IntArray_intersect(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      # union: dedup-merge self followed by other. Same single-argument
-      # restriction as intersection. Both inputs are int_array/sym_array
-      # backed by sp_IntArray, so a single helper covers them.
       if mname == "union"
-        arg = compile_arg0(nid)
-        tmp = new_temp
-        itmp = new_temp
-        jtmp = new_temp
-        emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
-        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_IntArray_length(" + rc + "); " + itmp + "++) {")
-        emit("    mrb_int _v = sp_IntArray_get(" + rc + ", " + itmp + ");")
-        emit("    if (!sp_IntArray_include(" + tmp + ", _v)) sp_IntArray_push(" + tmp + ", _v);")
-        emit("  }")
-        emit("  for (mrb_int " + jtmp + " = 0; " + jtmp + " < sp_IntArray_length(" + arg + "); " + jtmp + "++) {")
-        emit("    mrb_int _v = sp_IntArray_get(" + arg + ", " + jtmp + ");")
-        emit("    if (!sp_IntArray_include(" + tmp + ", _v)) sp_IntArray_push(" + tmp + ", _v);")
-        emit("  }")
-        return tmp
+        return "sp_IntArray_union(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      # difference: elements of self NOT in other (deduplicated).
-      # Inverse of intersection.
       if mname == "difference"
-        arg = compile_arg0(nid)
-        tmp = new_temp
-        itmp = new_temp
-        emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
-        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_IntArray_length(" + rc + "); " + itmp + "++) {")
-        emit("    mrb_int _v = sp_IntArray_get(" + rc + ", " + itmp + ");")
-        emit("    if (!sp_IntArray_include(" + arg + ", _v) && !sp_IntArray_include(" + tmp + ", _v)) sp_IntArray_push(" + tmp + ", _v);")
-        emit("  }")
-        return tmp
+        return "sp_IntArray_difference(" + rc + ", " + compile_arg0(nid) + ")"
       end
       if mname == "min_by"
         if @nd_block[nid] >= 0
@@ -18936,59 +18947,13 @@ class Compiler
         return "sp_FloatArray_get(" + rc + ", -1)"
       end
       if mname == "intersection"
-        arg = compile_arg0(nid)
-        tmp = new_temp
-        itmp = new_temp
-        jtmp = new_temp
-        ktmp = new_temp
-        emit("  sp_FloatArray *" + tmp + " = sp_FloatArray_new();")
-        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_FloatArray_length(" + rc + "); " + itmp + "++) {")
-        emit("    mrb_float _v = sp_FloatArray_get(" + rc + ", " + itmp + ");")
-        # == matches Ruby Float#eql? semantics (exact bitwise equality; NaN != NaN in both C and Ruby)
-        emit("    mrb_int _in_b = 0; for (mrb_int " + jtmp + " = 0; " + jtmp + " < sp_FloatArray_length(" + arg + "); " + jtmp + "++) { if (sp_FloatArray_get(" + arg + ", " + jtmp + ") == _v) { _in_b = 1; break; } }")
-        emit("    mrb_int _in_r = 0; for (mrb_int " + ktmp + " = 0; " + ktmp + " < sp_FloatArray_length(" + tmp + "); " + ktmp + "++) { if (sp_FloatArray_get(" + tmp + ", " + ktmp + ") == _v) { _in_r = 1; break; } }")
-        emit("    if (_in_b && !_in_r) sp_FloatArray_push(" + tmp + ", _v);")
-        emit("  }")
-        return tmp
+        return "sp_FloatArray_intersect(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      # union: dedup-merge for floats. No sp_FloatArray_include helper —
-      # inline membership matches the intersection arm's NaN handling.
       if mname == "union"
-        arg = compile_arg0(nid)
-        tmp = new_temp
-        itmp = new_temp
-        jtmp = new_temp
-        ktmp = new_temp
-        ltmp = new_temp
-        emit("  sp_FloatArray *" + tmp + " = sp_FloatArray_new();")
-        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_FloatArray_length(" + rc + "); " + itmp + "++) {")
-        emit("    mrb_float _v = sp_FloatArray_get(" + rc + ", " + itmp + ");")
-        emit("    mrb_int _in_r = 0; for (mrb_int " + jtmp + " = 0; " + jtmp + " < sp_FloatArray_length(" + tmp + "); " + jtmp + "++) { if (sp_FloatArray_get(" + tmp + ", " + jtmp + ") == _v) { _in_r = 1; break; } }")
-        emit("    if (!_in_r) sp_FloatArray_push(" + tmp + ", _v);")
-        emit("  }")
-        emit("  for (mrb_int " + ktmp + " = 0; " + ktmp + " < sp_FloatArray_length(" + arg + "); " + ktmp + "++) {")
-        emit("    mrb_float _v = sp_FloatArray_get(" + arg + ", " + ktmp + ");")
-        emit("    mrb_int _in_r2 = 0; for (mrb_int " + ltmp + " = 0; " + ltmp + " < sp_FloatArray_length(" + tmp + "); " + ltmp + "++) { if (sp_FloatArray_get(" + tmp + ", " + ltmp + ") == _v) { _in_r2 = 1; break; } }")
-        emit("    if (!_in_r2) sp_FloatArray_push(" + tmp + ", _v);")
-        emit("  }")
-        return tmp
+        return "sp_FloatArray_union(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      # difference: float elements of self not in other, dedup. Inline
-      # membership for the NaN-aware == semantics; mirror intersection.
       if mname == "difference"
-        arg = compile_arg0(nid)
-        tmp = new_temp
-        itmp = new_temp
-        jtmp = new_temp
-        ktmp = new_temp
-        emit("  sp_FloatArray *" + tmp + " = sp_FloatArray_new();")
-        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_FloatArray_length(" + rc + "); " + itmp + "++) {")
-        emit("    mrb_float _v = sp_FloatArray_get(" + rc + ", " + itmp + ");")
-        emit("    mrb_int _in_b = 0; for (mrb_int " + jtmp + " = 0; " + jtmp + " < sp_FloatArray_length(" + arg + "); " + jtmp + "++) { if (sp_FloatArray_get(" + arg + ", " + jtmp + ") == _v) { _in_b = 1; break; } }")
-        emit("    mrb_int _in_r = 0; for (mrb_int " + ktmp + " = 0; " + ktmp + " < sp_FloatArray_length(" + tmp + "); " + ktmp + "++) { if (sp_FloatArray_get(" + tmp + ", " + ktmp + ") == _v) { _in_r = 1; break; } }")
-        emit("    if (!_in_b && !_in_r) sp_FloatArray_push(" + tmp + ", _v);")
-        emit("  }")
-        return tmp
+        return "sp_FloatArray_difference(" + rc + ", " + compile_arg0(nid) + ")"
       end
     end
     if is_ptr_array_type(recv_type) == 1
@@ -19121,46 +19086,13 @@ class Compiler
         return "sp_StrArray_length(" + rc + ")"
       end
       if mname == "intersection"
-        arg = compile_arg0(nid)
-        tmp = new_temp
-        itmp = new_temp
-        emit("  sp_StrArray *" + tmp + " = sp_StrArray_new();")
-        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_StrArray_length(" + rc + "); " + itmp + "++) {")
-        emit("    const char *_v = sp_StrArray_get(" + rc + ", " + itmp + ");")
-        emit("    if (sp_StrArray_include(" + arg + ", _v) && !sp_StrArray_include(" + tmp + ", _v)) sp_StrArray_push(" + tmp + ", _v);")
-        emit("  }")
-        return tmp
+        return "sp_StrArray_intersect(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      # union: dedup-merge for str_array. Reuses sp_StrArray_include
-      # (strcmp-based) for membership.
       if mname == "union"
-        arg = compile_arg0(nid)
-        tmp = new_temp
-        itmp = new_temp
-        jtmp = new_temp
-        emit("  sp_StrArray *" + tmp + " = sp_StrArray_new();")
-        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_StrArray_length(" + rc + "); " + itmp + "++) {")
-        emit("    const char *_v = sp_StrArray_get(" + rc + ", " + itmp + ");")
-        emit("    if (!sp_StrArray_include(" + tmp + ", _v)) sp_StrArray_push(" + tmp + ", _v);")
-        emit("  }")
-        emit("  for (mrb_int " + jtmp + " = 0; " + jtmp + " < sp_StrArray_length(" + arg + "); " + jtmp + "++) {")
-        emit("    const char *_v = sp_StrArray_get(" + arg + ", " + jtmp + ");")
-        emit("    if (!sp_StrArray_include(" + tmp + ", _v)) sp_StrArray_push(" + tmp + ", _v);")
-        emit("  }")
-        return tmp
+        return "sp_StrArray_union(" + rc + ", " + compile_arg0(nid) + ")"
       end
-      # difference: str elements of self not in other, dedup. Mirrors
-      # int_array's branch with strcmp-backed membership.
       if mname == "difference"
-        arg = compile_arg0(nid)
-        tmp = new_temp
-        itmp = new_temp
-        emit("  sp_StrArray *" + tmp + " = sp_StrArray_new();")
-        emit("  for (mrb_int " + itmp + " = 0; " + itmp + " < sp_StrArray_length(" + rc + "); " + itmp + "++) {")
-        emit("    const char *_v = sp_StrArray_get(" + rc + ", " + itmp + ");")
-        emit("    if (!sp_StrArray_include(" + arg + ", _v) && !sp_StrArray_include(" + tmp + ", _v)) sp_StrArray_push(" + tmp + ", _v);")
-        emit("  }")
-        return tmp
+        return "sp_StrArray_difference(" + rc + ", " + compile_arg0(nid) + ")"
       end
     end
 
