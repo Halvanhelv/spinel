@@ -26983,6 +26983,11 @@ class Compiler
         @needs_int_array = 1
         emit("  sp_IntArray *" + tmp_arrn + " = sp_IntArray_new();")
       end
+      # Root the accumulator so a GC pass triggered by an
+      # allocation inside the block (e.g. string interpolation)
+      # doesn't free the half-built array. Same reasoning as the
+      # int_array / str_array branches further down.
+      emit("  SP_GC_ROOT(" + tmp_arrn + ");")
       emit("  for (mrb_int " + tmp_in + " = 0; " + tmp_in + " < " + ncount + "; " + tmp_in + "++) {")
       if bpn != ""
         emit("    lv_" + bpn + " = " + tmp_in + ";")
@@ -27064,6 +27069,11 @@ class Compiler
       else
         emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
       end
+      # Root the accumulator so a GC pass triggered by an
+      # allocation inside the block (e.g. string interpolation)
+      # doesn't free the half-built array. Same reasoning as the
+      # int_array / str_array branches further down.
+      emit("  SP_GC_ROOT(" + tmp_arr + ");")
       # Walk through ParenthesesNode wrappers to find a literal
       # RangeNode (so we can read its exclude_end flag and its raw
       # endpoint expressions). If the receiver is a variable holding
