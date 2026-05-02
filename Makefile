@@ -201,19 +201,20 @@ test: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	  ./spinel_codegen$(EXE) /tmp/_sp_t.ast /tmp/_sp_t.c 2>/dev/null && \
 	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_t.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_t_bin$(EXE) 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
-	    expected=$$($(TIMEOUT10) $(REF_RUBY) "$$f" 2>/dev/null); \
-	    if [ $$? -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
-	      expected=$$($(TIMEOUT10) ruby "$$f" 2>/dev/null); \
+	    $(TIMEOUT10) $(REF_RUBY) "$$f" >/tmp/_sp_t_exp 2>/dev/null; \
+	    ruby_rc=$$?; \
+	    if [ $$ruby_rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
+	      $(TIMEOUT10) ruby "$$f" >/tmp/_sp_t_exp 2>/dev/null; \
 	    fi; \
-	    actual=$$($(TIMEOUT10) /tmp/_sp_t_bin$(EXE) 2>/dev/null); \
-	    expected=$$(printf "%s" "$$expected" | tr -d '\r'); \
-	    actual=$$(printf "%s" "$$actual" | tr -d '\r'); \
-	    if [ "$$expected" = "$$actual" ]; then \
+	    $(TIMEOUT10) /tmp/_sp_t_bin$(EXE) >/tmp/_sp_t_act 2>/dev/null; \
+	    LC_ALL=C sed 's/\r$$//' /tmp/_sp_t_exp >/tmp/_sp_t_exp.n; \
+	    LC_ALL=C sed 's/\r$$//' /tmp/_sp_t_act >/tmp/_sp_t_act.n; \
+	    if cmp -s /tmp/_sp_t_exp.n /tmp/_sp_t_act.n; then \
 	      pass=$$((pass+1)); \
 	    else \
 	      if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
 	      echo "FAIL: $$bn"; \
-	      printf '%s\n%s\n%s\n%s\n' "--- expected ---" "$$expected" "--- actual ---" "$$actual"; \
+	      diff -u /tmp/_sp_t_exp.n /tmp/_sp_t_act.n 2>&1 | head -40; \
 	      fail=$$((fail+1)); \
 	    fi; \
 	  else \
@@ -222,7 +223,7 @@ test: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	  fi; \
 	done; \
 	if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
-	rm -f /tmp/_sp_t.ast /tmp/_sp_t.c /tmp/_sp_t_bin$(EXE); \
+	rm -f /tmp/_sp_t.ast /tmp/_sp_t.c /tmp/_sp_t_bin$(EXE) /tmp/_sp_t_exp /tmp/_sp_t_act /tmp/_sp_t_exp.n /tmp/_sp_t_act.n; \
 	echo "Tests: $$pass pass, $$fail fail, $$err error"; \
 	if [ $$fail -ne 0 ] || [ $$err -ne 0 ]; then exit 1; fi
 
@@ -239,25 +240,25 @@ bench: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	  $(TIMEOUT10) ./spinel_codegen$(EXE) /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
 	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin$(EXE) 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
-	    expected=$$($(TIMEOUT60) $(REF_RUBY) "$$f" 2>/dev/null); \
+	    $(TIMEOUT60) $(REF_RUBY) "$$f" >/tmp/_sp_b_exp 2>/dev/null; \
 	    ruby_rc=$$?; \
 	    if [ $$ruby_rc -ne 0 ] && [ "$(REF_RUBY)" != "ruby" ]; then \
-	      expected=$$($(TIMEOUT60) ruby "$$f" 2>/dev/null); \
+	      $(TIMEOUT60) ruby "$$f" >/tmp/_sp_b_exp 2>/dev/null; \
 	      ruby_rc=$$?; \
 	    fi; \
 	    if [ $$ruby_rc -eq 124 ]; then \
 	      if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
 	      echo "SKIP: $$bn (ruby timeout)"; skip=$$((skip+1)); \
 	    else \
-	      actual=$$($(TIMEOUT60) /tmp/_sp_b_bin$(EXE) 2>/dev/null); \
-	      expected=$$(printf "%s" "$$expected" | tr -d '\r'); \
-	      actual=$$(printf "%s" "$$actual" | tr -d '\r'); \
-	      if [ "$$expected" = "$$actual" ]; then \
+	      $(TIMEOUT60) /tmp/_sp_b_bin$(EXE) >/tmp/_sp_b_act 2>/dev/null; \
+	      LC_ALL=C sed 's/\r$$//' /tmp/_sp_b_exp >/tmp/_sp_b_exp.n; \
+	      LC_ALL=C sed 's/\r$$//' /tmp/_sp_b_act >/tmp/_sp_b_act.n; \
+	      if cmp -s /tmp/_sp_b_exp.n /tmp/_sp_b_act.n; then \
 	        pass=$$((pass+1)); \
 	      else \
 	        if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
 	        echo "FAIL: $$bn"; \
-	        printf '%s\n%s\n%s\n%s\n' "--- expected ---" "$$expected" "--- actual ---" "$$actual"; \
+	        diff -u /tmp/_sp_b_exp.n /tmp/_sp_b_act.n 2>&1 | head -40; \
 	        fail=$$((fail+1)); \
 	      fi; \
 	    fi; \
@@ -267,7 +268,7 @@ bench: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	  fi; \
 	done; \
 	if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
-	rm -f /tmp/_sp_b.ast /tmp/_sp_b.c /tmp/_sp_b_bin$(EXE); \
+	rm -f /tmp/_sp_b.ast /tmp/_sp_b.c /tmp/_sp_b_bin$(EXE) /tmp/_sp_b_exp /tmp/_sp_b_act /tmp/_sp_b_exp.n /tmp/_sp_b_act.n; \
 	echo "Benchmarks: $$pass pass, $$fail fail, $$err error, $$skip skip"; \
 	if [ $$fail -ne 0 ] || [ $$err -ne 0 ]; then exit 1; fi
 
