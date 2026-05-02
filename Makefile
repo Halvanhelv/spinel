@@ -188,8 +188,7 @@ bootstrap: spinel_codegen$(EXE)
 
 # ---- Test ----
 
-test: spinel_parse$(EXE) $(SP_RT_LIB)
-	@if [ ! -f spinel_codegen$(EXE) ]; then echo "Run 'make' or 'make spinel_codegen' first"; exit 1; fi
+test: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi
 	@pass=0; fail=0; err=0; \
 	for f in test/*.rb; do \
