@@ -6888,6 +6888,14 @@ class Compiler
                   while kk < arg_ids.length
                     at = infer_type(arg_ids[kk])
                     if kk < ptypes.length
+                      # Unify against the existing param type rather
+                      # than only widening from "int". The previous
+                      # rule let the FIRST non-int call site freeze
+                      # the param type; subsequent disagreeing calls
+                      # (e.g. addr arg seen as Range from one site
+                      # and as Integer from another) compiled to a
+                      # signature mismatch. unify_call_types collapses
+                      # incompatible types to "poly".
                       ptypes[kk] = unify_call_types(ptypes[kk], at, arg_ids[kk])
                     end
                     kk = kk + 1
@@ -10008,6 +10016,13 @@ class Compiler
               while kk < arg_ids.length
                 at = infer_type(arg_ids[kk])
                 if kk < ptypes.length
+                  # Same unify-instead-of-only-widen-from-int change as
+                  # the obj-recv path in scan_new_calls. A no-recv self
+                  # call inside the same class is the path that, e.g.,
+                  # `def boot; add_mappings(0x..0x, ...); end` inside
+                  # CPU#boot lands on, and disagreeing arg types from
+                  # different self-calls need to widen to poly rather
+                  # than freezing on the first non-int call site.
                   ptypes[kk] = unify_call_types(ptypes[kk], at, arg_ids[kk])
                 end
                 kk = kk + 1
