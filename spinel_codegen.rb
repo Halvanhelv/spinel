@@ -6243,6 +6243,15 @@ class Compiler
             @cls_ivar_types[ci] = types.join(";")
           elsif old != new_type && old != "poly"
             if is_array_type(old) == 1 && is_array_type(new_type) == 1
+              # Don't widen a typed `<obj>_ptr_array` slot back to
+              # poly when the disagreement is just `int_array`. That
+              # disagreement comes from the `[nil] * N` empty default
+              # — the writer-scan `[]=` / `<<` widening is more
+              # specific and should win.
+              if is_ptr_array_type(old) == 1 && new_type == "int_array"
+                k = k + 1
+                next
+              end
               types[k] = "poly_array"
               @needs_rb_value = 1
               @cls_ivar_types[ci] = types.join(";")
@@ -8554,8 +8563,11 @@ class Compiler
       return "poly_array"
     end
     if is_obj_type(elem_acc[0]) == 1
-      @needs_rb_value = 1
-      return "poly_array"
+      # Homogeneous obj array — use a typed `<obj>_ptr_array` so reads
+      # return a typed pointer (no sp_RbVal unbox needed at the call
+      # site). Falls back to poly_array via normal widening when a
+      # later mismatched-type write happens.
+      return base_type(elem_acc[0]) + "_ptr_array"
     end
     ""
   end
@@ -8986,6 +8998,39 @@ class Compiler
             if ai.length > 0
               et = infer_type(ai[0])
               promoted = empty_array_promotion_for([et])
+              if promoted != "" && promoted != cur_t
+                replace_ivar_type(@current_class_idx, iname, promoted)
+                if promoted == "str_array"
+                  @needs_str_array = 1
+                elsif promoted == "float_array"
+                  @needs_float_array = 1
+                elsif promoted == "sym_array"
+                  @needs_int_array = 1
+                elsif promoted == "poly_array"
+                  @needs_rb_value = 1
+                  @needs_gc = 1
+                end
+              end
+            end
+          end
+        end
+      end
+      # `@arr[i] = v` against an ivar typed `int_array` (the
+      # `[nil] * N` empty default) should widen to match the value
+      # type the same way `<<` / `push` does. Without this, optcarrot's
+      # `@fetch[addr] = method(:peek_X)` writes a Method into an
+      # int_array slot — the read side then can't recover and `[].call`
+      # dispatches against int.
+      if mname == "[]=" && @current_class_idx >= 0 && recv >= 0 && @nd_type[recv] == "InstanceVariableReadNode"
+        iname = @nd_name[recv]
+        cur_t = cls_ivar_type(@current_class_idx, iname)
+        if cur_t == "int_array"
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            ai = get_args(args_id)
+            if ai.length >= 2
+              vt = infer_type(ai[ai.length - 1])
+              promoted = empty_array_promotion_for([vt])
               if promoted != "" && promoted != cur_t
                 replace_ivar_type(@current_class_idx, iname, promoted)
                 if promoted == "str_array"
