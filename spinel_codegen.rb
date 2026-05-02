@@ -5824,8 +5824,54 @@ class Compiler
         add_ivar(ci, iname, "int")
       end
     end
+    # Multi-write to ivars: `@a, @b = expr1, expr2` (or `[expr1, expr2]`).
+    # Without this branch, ivars assigned only via destructuring never get
+    # registered and the struct comes out missing them.
+    if @nd_type[nid] == "MultiWriteNode"
+      targets = parse_id_list(@nd_targets[nid])
+      val_id = @nd_expression[nid]
+      ti = 0
+      while ti < targets.length
+        tid = targets[ti]
+        if @nd_type[tid] == "InstanceVariableTargetNode"
+          iname = @nd_name[tid]
+          vtype = scan_ivars_multi_target_type(val_id, ti)
+          if ivar_exists(ci, iname) == 0
+            add_ivar(ci, iname, vtype)
+          else
+            if vtype != "int" && vtype != "nil"
+              update_ivar_type(ci, iname, vtype)
+            end
+          end
+        end
+        ti = ti + 1
+      end
+    end
     # Recurse into children
     scan_ivars_children(ci, nid)
+  end
+
+  # i-th element type when scanning ivar destructuring writes. Mirrors
+  # multi_write_target_type but also handles array literals on the RHS
+  # (ivar collection runs before tuple inference, so `@a, @b = 1, 2`
+  # gets its types from positional ArrayNode elements rather than a
+  # tuple return).
+  def scan_ivars_multi_target_type(val_id, ti)
+    if val_id < 0
+      return "int"
+    end
+    if @nd_type[val_id] == "ArrayNode"
+      elems = parse_id_list(@nd_elements[val_id])
+      if ti < elems.length
+        return infer_ivar_init_type(elems[ti])
+      end
+      return "int"
+    end
+    rt = infer_type(val_id)
+    if is_tuple_type(rt) == 1
+      return tuple_elem_type_at(rt, ti)
+    end
+    "int"
   end
 
   def scan_ivars_children(ci, nid)
