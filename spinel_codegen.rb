@@ -27315,6 +27315,73 @@ class Compiler
       pop_scope
       return tmp_arr
     end
+    # poly_array recv #map: iterate sp_PolyArray_get (sp_RbVal
+    # elements) and build a fresh container based on the block's
+    # return type. Without this branch the call falls through to
+    # `"0"`, the result is assigned as `lv_out = 0`, and any
+    # `.length` / `[i]` on the typed accumulator dereferences NULL.
+    if rt == "poly_array"
+      @needs_gc = 1
+      block_ret_p = "int"
+      blk_p = @nd_block[nid]
+      if blk_p >= 0
+        body_p = @nd_body[blk_p]
+        if body_p >= 0
+          stmts_p = get_stmts(body_p)
+          if stmts_p.length > 0
+            block_ret_p = infer_type(stmts_p.last)
+          end
+        end
+      end
+      push_scope
+      if block_ret_p == "string"
+        @needs_str_array = 1
+        emit("  sp_StrArray *" + tmp_arr + " = sp_StrArray_new();")
+      elsif block_ret_p == "float"
+        @needs_float_array = 1
+        emit("  sp_FloatArray *" + tmp_arr + " = sp_FloatArray_new();")
+      elsif block_ret_p == "int" || block_ret_p == "bool"
+        @needs_int_array = 1
+        emit("  sp_IntArray *" + tmp_arr + " = sp_IntArray_new();")
+      else
+        # Heterogeneous / pointer-typed block return: keep the
+        # poly shape so any element type round-trips through
+        # sp_RbVal.
+        emit("  sp_PolyArray *" + tmp_arr + " = sp_PolyArray_new();")
+      end
+      emit("  SP_GC_ROOT(" + tmp_arr + ");")
+      emit("  for (mrb_int " + tmp_i + " = 0; " + tmp_i + " < sp_PolyArray_length(" + rc + "); " + tmp_i + "++) {")
+      declare_var(bp1, "poly")
+      emit("    lv_" + bp1 + " = sp_PolyArray_get(" + rc + ", " + tmp_i + ");")
+      @indent = @indent + 1
+      if blk_p >= 0
+        body_p2 = @nd_body[blk_p]
+        if body_p2 >= 0
+          stmts_p2 = get_stmts(body_p2)
+          k_p = 0
+          while k_p < stmts_p2.length - 1
+            compile_stmt(stmts_p2[k_p])
+            k_p = k_p + 1
+          end
+          if stmts_p2.length > 0
+            lastv_p = compile_expr(stmts_p2.last)
+            if block_ret_p == "string"
+              emit("  sp_StrArray_push(" + tmp_arr + ", " + lastv_p + ");")
+            elsif block_ret_p == "float"
+              emit("  sp_FloatArray_push(" + tmp_arr + ", " + lastv_p + ");")
+            elsif block_ret_p == "int" || block_ret_p == "bool"
+              emit("  sp_IntArray_push(" + tmp_arr + ", " + lastv_p + ");")
+            else
+              emit("  sp_PolyArray_push(" + tmp_arr + ", " + box_value_to_poly(block_ret_p, lastv_p) + ");")
+            end
+          end
+        end
+      end
+      @indent = @indent - 1
+      emit("  }")
+      pop_scope
+      return tmp_arr
+    end
     "0"
   end
 
