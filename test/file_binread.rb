@@ -4,10 +4,15 @@
 # helper that reads with the actual file size.
 #
 # `File.binread(path)` standalone is aliased to File.read.
+#
+# Uses a cwd-relative path so MSYS2 and the native-Windows-built
+# spinel binary resolve to the same file (the harness runs each test
+# from the project root). `/tmp/...` would land in different places
+# on the two sides — see test/fileio.rb for the same workaround.
 
 # Set up a binary file with embedded NULs via a shell command.
 # spinel's File.write uses fputs and would stop at the first NUL.
-path = "/tmp/spinel_binread_test.bin"
+path = "spinel_binread_test.bin"
 `printf 'AB\\000CD\\000EF' > #{path}`
 
 # Pattern-matched: emits sp_file_binread_bytes(path) which reads
