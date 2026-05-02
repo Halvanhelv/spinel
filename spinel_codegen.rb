@@ -17762,6 +17762,17 @@ class Compiler
     if mname == "itself"
       return rc
     end
+    # Integer#[idx] — bit indexing. `n[k]` returns bit k of n.
+    if mname == "[]"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length > 0
+          idx = compile_expr(aargs[0])
+          return "(((" + rc + ") >> (" + idx + ")) & 1)"
+        end
+      end
+    end
     ""
   end
 
