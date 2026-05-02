@@ -20940,7 +20940,17 @@ class Compiler
       end
       itmp = new_temp
       emit("  for (mrb_int " + itmp + " = " + start_expr + "; " + itmp + " < " + end_expr + "; " + itmp + "++)")
-      emit("    sp_" + pfx + "_set(" + rc + ", " + itmp + ", " + val + ");")
+      if recv_type == "poly_array"
+        v_id = -1
+        if args_id_fill >= 0
+          v_id = get_args(args_id_fill)[0]
+        end
+        vt = v_id >= 0 ? infer_type(v_id) : "int"
+        vbox = vt == "poly" ? val : box_value_to_poly(vt, val)
+        emit("    sp_PolyArray_set(" + rc + ", " + itmp + ", " + vbox + ");")
+      else
+        emit("    sp_" + pfx + "_set(" + rc + ", " + itmp + ", " + val + ");")
+      end
       return rc
     end
     if mname == "rotate"
