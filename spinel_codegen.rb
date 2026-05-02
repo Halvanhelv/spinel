@@ -21418,8 +21418,35 @@ class Compiler
     emit("  sp_IntArray *" + tmp + " = sp_IntArray_new();")
     k = 0
     while k < elems.length
-      ev = compile_expr(elems[k])
-      et = infer_type(elems[k])
+      eid = elems[k]
+      # SplatNode in an Array literal — `[*range]` or `[*arr]` —
+      # expands the inner expression's elements into the array.
+      # Without this branch, compile_expr lowered the splat to a
+      # default value (e.g., the lower bound of a Range), so
+      # `[*0..4096]` ended up as just `[0]`.
+      if @nd_type[eid] == "SplatNode"
+        inner = @nd_expression[eid]
+        it = infer_type(inner)
+        if @nd_type[inner] == "RangeNode"
+          lo = compile_expr(@nd_left[inner])
+          hi = compile_expr(@nd_right[inner])
+          cmp = range_excl_end(inner) == 1 ? "<" : "<="
+          ii = new_temp
+          emit("  for (mrb_int " + ii + " = " + lo + "; " + ii + " " + cmp + " " + hi + "; " + ii + "++) {")
+          emit("    sp_IntArray_push(" + tmp + ", " + ii + ");")
+          emit("  }")
+        elsif it == "int_array"
+          src = compile_expr(inner)
+          ii = new_temp
+          emit("  for (mrb_int " + ii + " = 0; " + ii + " < sp_IntArray_length(" + src + "); " + ii + "++) {")
+          emit("    sp_IntArray_push(" + tmp + ", sp_IntArray_get(" + src + ", " + ii + "));")
+          emit("  }")
+        end
+        k = k + 1
+        next
+      end
+      ev = compile_expr(eid)
+      et = infer_type(eid)
       # Unbox poly values when pushing into a (concrete) IntArray.
       # An ArrayNode literal whose elements are poly (e.g.
       # `[addr]` where addr's recorded type is sp_RbVal) needs the
