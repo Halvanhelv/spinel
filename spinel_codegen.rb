@@ -18792,7 +18792,6 @@ class Compiler
     if mname == "odd?"
       return "((" + rc + ") % 2 != 0)"
     end
-<<<<<<< HEAD
     if mname == "allbits?"
       mask = compile_arg0(nid)
       return "(((" + rc + ") & (" + mask + ")) == (" + mask + "))"
