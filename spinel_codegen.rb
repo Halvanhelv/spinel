@@ -3443,6 +3443,22 @@ class Compiler
         if rt == "lambda"
           return "lambda"
         end
+        # Issue #219: user-defined `def [](k)` on an obj recv. Walk
+        # the class's method table the same way infer_recv_method_type
+        # does for arbitrary mname — without this, the fallback at the
+        # tail of this branch returns "int" and downstream `.to_i` /
+        # `.length` etc. dispatch on the wrong recv type.
+        if is_obj_type(rt) == 1
+          bt = base_type(rt)
+          cname = bt[4, bt.length - 4]
+          ci = find_class_idx(cname)
+          if ci >= 0
+            mr = cls_method_return(ci, "[]")
+            if mr != "" && mr != "int"
+              return mr
+            end
+          end
+        end
       end
       return "int"
     end
