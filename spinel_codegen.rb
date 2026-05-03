@@ -21984,6 +21984,69 @@ class Compiler
       end
       return
     end
+    # Issue #236: empty `{}` / `[]` literal RHS — `compile_expr`
+    # returns the default `sp_StrIntHash_new()` / `sp_IntArray_new()`,
+    # but slots may have been promoted to a typed container by their
+    # subsequent writes (e.g. `@h["k"] = "v"` lifts the slot to
+    # str_str_hash). If every chain participant agrees on the same
+    # promoted concrete container type, emit the slot-typed
+    # constructor as the temp so each store is type-correct AND the
+    # Ruby semantic of one shared object is preserved across the
+    # chain. Disagreeing-type chains fall through to the general
+    # case below; the resulting C will still warn about pointer
+    # type mismatch but at least one slot will be correct.
+    if is_empty_hash_literal(rhs_id) == 1 || is_empty_array_literal(rhs_id) == 1
+      consensus_t = ""
+      consensus_ok = 1
+      pi = 0
+      while pi < ivars.length
+        pt = ""
+        if @current_class_idx >= 0
+          pt = cls_ivar_type(@current_class_idx, ivars[pi])
+        end
+        if pi == 0
+          consensus_t = pt
+        elsif pt != consensus_t
+          consensus_ok = 0
+        end
+        pi = pi + 1
+      end
+      if consensus_ok == 1 && consensus_t != "" && consensus_t != "str_int_hash" && consensus_t != "int_array" && consensus_t != "poly"
+        ctor236 = ""
+        if is_empty_hash_literal(rhs_id) == 1
+          if consensus_t == "str_str_hash"
+            @needs_str_str_hash = 1
+            ctor236 = "sp_StrStrHash_new()"
+          elsif consensus_t == "int_str_hash"
+            @needs_int_str_hash = 1
+            ctor236 = "sp_IntStrHash_new()"
+          elsif consensus_t == "sym_int_hash"
+            @needs_sym_int_hash = 1
+            ctor236 = "sp_SymIntHash_new()"
+          elsif consensus_t == "sym_str_hash"
+            @needs_sym_str_hash = 1
+            ctor236 = "sp_SymStrHash_new()"
+          elsif consensus_t == "str_poly_hash"
+            ctor236 = "sp_StrPolyHash_new()"
+          elsif consensus_t == "sym_poly_hash"
+            ctor236 = "sp_SymPolyHash_new()"
+          end
+        else
+          ctor236 = empty_array_new_for_type(consensus_t)
+        end
+        if ctor236 != ""
+          @needs_gc = 1
+          tmp236 = new_temp
+          emit("  " + c_type(consensus_t) + " " + tmp236 + " = " + ctor236 + ";")
+          ki236 = 0
+          while ki236 < ivars.length
+            emit("  " + self_arrow + sanitize_ivar(ivars[ki236]) + " = " + tmp236 + ";")
+            ki236 = ki236 + 1
+          end
+          return
+        end
+      end
+    end
     # General case: evaluate the rhs once into a typed temp, then
     # store into each slot. Side-effecting rhs (CallNode etc.) must
     # not be replicated.
