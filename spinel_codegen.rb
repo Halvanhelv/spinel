@@ -13113,7 +13113,23 @@ class Compiler
         j = 0
         while j < names.length
           if j < types.length
-            if ivar_is_gc_ptr(types[j]) == 1
+            # Skip ivars inherited from parent — emit_class_struct
+            # also skips them on the child, so the struct field type
+            # comes from the parent's recorded type, and re-emitting
+            # here under the child's type info can produce a wrong
+            # mark (e.g. parent says int_array, child has widened to
+            # poly, struct field is sp_RbVal). The parent walk below
+            # marks them via the parent's type.
+            skip_inherited = 0
+            if @cls_parents[i] != ""
+              parent_idx = find_class_idx(@cls_parents[i])
+              if parent_idx >= 0
+                if ivar_in_chain(parent_idx, names[j]) == 1
+                  skip_inherited = 1
+                end
+              end
+            end
+            if skip_inherited == 0 && ivar_is_gc_ptr(types[j]) == 1
               emit_gc_mark_ivar("self->" + sanitize_ivar(names[j]), types[j])
             end
           end
