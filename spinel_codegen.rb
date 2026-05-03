@@ -21673,6 +21673,21 @@ class Compiler
     end
     tmp = new_temp
     emit("  " + ret_ct + " " + tmp + " = " + ret_def + ";")
+    # `int[i]` (bit-extraction) on a poly receiver. When a CPU
+    # register / scratch ivar is widened to sp_RbVal but still
+    # carries an int value, `pc[8]` (the page-bit test in branch
+    # instructions etc.) must compile to `(pc >> 8) & 1`, not to
+    # the array dispatch in the SP_TAG_OBJ block below — which
+    # would silently leave the result at nil and miscount cycles.
+    if mname == "[]" && arg_compiled.length >= 1
+      a0_int = arg_compiled[0]
+      if arg_types.length > 0 && arg_types[0] == "poly"
+        a0_int = "(" + a0_int + ").v.i"
+      end
+      bit = "((" + recv_tmp + ".v.i >> (" + a0_int + ")) & 1)"
+      brhs = is_poly_ret == 1 ? "sp_box_int(" + bit + ")" : bit
+      emit("  if (" + recv_tmp + ".tag == SP_TAG_INT) " + tmp + " = " + brhs + ";")
+    end
     emit("  if (" + recv_tmp + ".tag == SP_TAG_OBJ) {")
     # User-class dispatch
     i = 0
