@@ -81,7 +81,7 @@ gen2.c == gen3.c   (bootstrap loop closed)
 
 ## Benchmarks
 
-290 tests pass. 53 benchmarks pass.
+290 tests pass. 52 benchmarks pass.
 Geometric mean: **~11.6x faster** than miniruby (Ruby 4.1.0dev) across
 the 28 benchmarks below. Baseline is the latest CRuby `miniruby` build
 (without bundled gems), which is considerably faster than the system
@@ -263,7 +263,7 @@ lib/sp_runtime.h      Runtime library header (1_089 lines)
 lib/sp_bigint.c       Arbitrary precision integers (5_394 lines)
 lib/regexp/           Built-in regexp engine (1_866 lines)
 test/                 290 feature tests
-benchmark/            53 benchmarks
+benchmark/            52 benchmarks
 Makefile              Build automation
 ```
 
@@ -293,7 +293,7 @@ by inlining the referenced file.
 make deps         # fetch libprism into vendor/prism (one-time)
 make              # build parser + regexp library + bootstrap compiler
 make test         # run 290 feature tests (requires bootstrap)
-make bench        # run 53 benchmarks (requires bootstrap)
+make bench        # run 52 benchmarks (requires bootstrap)
 make bootstrap    # rebuild compiler from source
 sudo make install # install to /usr/local (spinel in PATH)
 make clean        # remove build artifacts
