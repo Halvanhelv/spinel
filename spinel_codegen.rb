@@ -6454,6 +6454,40 @@ class Compiler
     if is_tuple_type(rt) == 1
       return tuple_elem_type_at(rt, ti)
     end
+    # `A, B = arr.map { block }` — each target is one element of the
+    # mapped array, so its type is the block's return type. Spinel
+    # collapses array-of-array to a placeholder (int_array) at the
+    # outer infer_type level, so we have to peek through the call
+    # node directly to recover the element type.
+    if @nd_type[val_id] == "CallNode" && @nd_name[val_id] == "map"
+      blk = @nd_block[val_id]
+      if blk >= 0
+        bbody = @nd_body[blk]
+        if bbody >= 0
+          bbs = get_stmts(bbody)
+          if bbs.length > 0
+            bret = infer_type(bbs.last)
+            if bret != "int" && bret != "" && bret != "void"
+              return bret
+            end
+          end
+        end
+      end
+    end
+    # Array-typed RHS (e.g. `A, B = [1, 6].map { ... }`): each target
+    # gets one element of the recv array. Use the recv's element type.
+    if rt == "int_array" || rt == "sym_array"
+      return "int"
+    end
+    if is_ptr_array_type(rt) == 1
+      return ptr_array_elem_type(rt)
+    end
+    if rt == "str_array"
+      return "string"
+    end
+    if rt == "float_array"
+      return "float"
+    end
     "int"
   end
 
