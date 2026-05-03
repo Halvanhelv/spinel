@@ -229,7 +229,8 @@ build/test-results/%.ok: test/%.rb spinel_parse$(EXE) $(SP_RT_LIB) spinel_codege
 	rm -f "$@.diff"; \
 	./spinel_parse$(EXE) "$<" "$$ast" 2>/dev/null && \
 	./spinel_codegen$(EXE) "$$ast" "$$cfile" 2>/dev/null && \
-	$(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib "$$cfile" $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+	$(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib -c "$$cfile" -o "$$cfile.o" 2>/dev/null && \
+	$(CC) $(CFLAGS) "$$cfile.o" $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
 	if [ $$? -eq 0 ]; then \
 	  if [ -f "$<.expected" ]; then \
 	    LC_ALL=C sed 's/\r$$//' "$<.expected" >"$$exp.n"; \
@@ -291,7 +292,8 @@ bench: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	  if [ "$$tty" = 1 ]; then printf '\r\033[K  [%d/%d] %s' "$$i" "$$total" "$$bn"; fi; \
 	  $(TIMEOUT10) ./spinel_parse$(EXE) "$$f" /tmp/_sp_b.ast 2>/dev/null && \
 	  $(TIMEOUT10) ./spinel_codegen$(EXE) /tmp/_sp_b.ast /tmp/_sp_b.c 2>/dev/null && \
-	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib /tmp/_sp_b.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin$(EXE) 2>/dev/null; \
+	  $(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib -c /tmp/_sp_b.c -o /tmp/_sp_b.c.o 2>/dev/null && \
+	  $(CC) $(CFLAGS) /tmp/_sp_b.c.o $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o /tmp/_sp_b_bin$(EXE) 2>/dev/null; \
 	  if [ $$? -eq 0 ]; then \
 	    $(TIMEOUT60) $(REF_RUBY) "$$f" >/tmp/_sp_b_exp 2>/dev/null; \
 	    ruby_rc=$$?; \
@@ -321,7 +323,7 @@ bench: spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
 	  fi; \
 	done; \
 	if [ "$$tty" = 1 ]; then printf '\r\033[K'; fi; \
-	rm -f /tmp/_sp_b.ast /tmp/_sp_b.c /tmp/_sp_b_bin$(EXE) /tmp/_sp_b_exp /tmp/_sp_b_act /tmp/_sp_b_exp.n /tmp/_sp_b_act.n; \
+	rm -f /tmp/_sp_b.ast /tmp/_sp_b.c /tmp/_sp_b.c.o /tmp/_sp_b_bin$(EXE) /tmp/_sp_b_exp /tmp/_sp_b_act /tmp/_sp_b_exp.n /tmp/_sp_b_act.n; \
 	echo "Benchmarks: $$pass pass, $$fail fail, $$err error, $$skip skip"; \
 	if [ $$fail -ne 0 ] || [ $$err -ne 0 ]; then exit 1; fi
 
