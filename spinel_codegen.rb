@@ -13803,6 +13803,23 @@ class Compiler
             if @cls_parents[ci] != ""
               pi = find_class_idx(@cls_parents[ci])
               if pi >= 0
+                # Look up the parent's init signature so we can cast
+                # each forwarded arg to the parent's declared type
+                # when it differs (parent's param-type inference may
+                # not see this child's type narrowing).
+                p_pnames = "".split(",")
+                p_ptypes = "".split(",")
+                p_init_idx = cls_find_method_direct(pi, "initialize")
+                if p_init_idx >= 0
+                  p_all_params = @cls_meth_params[pi].split("|")
+                  p_all_ptypes = @cls_meth_ptypes[pi].split("|")
+                  if p_init_idx < p_all_params.length
+                    p_pnames = p_all_params[p_init_idx].split(",")
+                  end
+                  if p_init_idx < p_all_ptypes.length
+                    p_ptypes = p_all_ptypes[p_init_idx].split(",")
+                  end
+                end
                 super_args = ""
                 if @nd_type[sid] == "ForwardingSuperNode"
                   # Forward the current init's params 1:1.
@@ -13811,7 +13828,13 @@ class Compiler
                     if fk > 0
                       super_args = super_args + ", "
                     end
-                    super_args = super_args + "lv_" + pnames[fk]
+                    arg_expr = "lv_" + pnames[fk]
+                    if fk < p_ptypes.length && fk < ptypes.length
+                      if p_ptypes[fk] != ptypes[fk] && p_ptypes[fk] != ""
+                        arg_expr = "(" + c_type(p_ptypes[fk]) + ")" + arg_expr
+                      end
+                    end
+                    super_args = super_args + arg_expr
                     fk = fk + 1
                   end
                 else
@@ -13823,7 +13846,14 @@ class Compiler
                       if ak > 0
                         super_args = super_args + ", "
                       end
-                      super_args = super_args + compile_expr(arg_ids[ak])
+                      arg_expr2 = compile_expr(arg_ids[ak])
+                      if ak < p_ptypes.length
+                        at_arg = infer_type(arg_ids[ak])
+                        if p_ptypes[ak] != at_arg && p_ptypes[ak] != ""
+                          arg_expr2 = "(" + c_type(p_ptypes[ak]) + ")" + arg_expr2
+                        end
+                      end
+                      super_args = super_args + arg_expr2
                       ak = ak + 1
                     end
                   end
