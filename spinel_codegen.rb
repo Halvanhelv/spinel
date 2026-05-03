@@ -21482,7 +21482,7 @@ class Compiler
             j = 0
             while j < writers.length
               if writers[j] == bname
-                return "(" + rc + arrow + sanitize_ivar(bname) + " = " + compile_arg0(nid) + ", 0)"
+                return "(" + rc + arrow + sanitize_ivar(bname) + " = " + compile_arg0(nid) + ")"
               end
               j = j + 1
             end
