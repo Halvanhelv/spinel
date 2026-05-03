@@ -2386,6 +2386,9 @@ class Compiler
         if lt == "float"
           return "float"
         end
+        if lt == "time"
+          return "float"
+        end
         if is_typed_array_type(lt)
           return lt
         end
@@ -3589,7 +3592,10 @@ class Compiler
         end
         if rcname == "Time"
           if mname == "now"
-            return "float"
+            return "time"
+          end
+          if mname == "at"
+            return "time"
           end
         end
         if rcname == "File"
@@ -4346,6 +4352,9 @@ class Compiler
     if t == "range"
       return "sp_Range"
     end
+    if t == "time"
+      return "sp_Time"
+    end
     if t == "int"
       return "mrb_int"
     end
@@ -4449,6 +4458,9 @@ class Compiler
     # NOTE: nullable returns above, so rest handles base types only
     if t == "range"
       return "((sp_Range){0,0})"
+    end
+    if t == "time"
+      return "((sp_Time){0,0})"
     end
     if t == "int"
       return "0"
@@ -17372,18 +17384,6 @@ class Compiler
       end
     end
 
-    # Time.now.to_i — bypass the Time.now float roundtrip and emit
-    # time(NULL) directly. Going through (mrb_int)((double)tv_sec +
-    # tv_nsec/1e9) rounds up to tv_sec+1 when tv_nsec lands in the
-    # last ~240ns of a second (~2.4e-7 chance per call); time(NULL)
-    # returns exact tv_sec, matching CRuby's Time#to_i semantics.
-    if mname == "to_i" && recv >= 0 && @nd_type[recv] == "CallNode" && @nd_name[recv] == "now"
-      rr = @nd_receiver[recv]
-      if rr >= 0 && @nd_type[rr] == "ConstantReadNode" && @nd_name[rr] == "Time"
-        return "((mrb_int)time(NULL))"
-      end
-    end
-
     recv_type = infer_type(recv)
     # Nullable receiver: dispatch identically to the base type. The
     # null check is the caller's responsibility, matching Ruby's
@@ -17477,6 +17477,18 @@ class Compiler
       r = compile_range_method_expr(nid, mname, rc)
       if r != ""
         return r
+      end
+    end
+
+    # Wrap in a statement expression so receivers like `Time.now`
+    # (which expand to a clock_gettime call) are evaluated exactly once
+    # even when to_f references the value twice.
+    if recv_type == "time"
+      if mname == "to_i"
+        return "({ sp_Time _t = " + rc + "; (mrb_int)_t.tv_sec; })"
+      end
+      if mname == "to_f"
+        return "({ sp_Time _t = " + rc + "; (mrb_float)_t.tv_sec + (mrb_float)_t.tv_nsec / 1e9; })"
       end
     end
 
@@ -18295,6 +18307,14 @@ class Compiler
       if lt == "poly"
         @needs_rb_value = 1
         return "sp_poly_sub(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(args_id)[0]) + ")"
+      end
+      # Hoist both sides into temps: each may be a fresh sp_time_now()
+      # call, and tv_sec / tv_nsec are read twice each.
+      if lt == "time"
+        rhs_id = get_args(args_id)[0]
+        if infer_type(rhs_id) == "time"
+          return "({ sp_Time _a = " + compile_expr(recv) + "; sp_Time _b = " + compile_expr(rhs_id) + "; ((mrb_float)_a.tv_sec - (mrb_float)_b.tv_sec) + ((mrb_float)_a.tv_nsec - (mrb_float)_b.tv_nsec) / 1e9; })"
+        end
       end
       r = compile_array_setop_expr(nid, recv, "difference", lt)
       if r != ""
@@ -21099,12 +21119,20 @@ class Compiler
           return "sp_file_basename(" + compile_arg0(nid) + ")"
         end
       end
-      # Time.now — wall-clock seconds-since-epoch as float, matching
-      # CRuby's Time#to_f semantics so `Time.now.to_f * 1000` actually
-      # yields milliseconds with sub-second precision.
       if rcname == "Time"
         if mname == "now"
-          return "({ struct timespec _ts; clock_gettime(CLOCK_REALTIME, &_ts); (mrb_float)_ts.tv_sec + (mrb_float)_ts.tv_nsec / 1e9; })"
+          return "sp_time_now()"
+        end
+        if mname == "at"
+          arg_id = compile_arg0(nid)
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            aargs = get_args(args_id)
+            if aargs.length > 0 && infer_type(aargs[0]) == "float"
+              return "sp_time_at_float(" + arg_id + ")"
+            end
+          end
+          return "sp_time_at_int(" + arg_id + ")"
         end
       end
       # Process.clock_gettime — assume CLOCK_MONOTONIC; the clock_id

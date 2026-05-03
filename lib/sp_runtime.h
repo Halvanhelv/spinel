@@ -85,6 +85,32 @@ static const char*sp_int_chr(mrb_int n){char*s=sp_str_alloc_raw(2);s[0]=(char)n;
 typedef struct{mrb_int first;mrb_int last;}sp_Range;
 static sp_Range sp_range_new(mrb_int f,mrb_int l){sp_Range r;r.first=f;r.last=l;return r;}
 
+/* ---- Time runtime ---- */
+/* sp_Time keeps Time.now / Time.at as value-typed structs. d78149b's
+   sub-second precision is preserved by inlining tv_sec + tv_nsec/1e9
+   at every Time#to_f / Time#- call site (see spinel_codegen.rb). */
+typedef struct { int64_t tv_sec; int32_t tv_nsec; } sp_Time;
+static inline sp_Time sp_time_now(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return (sp_Time){ ts.tv_sec, (int32_t)ts.tv_nsec };
+}
+static inline sp_Time sp_time_at_int(mrb_int sec) {
+  return (sp_Time){ (int64_t)sec, 0 };
+}
+/* POSIX convention: keep tv_nsec in [0, 1e9). For negative epoch with a
+   non-integer fractional part, decrement tv_sec and roll the fraction
+   into the positive nsec range — so Time.at(-0.5).to_i returns -1, not 0. */
+static inline sp_Time sp_time_at_float(mrb_float epoch) {
+  int64_t sec = (int64_t)epoch;
+  mrb_float frac = epoch - (mrb_float)sec;
+  if (frac < 0.0) {
+    sec -= 1;
+    frac += 1.0;
+  }
+  return (sp_Time){ sec, (int32_t)(frac * 1e9) };
+}
+
 typedef struct sp_gc_hdr { struct sp_gc_hdr *next; void (*finalize)(void *); void (*scan)(void *); size_t size; unsigned marked : 1; } sp_gc_hdr;
 static sp_gc_hdr *sp_gc_heap = NULL; static size_t sp_gc_bytes = 0; static size_t sp_gc_threshold = 256*1024;
 
