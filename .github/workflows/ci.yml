@@ -23,7 +23,7 @@ jobs:
     env:
       CC: ${{ matrix.cc }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
@@ -59,7 +59,7 @@ jobs:
     env:
       CC: gcc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up MSYS2 (MINGW64)
         uses: msys2/setup-msys2@v2
