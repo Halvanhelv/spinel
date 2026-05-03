@@ -6508,8 +6508,12 @@ class Compiler
     # mapped array, so its type is the block's return type. Spinel
     # collapses array-of-array to a placeholder (int_array) at the
     # outer infer_type level, so we have to peek through the call
-    # node directly to recover the element type.
-    if @nd_type[val_id] == "CallNode" && @nd_name[val_id] == "map"
+    # node directly to recover the element type. `collect` is the
+    # standard alias for `map`; treat both. Trust the block return
+    # even when it's `int` — `rt` (the outer call's inferred type)
+    # is unreliable for nested-array shapes per the comment above,
+    # so the block return is more authoritative.
+    if @nd_type[val_id] == "CallNode" && (@nd_name[val_id] == "map" || @nd_name[val_id] == "collect")
       blk = @nd_block[val_id]
       if blk >= 0
         bbody = @nd_body[blk]
@@ -6517,7 +6521,7 @@ class Compiler
           bbs = get_stmts(bbody)
           if bbs.length > 0
             bret = infer_type(bbs.last)
-            if bret != "int" && bret != "" && bret != "void"
+            if bret != "" && bret != "void"
               return bret
             end
           end
