@@ -23164,6 +23164,12 @@ class Compiler
       pc = "sp_PtrArray_get((sp_PtrArray *)" + recv_tmp + ".v.p, " + a0 + ")"
       prhs = is_poly_ret == 1 ? "sp_box_obj(" + pc + ", 0)" : pc
       emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_PTR_ARRAY) " + result_tmp + " = " + prhs + ";")
+      # PolyArray dispatch — sp_PolyArray_get returns sp_RbVal directly.
+      # When the result temp is poly, just assign; otherwise unbox via .v.i
+      # (the typed temp's static type drives caller-side conversion).
+      polyc = "sp_PolyArray_get((sp_PolyArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+      polyrhs = is_poly_ret == 1 ? polyc : "(" + polyc + ").v.i"
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_POLY_ARRAY) " + result_tmp + " = " + polyrhs + ";")
     end
     # `length` / `size` — every built-in array exposes its own
     # `_length` helper (sym_array shares IntArray's). PtrArray is
@@ -23185,6 +23191,9 @@ class Compiler
       pc = "sp_PtrArray_length((sp_PtrArray *)" + recv_tmp + ".v.p)"
       prhs = is_poly_ret == 1 ? "sp_box_int(" + pc + ")" : pc
       emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_PTR_ARRAY) " + result_tmp + " = " + prhs + ";")
+      polyc = "sp_PolyArray_length((sp_PolyArray *)" + recv_tmp + ".v.p)"
+      polyrhs = is_poly_ret == 1 ? "sp_box_int(" + polyc + ")" : polyc
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_POLY_ARRAY) " + result_tmp + " = " + polyrhs + ";")
     end
   end
 
@@ -23356,6 +23365,9 @@ class Compiler
       if is_ptr_array_type(at) == 1
         return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_PTR_ARRAY)"
       end
+      if at == "poly_array"
+        return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_POLY_ARRAY)"
+      end
       if at == "proc" || at == "lambda"
         return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_PROC)"
       end
@@ -23407,6 +23419,9 @@ class Compiler
     end
     if is_ptr_array_type(at) == 1
       return "sp_box_ptr_array(" + val + ")"
+    end
+    if at == "poly_array"
+      return "sp_box_poly_array(" + val + ")"
     end
     if at == "proc" || at == "lambda"
       return "sp_box_proc(" + val + ")"
