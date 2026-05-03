@@ -8768,14 +8768,31 @@ class Compiler
       if @current_class_idx >= 0
         iname = @nd_name[nid]
         expr_id = @nd_expression[nid]
+        # Drill through chained `@a = @b = ... = expr` so the chain head
+        # sees the bottom rhs type — infer_type returns the default
+        # "int" for an InstanceVariableWriteNode expr, which would
+        # leave @a's slot un-widened against a real concrete bottom
+        # type and force compile_stmt to emit a type-mismatched store.
+        bottom = expr_id
+        is_chain_head = 0
+        while bottom >= 0 && @nd_type[bottom] == "InstanceVariableWriteNode"
+          bottom = @nd_expression[bottom]
+          is_chain_head = 1
+        end
         # Empty `{}` / `[]` literal: don't reset the ivar's tracked
         # type to the default (`str_int_hash` / `int_array`), since a
         # later `[]=` write may have already promoted the slot to a
         # more specific type. Reseeding from the empty-default would
         # widen the promoted type to poly on the next iteration.
-        if is_empty_hash_literal(expr_id) == 0 && is_empty_array_literal(expr_id) == 0
-          at = infer_type(expr_id)
-          if at != "int" && at != "nil"
+        if is_empty_hash_literal(bottom) == 0 && is_empty_array_literal(bottom) == 0
+          at = infer_type(bottom)
+          # Chain heads must widen even on int/nil rhs — the head's
+          # current slot type may be a concrete pointer type that
+          # update_ivar_type promotes to poly (or the nullable
+          # variant) once it sees the bottom rhs.
+          if is_chain_head == 1
+            update_ivar_type(@current_class_idx, iname, at)
+          elsif at != "int" && at != "nil"
             update_ivar_type(@current_class_idx, iname, at)
           end
         end
@@ -14050,47 +14067,57 @@ class Compiler
             ivar_name = @nd_name[sid]
             ivar = sanitize_ivar(ivar_name)
             expr_id_iv = @nd_expression[sid]
-            # Match the special-case in compile_stmt: empty `{}` / `[]`
-            # assigned to an ivar promoted by scan_writer_calls needs
-            # the matching container constructor.
-            ivt = cls_ivar_type(@current_class_idx, ivar_name)
-            iv_ctor = ""
-            if is_empty_hash_literal(expr_id_iv) == 1 && ivt != "" && ivt != "str_int_hash"
-              if ivt == "str_str_hash"
-                @needs_str_str_hash = 1
-                iv_ctor = "sp_StrStrHash_new()"
-              elsif ivt == "int_str_hash"
-                @needs_int_str_hash = 1
-                iv_ctor = "sp_IntStrHash_new()"
-              elsif ivt == "sym_int_hash"
-                @needs_sym_int_hash = 1
-                iv_ctor = "sp_SymIntHash_new()"
-              elsif ivt == "sym_str_hash"
-                @needs_sym_str_hash = 1
-                iv_ctor = "sp_SymStrHash_new()"
-              elsif ivt == "str_poly_hash"
-                iv_ctor = "sp_StrPolyHash_new()"
-              elsif ivt == "sym_poly_hash"
-                iv_ctor = "sp_SymPolyHash_new()"
-              end
-            end
-            if iv_ctor == "" && is_empty_array_literal(expr_id_iv) == 1 && ivt != ""
-              iv_ctor = empty_array_new_for_type(ivt)
-            end
-            if iv_ctor != ""
-              @needs_gc = 1
-              emit_raw("  " + self_arrow + ivar + " = " + iv_ctor + ";")
+            # Chained `@a = @b = ... = expr` inside `def initialize`.
+            # Delegate to compile_stmt's IVW path so the rhs is
+            # evaluated once via compile_chained_ivar_writes; the
+            # local emit_raw special-cases below assume a non-chained
+            # rhs and would otherwise re-evaluate side-effecting
+            # CallNodes per slot.
+            if @nd_type[expr_id_iv] == "InstanceVariableWriteNode"
+              compile_stmt(sid)
             else
-              # Issue #130: same poly-slot boxing as the general
-              # InstanceVariableWriteNode emit path (compile_expr branch).
-              # Initialize bodies can introduce one of the disagreeing
-              # writes to a multi-typed ivar.
-              if ivt == "poly"
-                val = box_expr_to_poly(expr_id_iv)
-              else
-                val = compile_expr(expr_id_iv)
+              # Match the special-case in compile_stmt: empty `{}` / `[]`
+              # assigned to an ivar promoted by scan_writer_calls needs
+              # the matching container constructor.
+              ivt = cls_ivar_type(@current_class_idx, ivar_name)
+              iv_ctor = ""
+              if is_empty_hash_literal(expr_id_iv) == 1 && ivt != "" && ivt != "str_int_hash"
+                if ivt == "str_str_hash"
+                  @needs_str_str_hash = 1
+                  iv_ctor = "sp_StrStrHash_new()"
+                elsif ivt == "int_str_hash"
+                  @needs_int_str_hash = 1
+                  iv_ctor = "sp_IntStrHash_new()"
+                elsif ivt == "sym_int_hash"
+                  @needs_sym_int_hash = 1
+                  iv_ctor = "sp_SymIntHash_new()"
+                elsif ivt == "sym_str_hash"
+                  @needs_sym_str_hash = 1
+                  iv_ctor = "sp_SymStrHash_new()"
+                elsif ivt == "str_poly_hash"
+                  iv_ctor = "sp_StrPolyHash_new()"
+                elsif ivt == "sym_poly_hash"
+                  iv_ctor = "sp_SymPolyHash_new()"
+                end
               end
-              emit_raw("  " + self_arrow + ivar + " = " + val + ";")
+              if iv_ctor == "" && is_empty_array_literal(expr_id_iv) == 1 && ivt != ""
+                iv_ctor = empty_array_new_for_type(ivt)
+              end
+              if iv_ctor != ""
+                @needs_gc = 1
+                emit_raw("  " + self_arrow + ivar + " = " + iv_ctor + ";")
+              else
+                # Issue #130: same poly-slot boxing as the general
+                # InstanceVariableWriteNode emit path (compile_expr branch).
+                # Initialize bodies can introduce one of the disagreeing
+                # writes to a multi-typed ivar.
+                if ivt == "poly"
+                  val = box_expr_to_poly(expr_id_iv)
+                else
+                  val = compile_expr(expr_id_iv)
+                end
+                emit_raw("  " + self_arrow + ivar + " = " + val + ";")
+              end
             end
           else
             if is_super == false
@@ -21907,6 +21934,86 @@ class Compiler
     box_value_to_poly(at, val)
   end
 
+  # Emit a chained `@a = @b = ... = expr` write as one rhs evaluation
+  # plus N per-slot stores. Caller has verified that `nid` is an
+  # InstanceVariableWriteNode whose expression is itself an
+  # InstanceVariableWriteNode. Each slot is typed independently (some
+  # widened to poly by scan_writer_calls, others kept native), so the
+  # store boxes through sp_RbVal only for the poly slots.
+  def compile_chained_ivar_writes(nid)
+    # Collect the chain of ivar names (head -> tail) and the bottom
+    # rhs node id.
+    ivars = []
+    cur = nid
+    while @nd_type[cur] == "InstanceVariableWriteNode"
+      ivars.push(@nd_name[cur])
+      cur = @nd_expression[cur]
+    end
+    rhs_id = cur
+    rhs_type = infer_type(rhs_id)
+    # NilNode rhs has no side effect and `compile_expr(NilNode)` is the
+    # null-pointer-constant `0`, which assigns cleanly to any slot
+    # type. Routing it through a typed temp would force a `mrb_int 0`
+    # variable into pointer slots, which C won't implicitly null. Emit
+    # one store per slot through the unchained IVW path; each slot
+    # picks its own boxing rule (poly slots box to sp_box_nil()).
+    if @nd_type[rhs_id] == "NilNode"
+      ki = 0
+      while ki < ivars.length
+        cur_iv = nid
+        kj = 0
+        while kj < ki
+          cur_iv = @nd_expression[cur_iv]
+          kj = kj + 1
+        end
+        saved_expr = @nd_expression[cur_iv]
+        @nd_expression[cur_iv] = rhs_id
+        compile_stmt(cur_iv)
+        @nd_expression[cur_iv] = saved_expr
+        ki = ki + 1
+      end
+      return
+    end
+    # General case: evaluate the rhs once into a typed temp, then
+    # store into each slot. Side-effecting rhs (CallNode etc.) must
+    # not be replicated.
+    rhs_expr = compile_expr(rhs_id)
+    tmp = new_temp
+    emit("  " + c_type(rhs_type) + " " + tmp + " = " + rhs_expr + ";")
+    ki = 0
+    while ki < ivars.length
+      iname_i = ivars[ki]
+      ivt_i = ""
+      if @current_class_idx >= 0
+        ivt_i = cls_ivar_type(@current_class_idx, iname_i)
+      end
+      val_i = tmp
+      if ivt_i == "poly" && rhs_type != "poly"
+        val_i = box_value_to_poly(rhs_type, tmp)
+      end
+      mod_ivar = 0
+      mi3 = 0
+      while mi3 < @module_names.length
+        mmod = @module_names[mi3]
+        if mmod != ""
+          if @current_method_name.start_with?(mmod + "_cls_")
+            cname3 = mmod + "_" + iname_i[1, iname_i.length - 1]
+            ci3 = find_const_idx(cname3)
+            if ci3 >= 0
+              emit("  cst_" + cname3 + " = " + val_i + ";")
+              mod_ivar = 1
+            end
+          end
+        end
+        mi3 = mi3 + 1
+      end
+      if mod_ivar == 0
+        emit("  " + self_arrow + sanitize_ivar(iname_i) + " = " + val_i + ";")
+      end
+      ki = ki + 1
+    end
+  end
+
   # Emit a runtime loop that pushes every element of the array `src_expr`
   # (a node id whose value is some typed array) onto the destination
   # int_array variable `dst`. Used when expanding `*args` into a rest
@@ -23310,6 +23417,18 @@ class Compiler
     if t == "InstanceVariableWriteNode"
       iname = @nd_name[nid]
       expr_id = @nd_expression[nid]
+      # Chained `@a = @b = ... = expr`. The naive emit lowers this as
+      # `iv_a = (iv_b = (... = expr))` — one `expr` evaluation, but the
+      # outer slot tries to absorb the inner write's typed value, so
+      # disagreeing slot types fail the C compile. Per-slot recursion
+      # would re-evaluate `expr` once per ivar and double-fire side
+      # effects on a CallNode rhs. Compute `expr` once into a typed
+      # temp and assign each slot from the temp, boxing to poly only
+      # for the slots that scan_writer_calls already widened.
+      if @nd_type[expr_id] == "InstanceVariableWriteNode"
+        compile_chained_ivar_writes(nid)
+        return
+      end
       # Empty `{}` / `[]` literal assigned to an ivar that scan_writer_calls
       # has promoted to a non-default container type. The literal emitters use
       # default empty container types, so without this special-case the ivar
