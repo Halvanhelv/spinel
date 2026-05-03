@@ -4267,6 +4267,40 @@ class Compiler
     0
   end
 
+  # `[nil] * N` / `[0] * N` is a sized empty default — the elements
+  # come from `nil`/`0`, so the array's effective element type is the
+  # same as `[]`'s default (int_array). Used by writer-scan and the
+  # expected-type-aware compile path so a later typed `arr[i] = obj`
+  # write can promote / direct-allocate the right kind of container.
+  def is_sized_empty_array_default(nid)
+    if nid < 0
+      return 0
+    end
+    if @nd_type[nid] != "CallNode" || @nd_name[nid] != "*"
+      return 0
+    end
+    arr_recv = @nd_receiver[nid]
+    if arr_recv < 0 || @nd_type[arr_recv] != "ArrayNode"
+      return 0
+    end
+    recv_elems = parse_id_list(@nd_elements[arr_recv])
+    if recv_elems.length == 0
+      return 0
+    end
+    ei = 0
+    while ei < recv_elems.length
+      ti = recv_elems[ei]
+      if ti < 0
+        return 0
+      end
+      if @nd_type[ti] != "NilNode" && @nd_type[ti] != "IntegerNode"
+        return 0
+      end
+      ei = ei + 1
+    end
+    1
+  end
+
   def base_type(t)
     if t.length > 1 && t[t.length - 1] == "?"
       return t[0, t.length - 1]
@@ -6243,6 +6277,15 @@ class Compiler
             @cls_ivar_types[ci] = types.join(";")
           elsif old != new_type && old != "poly"
             if is_array_type(old) == 1 && is_array_type(new_type) == 1
+              # Don't widen a typed `<obj>_ptr_array` slot back to
+              # poly when the disagreement is just `int_array`. That
+              # disagreement comes from the `[nil] * N` empty default
+              # — the writer-scan `[]=` / `<<` widening is more
+              # specific and should win.
+              if is_ptr_array_type(old) == 1 && new_type == "int_array"
+                k = k + 1
+                next
+              end
               types[k] = "poly_array"
               @needs_rb_value = 1
               @cls_ivar_types[ci] = types.join(";")
@@ -7394,6 +7437,25 @@ class Compiler
       if val != ""
         return val
       end
+    end
+    # `[nil] * N` / `[0] * N` against a pointer-array LHS: build a
+    # fresh ptr_array pre-filled with N NULLs so subsequent
+    # `arr[i] = obj` writes via sp_PtrArray_set land in valid slots.
+    # Without this, the default `*` codegen produces an int_array
+    # which doesn't match the LHS storage.
+    if (is_ptr_array_type(expected_base) == 1 || expected_base == "poly_array") && is_sized_empty_array_default(nid) == 1
+      @needs_gc = 1
+      cnt_e = compile_arg0(nid)
+      tmp = new_temp
+      if expected_base == "poly_array"
+        @needs_rb_value = 1
+        emit("  sp_PolyArray *" + tmp + " = sp_PolyArray_new();")
+        emit("  { mrb_int _n = " + cnt_e + "; for (mrb_int _i = 0; _i < _n; _i++) sp_PolyArray_push(" + tmp + ", sp_box_nil()); }")
+      else
+        emit("  sp_PtrArray *" + tmp + " = sp_PtrArray_new();")
+        emit("  { mrb_int _n = " + cnt_e + "; for (mrb_int _i = 0; _i < _n; _i++) sp_PtrArray_push(" + tmp + ", NULL); }")
+      end
+      return tmp
     end
     val = compile_expr(nid)
     at = infer_type(nid)
@@ -8554,8 +8616,11 @@ class Compiler
       return "poly_array"
     end
     if is_obj_type(elem_acc[0]) == 1
-      @needs_rb_value = 1
-      return "poly_array"
+      # Homogeneous obj array — use a typed `<obj>_ptr_array` so reads
+      # return a typed pointer (no sp_RbVal unbox needed at the call
+      # site). Falls back to poly_array via normal widening when a
+      # later mismatched-type write happens.
+      return base_type(elem_acc[0]) + "_ptr_array"
     end
     ""
   end
@@ -8986,6 +9051,39 @@ class Compiler
             if ai.length > 0
               et = infer_type(ai[0])
               promoted = empty_array_promotion_for([et])
+              if promoted != "" && promoted != cur_t
+                replace_ivar_type(@current_class_idx, iname, promoted)
+                if promoted == "str_array"
+                  @needs_str_array = 1
+                elsif promoted == "float_array"
+                  @needs_float_array = 1
+                elsif promoted == "sym_array"
+                  @needs_int_array = 1
+                elsif promoted == "poly_array"
+                  @needs_rb_value = 1
+                  @needs_gc = 1
+                end
+              end
+            end
+          end
+        end
+      end
+      # `@arr[i] = v` against an ivar typed `int_array` (the
+      # `[nil] * N` empty default) should widen to match the value
+      # type the same way `<<` / `push` does. Without this, optcarrot's
+      # `@fetch[addr] = method(:peek_X)` writes a Method into an
+      # int_array slot — the read side then can't recover and `[].call`
+      # dispatches against int.
+      if mname == "[]=" && @current_class_idx >= 0 && recv >= 0 && @nd_type[recv] == "InstanceVariableReadNode"
+        iname = @nd_name[recv]
+        cur_t = cls_ivar_type(@current_class_idx, iname)
+        if cur_t == "int_array"
+          args_id = @nd_arguments[nid]
+          if args_id >= 0
+            ai = get_args(args_id)
+            if ai.length >= 2
+              vt = infer_type(ai[ai.length - 1])
+              promoted = empty_array_promotion_for([vt])
               if promoted != "" && promoted != cur_t
                 replace_ivar_type(@current_class_idx, iname, promoted)
                 if promoted == "str_array"
@@ -14193,6 +14291,17 @@ class Compiler
               if iv_ctor != ""
                 @needs_gc = 1
                 emit_raw("  " + self_arrow + ivar + " = " + iv_ctor + ";")
+              elsif is_ptr_array_type(ivt) == 1 && is_sized_empty_array_default(expr_id_iv) == 1
+                # `@arr = [nil] * N` with @arr already widened to
+                # ptr_array via writer-scan. The default `*` codegen
+                # produces an sp_IntArray that mismatches the slot
+                # type; emit a sized PtrArray of NULLs inline.
+                @needs_gc = 1
+                cnt_e_iv = compile_arg0(expr_id_iv)
+                tmp_iv = new_temp
+                emit_raw("  sp_PtrArray *" + tmp_iv + " = sp_PtrArray_new();")
+                emit_raw("  { mrb_int _n = " + cnt_e_iv + "; for (mrb_int _i = 0; _i < _n; _i++) sp_PtrArray_push(" + tmp_iv + ", NULL); }")
+                emit_raw("  " + self_arrow + ivar + " = " + tmp_iv + ";")
               else
                 # Issue #130: same poly-slot boxing as the general
                 # InstanceVariableWriteNode emit path (compile_expr branch).
@@ -23705,6 +23814,20 @@ class Compiler
           return
         end
       end
+      # `@arr = [nil] * N` where @arr is a ptr_array slot. The
+      # default `*` codegen produces an sp_IntArray, which mismatches
+      # the slot type and corrupts later sp_PtrArray_set calls. Emit
+      # a sized PtrArray pre-filled with NULLs inline so the slot
+      # holds the matching storage.
+      if is_ptr_array_type(ivt) == 1 && is_sized_empty_array_default(expr_id) == 1
+        @needs_gc = 1
+        cnt_e = compile_arg0(expr_id)
+        tmp_arr = new_temp
+        emit("  sp_PtrArray *" + tmp_arr + " = sp_PtrArray_new();")
+        emit("  { mrb_int _n = " + cnt_e + "; for (mrb_int _i = 0; _i < _n; _i++) sp_PtrArray_push(" + tmp_arr + ", NULL); }")
+        emit("  " + self_arrow + sanitize_ivar(iname) + " = " + tmp_arr + ";")
+        return
+      end
       # Issue #130: poly slot — every concrete-typed RHS must be boxed
       # to sp_RbVal. Without the box, C compiler sees `sp_RbVal = mrb_int`
       # (or const char *, etc.) and either rejects the assignment or
@@ -27187,6 +27310,10 @@ class Compiler
     end
     if rt == "str_array"
       emit("  sp_StrArray_set(" + rc + ", " + idx + ", " + val + ");")
+      return
+    end
+    if is_ptr_array_type(rt) == 1
+      emit("  sp_PtrArray_set(" + rc + ", " + idx + ", (void *)" + val + ");")
       return
     end
     if rt == "str_int_hash"
