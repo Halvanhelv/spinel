@@ -8804,11 +8804,20 @@ class Compiler
         # widen the promoted type to poly on the next iteration.
         if is_empty_hash_literal(bottom) == 0 && is_empty_array_literal(bottom) == 0
           at = infer_type(bottom)
-          # Chain participants must widen even on int/nil rhs — the
-          # current slot type may be a concrete pointer type that
-          # update_ivar_type promotes to poly (or the nullable
-          # variant) once it sees the bottom rhs.
-          if chain_inames.length > 1
+          # Chain participants bypass the `int` guard so that
+          # `@string_slot = @int_slot = expr_returning_int` widens
+          # the head to poly instead of leaving it stuck at
+          # `string`. The `nil` guard stays in place even for
+          # chains: `@a = @b = ... = nil` is handled at emit time
+          # by `compile_chained_ivar_writes`'s per-slot recurse
+          # path (NilNode lowers to a literal `0`, a null pointer
+          # constant valid for any slot type), and forcing nil
+          # into the slot type interacts badly with parent-cascade
+          # update_ivar_type — a subclass write that pins the same
+          # slot to a concrete obj type ping-pongs between obj_X
+          # and obj_X? across iter rounds and lands on poly,
+          # breaking the typed-pointer store at emit time.
+          if chain_inames.length > 1 && at == "int"
             ci_idx = 0
             while ci_idx < chain_inames.length
               update_ivar_type(@current_class_idx, chain_inames[ci_idx], at)
