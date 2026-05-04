@@ -1,0 +1,31 @@
+# Bundle: small array-operation regression tests.
+#
+# Each line names a .rb file under test/. The Makefile concatenates them
+# into a single .rb (each test wrapped in `def _t_<name>; ... end;
+# _t_<name>` for local-var scope isolation), compiles + runs once, and
+# diffs the segmented output against the concatenation of each test's
+# .expected. The original .rb files stay in test/ for individual debug.
+#
+# Constraints on tests in a bundle:
+#   - no top-level class / module / CONST / @ivar definition
+#   - no use of ARGV (sp_argv is only declared in main)
+#   - no top-level def (would collide with the bundle wrapper)
+#
+# Step 1 of the bundling work: a hand-picked sample to validate the
+# mechanism. Coverage will be expanded once the rule is proven on CI.
+
+test/array_amp.rb
+test/array_concat_poly.rb
+test/array_each_with_object_poly.rb
+test/array_flat_map_poly.rb
+test/array_minus.rb
+test/array_pipe.rb
+test/array_plus_poly.rb
+test/array_shuffle_sym_poly.rb
+test/empty_poly_array_reassignment.rb
+test/int_array_inject.rb
+test/int_array_reduce.rb
+test/int_array_zip.rb
+test/str_array_each.rb
+test/string_format_single.rb
+test/sym_str_hash.rb

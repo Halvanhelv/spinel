@@ -193,8 +193,18 @@ bootstrap: spinel_codegen$(EXE)
 
 # ---- Test ----
 
-TESTS := $(wildcard test/*.rb)
-TEST_TARGETS := $(patsubst test/%.rb,build/test-results/%.ok,$(TESTS))
+# Bundles: groups of small collision-free tests compiled and run as a
+# single binary to amortize cc/link/spawn cost (the per-test cc -c on
+# sp_runtime.h dominates wall time, ~88% of per-test cost; bundling 15
+# tests turns 15× that fixed cost into 1×). See test/bundles/*.bundle
+# for the lists and the constraints. Tests listed in any bundle are
+# excluded from individual runs so we don't double-execute them.
+BUNDLE_FILES := $(wildcard test/bundles/*.bundle)
+BUNDLED_TESTS := $(shell cat $(BUNDLE_FILES) 2>/dev/null | sed -e 's/\#.*//' -e 's/[[:space:]]*$$//' -e '/^$$/d')
+BUNDLE_TARGETS := $(patsubst test/bundles/%.bundle,build/test-results/bundle__%.ok,$(BUNDLE_FILES))
+
+TESTS := $(filter-out $(BUNDLED_TESTS),$(wildcard test/*.rb))
+TEST_TARGETS := $(patsubst test/%.rb,build/test-results/%.ok,$(TESTS)) $(BUNDLE_TARGETS)
 
 test: clean-test-results
 	@$(MAKE) --no-print-directory test-run
@@ -244,6 +254,54 @@ build/test-results/%.ok: test/%.rb spinel_parse$(EXE) $(SP_RT_LIB) spinel_codege
 	  fi; \
 	  $(TIMEOUT10) "$$bin" >"$$act" 2>/dev/null; \
 	  LC_ALL=C sed 's/\r$$//' "$$act" >"$$act.n"; \
+	  if cmp -s "$$exp.n" "$$act.n"; then \
+	    echo PASS > "$@"; \
+	    if [ -t 1 ]; then printf .; fi; \
+	  else \
+	    echo FAIL > "$@"; \
+	    diff -u "$$exp.n" "$$act.n" > "$@.diff" 2>&1 || true; \
+	    if [ -t 1 ]; then printf F; fi; \
+	  fi; \
+	else \
+	  echo ERR > "$@"; \
+	  if [ -t 1 ]; then printf E; fi; \
+	fi; \
+	rm -rf "$$tmpdir"
+
+# Bundle test rule. Concatenates the listed tests into one .rb (each
+# wrapped in `def _t_<name>; ... end; _t_<name>` for local-var scope
+# isolation and a `puts "@@@ <name>"` separator), then compiles + runs
+# the combined .rb once. Output is split by the markers and diffed
+# against the concatenation of each test's .expected. The original
+# per-test .rb files stay in test/ for individual debugging — bundling
+# is purely a CI / wall-time optimization.
+build/test-results/bundle__%.ok: test/bundles/%.bundle spinel_parse$(EXE) $(SP_RT_LIB) spinel_codegen$(EXE)
+	@mkdir -p build/test-results
+	@tmpdir=$$(mktemp -d /tmp/spinel-bundle.XXXXXX); \
+	rb=$$tmpdir/bundle.rb; \
+	exp=$$tmpdir/bundle.expected; \
+	ast=$$tmpdir/bundle.ast; \
+	cfile=$$tmpdir/bundle.c; \
+	bin=$$tmpdir/bundle$(EXE); \
+	act=$$tmpdir/actual; \
+	rm -f "$@.diff"; \
+	: > "$$rb"; : > "$$exp"; \
+	sed -e 's/#.*//' -e 's/[[:space:]]*$$//' -e '/^$$/d' "$<" | while IFS= read -r tf; do \
+	  name=$$(basename "$$tf" .rb | sed 's/[^a-zA-Z0-9]/_/g'); \
+	  printf 'def _t_%s\n' "$$name" >> "$$rb"; \
+	  cat "$$tf" >> "$$rb"; \
+	  printf '\nend\nputs "@@@ %s"\n_t_%s\n\n' "$$name" "$$name" >> "$$rb"; \
+	  printf '@@@ %s\n' "$$name" >> "$$exp"; \
+	  cat "$$tf.expected" >> "$$exp"; \
+	done; \
+	./spinel_parse$(EXE) "$$rb" "$$ast" 2>/dev/null && \
+	./spinel_codegen$(EXE) "$$ast" "$$cfile" 2>/dev/null && \
+	$(CC) $(CFLAGS) -Werror $(SEC_FLAGS) -Ilib -c "$$cfile" -o "$$cfile.o" 2>/dev/null && \
+	$(CC) $(CFLAGS) "$$cfile.o" $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+	if [ $$? -eq 0 ]; then \
+	  $(TIMEOUT60) "$$bin" >"$$act" 2>/dev/null; \
+	  LC_ALL=C sed 's/\r$$//' "$$act" >"$$act.n"; \
+	  LC_ALL=C sed 's/\r$$//' "$$exp" >"$$exp.n"; \
 	  if cmp -s "$$exp.n" "$$act.n"; then \
 	    echo PASS > "$@"; \
 	    if [ -t 1 ]; then printf .; fi; \
