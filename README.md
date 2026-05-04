@@ -209,6 +209,15 @@ dynamic string allocation.
 **I/O**: `puts`, `print`, `printf`, `p`, `gets`, `ARGV`, `ENV[]`,
 `File.read/write/open` (with blocks), `system()`, backtick.
 
+**FFI**: Direct C calls without an extension compiler. Declarations
+(`ffi_func`, `ffi_lib`, `ffi_const`, `ffi_buffer`, `ffi_read_*`) live
+inside a `module` body; the codegen emits externs and the `spinel`
+wrapper picks up `-l` flags from marker comments. Scalars, strings,
+opaque `:ptr`, integer constants, raw byte buffers, and struct-field
+reads are covered. See [docs/FFI.md](docs/FFI.md) for the full spec
+and [examples/ffi/](examples/ffi/) for runnable demos against libc/
+libm and sqlite3.
+
 ## Optimizations
 
 Whole-program type inference drives several compile-time optimizations:

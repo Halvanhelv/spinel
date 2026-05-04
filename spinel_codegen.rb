@@ -296,6 +296,29 @@ class Compiler
     # slot falls through to the un-folded path.
     @module_acc_keys = "".split(",")
     @module_acc_consts = "".split(",")
+
+    # ---- FFI state (parallel arrays, populated by scan_ffi_decl) ----
+    # Per-module registry:
+    @ffi_modules = "".split(",")          # module names that declared FFI
+    @ffi_module_libs = "".split(",")      # ";"-joined -l names
+    @ffi_module_cflags = "".split(",")    # ";"-joined cc flag strings
+    # Function registry (one entry per ffi_func decl):
+    @ffi_func_modules = "".split(",")     # owning module name
+    @ffi_func_names = "".split(",")       # C symbol name
+    @ffi_func_arg_types = "".split(",")   # ";"-joined Spinel type tokens
+    @ffi_func_ret_types = "".split(",")   # single Spinel type token
+    @ffi_func_arg_specs = "".split(",")   # ";"-joined original specs (uint32, str, …)
+    @ffi_func_ret_specs = "".split(",")   # original return spec
+    # Buffer registry (one entry per ffi_buffer decl):
+    @ffi_buf_modules = "".split(",")
+    @ffi_buf_names = "".split(",")
+    @ffi_buf_sizes = []                   # int sizes in bytes
+    # Reader registry (one entry per ffi_read_* decl):
+    @ffi_reader_modules = "".split(",")
+    @ffi_reader_names = "".split(",")
+    @ffi_reader_kinds = "".split(",")     # "u32", "i32", "ptr"
+    @ffi_reader_offsets = []              # int byte offsets
+
     @pending_method_ref = ""
     @lambda_counter = 0
     @lambda_funcs = ""
@@ -2154,6 +2177,17 @@ class Compiler
             end
           end
         end
+      end
+    end
+
+    # FFI dispatch must come before operator/comparison resolution: an
+    # FFI function name can collide with a Ruby operator (e.g. a C
+    # function literally named `pow`), and we want the declared FFI
+    # signature to win.
+    if recv >= 0
+      r = infer_ffi_call_type(nid, mname, recv)
+      if r != ""
+        return r
       end
     end
 
@@ -4145,6 +4179,11 @@ class Compiler
     if is_nullable_type(t) == 1
       t = base_type(t)
     end
+    # Raw C pointer (FFI). Intentionally NOT a GC pointer — foreign
+    # pointers are user-managed and the GC must not trace or free them.
+    if t == "ptr"
+      return 0
+    end
     if t == "int_array"
       return 1
     end
@@ -4324,6 +4363,9 @@ class Compiler
   def is_nullable_pointer_type(t)
     # Pointer types that can represent nil as NULL
     bt = base_type(t)
+    if bt == "ptr"
+      return 1
+    end
     if bt == "string" || bt == "mutable_str"
       return 1
     end
@@ -4405,6 +4447,10 @@ class Compiler
     end
     if t == "int"
       return "mrb_int"
+    end
+    # FFI raw C pointer (void *). See type_is_pointer for GC rules.
+    if t == "ptr"
+      return "void *"
     end
     if t == "bigint"
       return "sp_Bigint *"
@@ -4512,6 +4558,9 @@ class Compiler
     end
     if t == "int"
       return "0"
+    end
+    if t == "ptr"
+      return "NULL"
     end
     if t == "bigint"
       return "NULL"
@@ -6973,6 +7022,15 @@ class Compiler
         @const_expr_ids.push(expr_id)
         @const_scope_names.push(mname)
       end
+      # FFI DSL: ffi_lib, ffi_cflags, ffi_func, ffi_const, ffi_buffer,
+      # ffi_read_u32, ffi_read_i32, ffi_read_ptr. Bare CallNode with no
+      # explicit receiver whose name starts with "ffi_".
+      if @nd_type[sid] == "CallNode" && @nd_receiver[sid] < 0
+        cname_ffi = @nd_name[sid]
+        if cname_ffi.length >= 4 && cname_ffi[0, 4] == "ffi_"
+          scan_ffi_decl(mname, sid)
+        end
+      end
       # `class << self; attr_accessor :foo; end` — register `foo` as a
       # module-level singleton accessor. Stage 1 of issue #126: the
       # accessor's value is resolved later via the constant-fold pass
@@ -6999,6 +7057,512 @@ class Compiler
         end
       end
     }
+  end
+
+  # ---------- FFI declaration scanning ----------
+  #
+  # Each ffi_* DSL form inside a `module M ... end` body is recognized by
+  # collect_module_with_prefix and dispatched here. Declarations are
+  # recorded into the @ffi_* parallel arrays; emission happens later from
+  # emit_ffi_externs and the compile/infer hooks.
+
+  # Return the index of `mname` in @ffi_modules, creating an entry if missing.
+  def ffi_module_idx(mname)
+    i = 0
+    while i < @ffi_modules.length
+      if @ffi_modules[i] == mname
+        return i
+      end
+      i = i + 1
+    end
+    @ffi_modules.push(mname)
+    @ffi_module_libs.push("")
+    @ffi_module_cflags.push("")
+    @ffi_modules.length - 1
+  end
+
+  # Map an FFI type-spec symbol (e.g. "uint32", "str", "ptr") to a Spinel
+  # type token ("int", "string", "ptr"). Returns "" on unknown input.
+  def ffi_type_of(spec)
+    if spec == "int" || spec == "uint32" || spec == "int32" || spec == "uint16" || spec == "int16" || spec == "uint8" || spec == "int8" || spec == "size_t" || spec == "long"
+      return "int"
+    end
+    if spec == "float" || spec == "double"
+      return "float"
+    end
+    if spec == "bool"
+      return "bool"
+    end
+    if spec == "str"
+      return "string"
+    end
+    if spec == "ptr"
+      return "ptr"
+    end
+    if spec == "void"
+      return "void"
+    end
+    ""
+  end
+
+  # Map an FFI type-spec symbol to the C type used in extern prototypes
+  # and call-site casts. Unlike ffi_type_of (which collapses to Spinel
+  # tokens), this preserves C-level detail (uint32_t vs size_t etc.).
+  def ffi_c_type_of(spec)
+    if spec == "int"
+      return "int"
+    end
+    if spec == "uint32"
+      return "uint32_t"
+    end
+    if spec == "int32"
+      return "int32_t"
+    end
+    if spec == "uint16"
+      return "uint16_t"
+    end
+    if spec == "int16"
+      return "int16_t"
+    end
+    if spec == "uint8"
+      return "uint8_t"
+    end
+    if spec == "int8"
+      return "int8_t"
+    end
+    if spec == "size_t"
+      return "size_t"
+    end
+    if spec == "long"
+      return "long"
+    end
+    if spec == "float"
+      return "float"
+    end
+    if spec == "double"
+      return "double"
+    end
+    if spec == "bool"
+      return "int"
+    end
+    if spec == "str"
+      return "const char *"
+    end
+    if spec == "ptr"
+      return "void *"
+    end
+    if spec == "void"
+      return "void"
+    end
+    ""
+  end
+
+  # Extract a string literal from a SymbolNode or StringNode arg. Returns
+  # "" if the arg is not a literal we recognize.
+  def ffi_arg_str(nid)
+    if nid < 0
+      return ""
+    end
+    t = @nd_type[nid]
+    if t == "SymbolNode" || t == "StringNode"
+      return @nd_content[nid]
+    end
+    ""
+  end
+
+  # Extract an integer from an IntegerNode arg. Returns -1 on non-int.
+  def ffi_arg_int(nid)
+    if nid < 0
+      return -1
+    end
+    if @nd_type[nid] == "IntegerNode"
+      return @nd_value[nid]
+    end
+    -1
+  end
+
+  # Emit an FFI decl error and abort with a pointed message.
+  def ffi_error(mname, dname, msg)
+    $stderr.puts "FFI error in module " + mname + ": " + dname + ": " + msg
+    exit(1)
+  end
+
+  # Mangle a buffer's C symbol with module prefix to keep two modules
+  # from colliding when both declare e.g. `:scratch`.
+  def ffi_buf_c_name(mod_name, b_name)
+    "sp_ffi_buf_" + mod_name + "_" + b_name
+  end
+
+  # Lookup helpers — return the registry index, or -1 if not declared.
+  def ffi_find_func(mod_name, fn_name)
+    k = 0
+    while k < @ffi_func_names.length
+      if @ffi_func_modules[k] == mod_name && @ffi_func_names[k] == fn_name
+        return k
+      end
+      k = k + 1
+    end
+    -1
+  end
+
+  def ffi_find_buffer(mod_name, b_name)
+    k = 0
+    while k < @ffi_buf_names.length
+      if @ffi_buf_modules[k] == mod_name && @ffi_buf_names[k] == b_name
+        return k
+      end
+      k = k + 1
+    end
+    -1
+  end
+
+  def ffi_find_reader(mod_name, r_name)
+    k = 0
+    while k < @ffi_reader_names.length
+      if @ffi_reader_modules[k] == mod_name && @ffi_reader_names[k] == r_name
+        return k
+      end
+      k = k + 1
+    end
+    -1
+  end
+
+  # Dispatch on the specific ffi_* declaration name. Called once per
+  # recognized CallNode in a module body.
+  def scan_ffi_decl(mname, nid)
+    dname = @nd_name[nid]
+    args_id = @nd_arguments[nid]
+    args = []
+    if args_id >= 0
+      args = get_args(args_id)
+    end
+    mi = ffi_module_idx(mname)
+
+    if dname == "ffi_lib"
+      if args.length != 1
+        ffi_error(mname, dname, "expected 1 arg (library name)")
+      end
+      libname = ffi_arg_str(args[0])
+      if libname == ""
+        ffi_error(mname, dname, "argument must be a string or symbol literal")
+      end
+      if @ffi_module_libs[mi] == ""
+        @ffi_module_libs[mi] = libname
+      else
+        @ffi_module_libs[mi] = @ffi_module_libs[mi] + ";" + libname
+      end
+      return
+    end
+
+    if dname == "ffi_cflags"
+      if args.length != 1
+        ffi_error(mname, dname, "expected 1 arg (cflags string)")
+      end
+      flags = ffi_arg_str(args[0])
+      if flags == ""
+        ffi_error(mname, dname, "argument must be a string literal")
+      end
+      if @ffi_module_cflags[mi] == ""
+        @ffi_module_cflags[mi] = flags
+      else
+        @ffi_module_cflags[mi] = @ffi_module_cflags[mi] + ";" + flags
+      end
+      return
+    end
+
+    if dname == "ffi_func"
+      # ffi_func :name, [:arg1, :arg2], :ret
+      if args.length != 3
+        ffi_error(mname, dname, "expected 3 args (name, [arg types], ret type)")
+      end
+      fname = ffi_arg_str(args[0])
+      if fname == ""
+        ffi_error(mname, dname, "first arg must be a symbol (function name)")
+      end
+      if @nd_type[args[1]] != "ArrayNode"
+        ffi_error(mname, dname, "second arg must be an array literal of type symbols")
+      end
+      arg_elems = parse_id_list(@nd_elements[args[1]])
+      arg_toks = ""
+      arg_spec_joined = ""
+      k = 0
+      while k < arg_elems.length
+        spec = ffi_arg_str(arg_elems[k])
+        tok = ffi_type_of(spec)
+        if tok == "" || tok == "void"
+          ffi_error(mname, dname, "unknown or invalid arg type spec '" + spec + "' in " + fname)
+        end
+        if k > 0
+          arg_toks = arg_toks + ";"
+          arg_spec_joined = arg_spec_joined + ";"
+        end
+        arg_toks = arg_toks + tok
+        arg_spec_joined = arg_spec_joined + spec
+        k = k + 1
+      end
+      ret_spec = ffi_arg_str(args[2])
+      ret_tok = ffi_type_of(ret_spec)
+      if ret_tok == ""
+        ffi_error(mname, dname, "unknown return type spec '" + ret_spec + "' in " + fname)
+      end
+      @ffi_func_modules.push(mname)
+      @ffi_func_names.push(fname)
+      @ffi_func_arg_types.push(arg_toks)
+      @ffi_func_ret_types.push(ret_tok)
+      @ffi_func_arg_specs.push(arg_spec_joined)
+      @ffi_func_ret_specs.push(ret_spec)
+      return
+    end
+
+    if dname == "ffi_const"
+      # ffi_const :NAME, <int>. Reuse the existing module-constant
+      # storage so ConstantPathNode (Module::NAME) finds it via the
+      # standard lookup. Names are mangled "<Mod>_<NAME>" to match the
+      # convention set by collect_scoped_constant.
+      if args.length != 2
+        ffi_error(mname, dname, "expected 2 args (name, integer value)")
+      end
+      kname = ffi_arg_str(args[0])
+      if kname == ""
+        ffi_error(mname, dname, "first arg must be a symbol (constant name)")
+      end
+      cname_full = mname + "_" + kname
+      @const_names.push(cname_full)
+      @const_types.push("int")
+      @const_expr_ids.push(args[1])
+      @const_scope_names.push(mname)
+      return
+    end
+
+    if dname == "ffi_buffer"
+      # ffi_buffer :name, <size>
+      if args.length != 2
+        ffi_error(mname, dname, "expected 2 args (name, size)")
+      end
+      bname = ffi_arg_str(args[0])
+      if bname == ""
+        ffi_error(mname, dname, "first arg must be a symbol (buffer name)")
+      end
+      bsize = ffi_arg_int(args[1])
+      if bsize <= 0
+        ffi_error(mname, dname, "second arg must be a positive integer size")
+      end
+      @ffi_buf_modules.push(mname)
+      @ffi_buf_names.push(bname)
+      @ffi_buf_sizes.push(bsize)
+      return
+    end
+
+    if dname == "ffi_read_u32" || dname == "ffi_read_i32" || dname == "ffi_read_ptr"
+      if args.length != 2
+        ffi_error(mname, dname, "expected 2 args (name, byte offset)")
+      end
+      rname = ffi_arg_str(args[0])
+      if rname == ""
+        ffi_error(mname, dname, "first arg must be a symbol (reader name)")
+      end
+      roff = ffi_arg_int(args[1])
+      if roff < 0
+        ffi_error(mname, dname, "second arg must be a non-negative integer offset")
+      end
+      kind = dname[9, dname.length - 9]  # strip "ffi_read_"
+      @ffi_reader_modules.push(mname)
+      @ffi_reader_names.push(rname)
+      @ffi_reader_kinds.push(kind)
+      @ffi_reader_offsets.push(roff)
+      return
+    end
+
+    ffi_error(mname, dname, "unknown FFI declaration")
+  end
+
+  # ---------- FFI inference and call emission ----------
+
+  # Type inference for FFI method calls. Returns the declared Spinel
+  # return type for a ConstantReadNode-receiver call matching a
+  # registered ffi_func / ffi_buffer / ffi_read_*, or "" otherwise.
+  def infer_ffi_call_type(nid, mname, recv)
+    if recv < 0
+      return ""
+    end
+    if @nd_type[recv] != "ConstantReadNode"
+      return ""
+    end
+    rcname = @nd_name[recv]
+    fi = ffi_find_func(rcname, mname)
+    if fi >= 0
+      return @ffi_func_ret_types[fi]
+    end
+    bi = ffi_find_buffer(rcname, mname)
+    if bi >= 0
+      return "ptr"
+    end
+    ri = ffi_find_reader(rcname, mname)
+    if ri >= 0
+      kind = @ffi_reader_kinds[ri]
+      if kind == "ptr"
+        return "ptr"
+      end
+      return "int"
+    end
+    ""
+  end
+
+  # Compile a call to an FFI function/buffer/reader. Returns "" if this
+  # is not an FFI call so the caller can fall through.
+  def compile_ffi_call_expr(nid, mname, rcname)
+    fi = ffi_find_func(rcname, mname)
+    if fi >= 0
+      return compile_ffi_func_call(nid, fi)
+    end
+    bi = ffi_find_buffer(rcname, mname)
+    if bi >= 0
+      return "((void *)" + ffi_buf_c_name(@ffi_buf_modules[bi], @ffi_buf_names[bi]) + ")"
+    end
+    ri = ffi_find_reader(rcname, mname)
+    if ri >= 0
+      return compile_ffi_reader_call(nid, ri)
+    end
+    ""
+  end
+
+  # Emit a direct call to the FFI function indexed by `fi`. Each
+  # argument is cast to its declared C type so type mismatches fail
+  # loudly at compile time and we sidestep -Wconversion noise.
+  def compile_ffi_func_call(nid, fi)
+    fname = @ffi_func_names[fi]
+    arg_specs_str = @ffi_func_arg_specs[fi]
+    arg_specs = []
+    if arg_specs_str != ""
+      arg_specs = arg_specs_str.split(";")
+    end
+    args_id = @nd_arguments[nid]
+    call_args = []
+    if args_id >= 0
+      call_args = get_args(args_id)
+    end
+    if call_args.length != arg_specs.length
+      $stderr.puts "FFI error: " + fname + ": expected " + arg_specs.length.to_s + " args, got " + call_args.length.to_s
+      exit(1)
+    end
+    result = fname + "("
+    k = 0
+    while k < call_args.length
+      if k > 0
+        result = result + ", "
+      end
+      spec = arg_specs[k]
+      ctype = ffi_c_type_of(spec)
+      # `:str` forwards the raw `const char *` directly — casting would
+      # discard `const` and trigger a warning.
+      if spec == "str"
+        result = result + compile_expr(call_args[k])
+      elsif spec == "ptr"
+        result = result + "((void *)" + compile_expr(call_args[k]) + ")"
+      else
+        result = result + "((" + ctype + ")(" + compile_expr(call_args[k]) + "))"
+      end
+      k = k + 1
+    end
+    result = result + ")"
+    # void-returning calls in expression contexts: comma-expression so
+    # the C expression has a value.
+    ret_spec = @ffi_func_ret_specs[fi]
+    if ret_spec == "void"
+      return "(" + result + ", (mrb_int)0)"
+    end
+    result
+  end
+
+  # Emit a field-read from a buffer: Module.<reader_name>(buf).
+  def compile_ffi_reader_call(nid, ri)
+    args_id = @nd_arguments[nid]
+    call_args = []
+    if args_id >= 0
+      call_args = get_args(args_id)
+    end
+    if call_args.length != 1
+      $stderr.puts "FFI error: " + @ffi_reader_names[ri] + ": reader takes exactly 1 arg (buf)"
+      exit(1)
+    end
+    off = @ffi_reader_offsets[ri]
+    kind = @ffi_reader_kinds[ri]
+    ctype = "uint32_t"
+    if kind == "i32"
+      ctype = "int32_t"
+    elsif kind == "ptr"
+      ctype = "void *"
+    end
+    buf_expr = compile_expr(call_args[0])
+    if kind == "ptr"
+      return "((void *)(*((void * *)((char *)" + buf_expr + " + " + off.to_s + "))))"
+    end
+    "((mrb_int)(*((" + ctype + " *)((char *)" + buf_expr + " + " + off.to_s + "))))"
+  end
+
+  # Emit FFI prologue: link/cflag markers, extern prototypes, buffer
+  # storage. Called from generate_code right after the symbol runtime.
+  # No-op when no FFI module was declared.
+  def emit_ffi_externs
+    if @ffi_modules.length == 0
+      return
+    end
+    emit_raw("/* ---- FFI externs ---- */")
+    emit_raw("#include <stdint.h>")
+    emit_raw("#include <stddef.h>")
+    # Link/cflag markers — the spinel wrapper script greps for these.
+    mi = 0
+    while mi < @ffi_modules.length
+      libs_str = @ffi_module_libs[mi]
+      if libs_str != ""
+        libs = libs_str.split(";")
+        li = 0
+        while li < libs.length
+          emit_raw("/* SPINEL_LINK: -l" + libs[li] + " */")
+          li = li + 1
+        end
+      end
+      cflags_str = @ffi_module_cflags[mi]
+      if cflags_str != ""
+        cflags = cflags_str.split(";")
+        ci = 0
+        while ci < cflags.length
+          emit_raw("/* SPINEL_CFLAGS: " + cflags[ci] + " */")
+          ci = ci + 1
+        end
+      end
+      mi = mi + 1
+    end
+    # Extern function prototypes.
+    fi = 0
+    while fi < @ffi_func_names.length
+      ret_spec = @ffi_func_ret_specs[fi]
+      ret_ctype = ffi_c_type_of(ret_spec)
+      arg_spec_joined = @ffi_func_arg_specs[fi]
+      arg_list = ""
+      if arg_spec_joined == ""
+        arg_list = "void"
+      else
+        specs = arg_spec_joined.split(";")
+        k = 0
+        while k < specs.length
+          if k > 0
+            arg_list = arg_list + ", "
+          end
+          arg_list = arg_list + ffi_c_type_of(specs[k])
+          k = k + 1
+        end
+      end
+      emit_raw("extern " + ret_ctype + " " + @ffi_func_names[fi] + "(" + arg_list + ");")
+      fi = fi + 1
+    end
+    # Buffer storage — one static char array per ffi_buffer decl.
+    bi = 0
+    while bi < @ffi_buf_names.length
+      emit_raw("static char " + ffi_buf_c_name(@ffi_buf_modules[bi], @ffi_buf_names[bi]) + "[" + @ffi_buf_sizes[bi].to_s + "];")
+      bi = bi + 1
+    end
+    emit_raw("")
   end
 
   def collect_constant(nid)
@@ -11663,6 +12227,7 @@ class Compiler
     # Emit Symbol intern table (Phase 2 Step 1: infrastructure only).
     collect_sym_names
     emit_sym_runtime
+    emit_ffi_externs
     # Emit program-specific regexp patterns
     if @needs_regexp == 1
       emit_regexp_runtime
@@ -17594,6 +18159,16 @@ class Compiler
     # No receiver
     if recv < 0
       return compile_no_recv_call_expr(nid, mname)
+    end
+
+    # FFI dispatch: receiver is a registered FFI module. Must precede
+    # operator/constructor handlers — FFI function names can collide
+    # with operator-style names (e.g. a C function named `pow`).
+    if @nd_type[recv] == "ConstantReadNode"
+      ffi_res = compile_ffi_call_expr(nid, mname, @nd_name[recv])
+      if ffi_res != ""
+        return ffi_res
+      end
     end
 
     # Lambda calls
