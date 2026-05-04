@@ -22283,7 +22283,31 @@ class Compiler
             j = 0
             while j < writers.length
               if writers[j] == bname
-                return "(" + rc + arrow + sanitize_ivar(bname) + " = " + compile_arg0(nid) + ")"
+                # Box the rhs when the slot is poly so the assignment
+                # type-matches at C level. Without this, an obj-typed
+                # rhs flowing into a poly slot emits
+                # `slot = ptr_value` with a struct LHS — rejected by
+                # C compile. Use a comma expression so the value of
+                # the chain is the *original* rhs (typed), preserving
+                # Ruby's `obj.attr = v` semantics for downstream
+                # consumers like `local = obj.attr = v` or
+                # `puts(obj.attr = v)` where `v`'s static type drives
+                # the formatter / cast.
+                slot_t = cls_ivar_type(ci, "@" + bname)
+                args_id_w = @nd_arguments[nid]
+                arg0_w = compile_arg0(nid)
+                if slot_t == "poly"
+                  arg_t = "int"
+                  if args_id_w >= 0
+                    arg_ids_w = get_args(args_id_w)
+                    if arg_ids_w.length > 0
+                      arg_t = infer_type(arg_ids_w[0])
+                    end
+                  end
+                  boxed = box_value_to_poly(arg_t, arg0_w)
+                  return "(" + rc + arrow + sanitize_ivar(bname) + " = " + boxed + ", " + arg0_w + ")"
+                end
+                return "(" + rc + arrow + sanitize_ivar(bname) + " = " + arg0_w + ")"
               end
               j = j + 1
             end
@@ -26784,7 +26808,22 @@ class Compiler
               if is_value_type_obj(rt) == 1
                 arrow2 = "."
               end
-              emit("  " + rc + arrow2 + sanitize_ivar(bname) + " = " + compile_arg0(nid) + ";")
+              # Box rhs when the slot is poly, same as the
+              # expression-form attr_writer above.
+              slot_t = cls_ivar_type(r_ci, "@" + bname)
+              arg0_w = compile_arg0(nid)
+              if slot_t == "poly"
+                args_id_w = @nd_arguments[nid]
+                arg_t = "int"
+                if args_id_w >= 0
+                  arg_ids_w = get_args(args_id_w)
+                  if arg_ids_w.length > 0
+                    arg_t = infer_type(arg_ids_w[0])
+                  end
+                end
+                arg0_w = box_value_to_poly(arg_t, arg0_w)
+              end
+              emit("  " + rc + arrow2 + sanitize_ivar(bname) + " = " + arg0_w + ";")
               return 1
             end
           end
