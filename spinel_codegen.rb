@@ -22299,28 +22299,27 @@ class Compiler
             while j < writers.length
               if writers[j] == bname
                 # Box the rhs when the slot is poly so the assignment
-                # type-matches at C level. Without this, an obj-typed
-                # rhs flowing into a poly slot emits
-                # `slot = ptr_value` with a struct LHS — rejected by
-                # C compile. Use a comma expression so the value of
-                # the chain is the *original* rhs (typed), preserving
-                # Ruby's `obj.attr = v` semantics for downstream
-                # consumers like `local = obj.attr = v` or
-                # `puts(obj.attr = v)` where `v`'s static type drives
-                # the formatter / cast.
+                # type-matches at C level. Spill the rhs to a typed
+                # temp first via a statement-expression so its side
+                # effects run exactly once: the chain's value must be
+                # the *original* rhs (Ruby's `obj.attr = v` returns
+                # `v`), so without the temp the comma form would
+                # textually substitute `arg0_w` twice and re-execute
+                # any function call inside it.
                 slot_t = cls_ivar_type(ci, "@" + bname)
-                args_id_w = @nd_arguments[nid]
                 arg0_w = compile_arg0(nid)
                 if slot_t == "poly"
                   arg_t = "int"
+                  args_id_w = @nd_arguments[nid]
                   if args_id_w >= 0
                     arg_ids_w = get_args(args_id_w)
                     if arg_ids_w.length > 0
                       arg_t = infer_type(arg_ids_w[0])
                     end
                   end
-                  boxed = box_value_to_poly(arg_t, arg0_w)
-                  return "(" + rc + arrow + sanitize_ivar(bname) + " = " + boxed + ", " + arg0_w + ")"
+                  tmp_w = new_temp
+                  boxed = box_value_to_poly(arg_t, tmp_w)
+                  return "({" + c_type(arg_t) + " " + tmp_w + " = " + arg0_w + "; " + rc + arrow + sanitize_ivar(bname) + " = " + boxed + "; " + tmp_w + ";})"
                 end
                 return "(" + rc + arrow + sanitize_ivar(bname) + " = " + arg0_w + ")"
               end
