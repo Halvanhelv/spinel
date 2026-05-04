@@ -24258,6 +24258,12 @@ class Compiler
     if is_ptr_array_type(arr_type) == 1
       tmp = new_temp
       emit("  sp_PtrArray *" + tmp + " = sp_PtrArray_new();")
+      # Root the freshly-allocated PtrArray before compiling element
+      # expressions. Each element is typically Klass.new(...), and that
+      # call allocates → may trigger GC. Without this, GC sees `tmp` as
+      # unreachable and frees it, leaving a dangling pointer that the
+      # subsequent push (and the eventual ivar assignment) writes through.
+      emit("  SP_GC_ROOT(" + tmp + ");")
       k = 0
       while k < elems.length
         emit("  sp_PtrArray_push(" + tmp + ", " + compile_expr(elems[k]) + ");")
