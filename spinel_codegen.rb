@@ -1639,21 +1639,38 @@ class Compiler
   def cls_ivar_type(ci, iname)
     names = @cls_ivar_names[ci].split(";")
     types = @cls_ivar_types[ci].split(";")
+    own_t = ""
     j = 0
     while j < names.length
       if names[j] == iname
         if j < types.length
-          return types[j]
+          own_t = types[j]
+        else
+          own_t = "int"
         end
-        return "int"
+        break
       end
       j = j + 1
     end
+    parent_t = ""
     if @cls_parents[ci] != ""
       pi = find_class_idx(@cls_parents[ci])
-      if pi >= 0
-        return cls_ivar_type(pi, iname)
+      if pi >= 0 && ivar_in_chain(pi, iname) == 1
+        parent_t = cls_ivar_type(pi, iname)
       end
+    end
+    # The struct embeds parent ivars at the parent's recorded type
+    # (`emit_class_fields` skips own copies that are also in the
+    # parent chain). When the parent has the same ivar, the parent's
+    # type is what the C struct field actually has — so any access
+    # through `self->iv_X` must agree with that, regardless of what
+    # this child's own table happened to record. Defer to the parent
+    # type when both classes know the ivar.
+    if parent_t != ""
+      return parent_t
+    end
+    if own_t != ""
+      return own_t
     end
     "int"
   end
