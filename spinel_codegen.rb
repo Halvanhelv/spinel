@@ -2650,7 +2650,7 @@ class Compiler
     if mname == "strip"
       return "string"
     end
-    if mname == "chomp"
+    if mname == "chomp" || mname == "chop"
       return "string"
     end
     if mname == "include?"
@@ -11119,7 +11119,7 @@ class Compiler
       mname = @nd_name[nid]
       # String methods that always need string helpers
       if mname == "to_s" || mname == "upcase" || mname == "downcase" ||
-         mname == "strip" || mname == "chomp" || mname == "slice" ||
+         mname == "strip" || mname == "chomp" || mname == "chop" || mname == "slice" ||
          mname == "include?" || mname == "start_with?" || mname == "end_with?" ||
          mname == "gsub" || mname == "index" || mname == "sub" || mname == "tr" ||
          mname == "ljust" || mname == "rjust" || mname == "capitalize" ||
@@ -20044,6 +20044,9 @@ class Compiler
     end
     if mname == "chomp"
       return "sp_str_chomp(" + rc + ")"
+    end
+    if mname == "chop"
+      return "sp_str_chop(" + rc + ")"
     end
     if mname == "include?"
       return "sp_str_include(" + rc + ", " + compile_arg0(nid) + ")"
