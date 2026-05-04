@@ -15057,6 +15057,27 @@ class Compiler
                 emit_raw("  sp_PtrArray *" + tmp_iv + " = sp_PtrArray_new();")
                 emit_raw("  { mrb_int _n = " + cnt_e_iv + "; for (mrb_int _i = 0; _i < _n; _i++) sp_PtrArray_push(" + tmp_iv + ", NULL); }")
                 emit_raw("  " + self_arrow + ivar + " = " + tmp_iv + ";")
+              elsif ivt == "poly_array" && @nd_type[expr_id_iv] == "ArrayNode"
+                # Non-empty array literal `[a, b, ...]` going into a
+                # poly_array slot. compile_array_literal infers a typed
+                # storage (ptr_array of one class for homogeneous obj
+                # literals, etc.) — emit a fresh PolyArray with each
+                # element boxed instead.
+                @needs_gc = 1
+                @needs_rb_value = 1
+                tmp_iv = new_temp
+                emit_raw("  sp_PolyArray *" + tmp_iv + " = sp_PolyArray_new();")
+                elems_iv = parse_id_list(@nd_elements[expr_id_iv])
+                ek = 0
+                while ek < elems_iv.length
+                  eid = elems_iv[ek]
+                  et = infer_type(eid)
+                  ev = compile_expr(eid)
+                  ebox = et == "poly" ? ev : box_value_to_poly(et, ev)
+                  emit_raw("  sp_PolyArray_push(" + tmp_iv + ", " + ebox + ");")
+                  ek = ek + 1
+                end
+                emit_raw("  " + self_arrow + ivar + " = " + tmp_iv + ";")
               else
                 # Issue #130: same poly-slot boxing as the general
                 # InstanceVariableWriteNode emit path (compile_expr branch).
@@ -24728,6 +24749,30 @@ class Compiler
         tmp_arr = new_temp
         emit("  sp_PtrArray *" + tmp_arr + " = sp_PtrArray_new();")
         emit("  { mrb_int _n = " + cnt_e + "; for (mrb_int _i = 0; _i < _n; _i++) sp_PtrArray_push(" + tmp_arr + ", NULL); }")
+        emit("  " + self_arrow + sanitize_ivar(iname) + " = " + tmp_arr + ";")
+        return
+      end
+      # Non-empty array literal `[a, b, ...]` going into a poly_array
+      # slot. compile_array_literal infers a typed array (ptr_array of
+      # one class for homogeneous obj literals, etc.) and emits the
+      # corresponding storage — but the slot was widened to poly_array,
+      # so a typed-array-pointer assignment would fail the C compile.
+      # Emit a fresh PolyArray with each element boxed to sp_RbVal.
+      if ivt == "poly_array" && @nd_type[expr_id] == "ArrayNode"
+        @needs_gc = 1
+        @needs_rb_value = 1
+        tmp_arr = new_temp
+        emit("  sp_PolyArray *" + tmp_arr + " = sp_PolyArray_new();")
+        elems_pa = parse_id_list(@nd_elements[expr_id])
+        ek = 0
+        while ek < elems_pa.length
+          eid = elems_pa[ek]
+          et = infer_type(eid)
+          ev = compile_expr(eid)
+          ebox = et == "poly" ? ev : box_value_to_poly(et, ev)
+          emit("  sp_PolyArray_push(" + tmp_arr + ", " + ebox + ");")
+          ek = ek + 1
+        end
         emit("  " + self_arrow + sanitize_ivar(iname) + " = " + tmp_arr + ";")
         return
       end
