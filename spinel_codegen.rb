@@ -17509,7 +17509,15 @@ class Compiler
       # outer write zeroes the ivar.
       op = @nd_binop[nid]
       val = compile_expr(@nd_expression[nid])
-      return "(" + fiber_var_ref(@nd_name[nid]) + " " + op + "= " + val + ")"
+      vref = fiber_var_ref(@nd_name[nid])
+      vt = find_var_type(@nd_name[nid])
+      # Obj-typed local: dispatch via user-defined operator instead
+      # of emitting raw C `OP=` (pointer arithmetic on an obj slot).
+      disp = obj_op_dispatch_expr(vt, vref, op, val)
+      if disp != ""
+        return "(" + vref + " = " + disp + ")"
+      end
+      return "(" + vref + " " + op + "= " + val + ")"
     end
     if t == "LocalVariableOrWriteNode"
       # `local ||= expr` in expression context. Lower as
@@ -24542,6 +24550,32 @@ class Compiler
     ""
   end
 
+  # `recv OP rhs` lowering for an obj-typed receiver. When the
+  # receiver's class (or an ancestor) defines `op` as a user method,
+  # returns the C expression `sp_<owner>_<op>(<recv_c>, <rhs_c>)`.
+  # Returns "" when no dispatch applies (caller falls back to its
+  # inline path, or to `warn_unresolved_call`).
+  def obj_op_dispatch_expr(recv_t, recv_c, op, rhs_c)
+    if is_obj_type(recv_t) == 0
+      return ""
+    end
+    cname = recv_t[4, recv_t.length - 4]
+    ci = find_class_idx(cname)
+    if ci < 0
+      return ""
+    end
+    owner = find_method_owner(ci, op)
+    if owner == ""
+      warn_unresolved_call(op, "obj_" + cname)
+      return ""
+    end
+    cast = ""
+    if owner != cname
+      cast = "(sp_" + owner + " *)"
+    end
+    "sp_" + owner + "_" + sanitize_name(op) + "(" + cast + recv_c + ", " + rhs_c + ")"
+  end
+
   def compile_if_expr(nid)
     cond = compile_cond_expr(@nd_predicate[nid])
     then_val = "0"
@@ -25049,6 +25083,14 @@ class Compiler
       val = compile_expr(@nd_expression[nid])
       vref = fiber_var_ref(@nd_name[nid])
       vt = find_var_type(@nd_name[nid])
+      # Same desugaring as the ivar form: `local OP= rhs` is
+      # `local = local OP rhs`. Dispatch through the user-defined
+      # operator when the local is obj-typed.
+      disp = obj_op_dispatch_expr(vt, vref, op, val)
+      if disp != ""
+        emit("  " + vref + " = " + disp + ";")
+        return
+      end
       if vt == "bigint"
         at = infer_type(@nd_expression[nid])
         barg = at == "bigint" ? val : "sp_bigint_new_int(" + val + ")"
@@ -25252,6 +25294,19 @@ class Compiler
       op = @nd_binop[nid]
       val = compile_expr(@nd_expression[nid])
       lhs = ivar_lhs(@nd_name[nid])
+      ivar_t = ""
+      if @current_class_idx >= 0
+        ivar_t = cls_ivar_type(@current_class_idx, @nd_name[nid])
+      end
+      # `@x OP= v` desugars to `@x = @x OP v`. When @x is obj-typed
+      # and the class defines OP, dispatch to the user method
+      # instead of emitting a raw C `+=` (which on a pointer is
+      # silently miscompiled as pointer arithmetic).
+      disp = obj_op_dispatch_expr(ivar_t, lhs, op, val)
+      if disp != ""
+        emit("  " + lhs + " = " + disp + ";")
+        return
+      end
       if op == "+"
         emit("  " + lhs + " += " + val + ";")
       end
