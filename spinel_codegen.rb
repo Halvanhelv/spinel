@@ -8983,7 +8983,7 @@ class Compiler
                   # them — issue #35.
                   called = "".split(",")
                   collect_param_methods(bid, pnames[pk], called)
-                  if called.length > 0
+                  if called.length > 0 && called_methods_only_on_container_builtins(called) == 0
                     ci2 = 0
                     best = -1
                     while ci2 < @cls_names.length
@@ -9022,7 +9022,7 @@ class Compiler
             if ptypes[pk] == "int"
               called = "".split(",")
               collect_param_methods(bid, pnames[pk], called)
-              if called.length > 0
+              if called.length > 0 && called_methods_only_on_container_builtins(called) == 0
                 ci2 = 0
                 best = -1
                 while ci2 < @cls_names.length
@@ -9447,6 +9447,44 @@ class Compiler
     k = 0
     while k < called.length
       if class_has_method(ci, called[k]) == 0
+        return 0
+      end
+      k = k + 1
+    end
+    return 1
+  end
+
+  # Issue #266: when picking a user class for a parameter from "what
+  # methods does the body call on it", reject sets that consist only
+  # of methods also available on built-in container types
+  # (int_array / float_array / str_array / sym_array / ptr_array).
+  # Otherwise a user class that happens to define `def length` (with
+  # nothing else) gets picked for any param the body calls `.length`
+  # on — even when the actual call site passes an IntArray. The body
+  # signal is too weak to commit; leave the param at "int" so call-
+  # site type unification (scan_new_calls) decides.
+  def called_methods_only_on_container_builtins(called)
+    k = 0
+    while k < called.length
+      m = called[k]
+      if m != "length" && m != "size" && m != "[]" && m != "[]=" &&
+         m != "<<" && m != "push" && m != "pop" &&
+         m != "shift" && m != "unshift" &&
+         m != "first" && m != "last" &&
+         m != "each" && m != "each_with_index" && m != "each_index" &&
+         m != "map" && m != "map!" && m != "collect" &&
+         m != "select" && m != "reject" && m != "filter" &&
+         m != "count" && m != "include?" &&
+         m != "empty?" && m != "any?" && m != "all?" && m != "none?" &&
+         m != "sort" && m != "sort!" && m != "reverse" && m != "reverse!" &&
+         m != "join" && m != "to_a" && m != "to_s" && m != "inspect" &&
+         m != "find" && m != "find_index" &&
+         m != "sum" && m != "min" && m != "max" && m != "minmax" &&
+         m != "concat" && m != "flatten" && m != "uniq" && m != "compact" &&
+         m != "slice" && m != "fetch" && m != "dig" &&
+         m != "freeze" && m != "frozen?" && m != "dup" && m != "clone" &&
+         m != "hash" && m != "==" && m != "!=" && m != "eql?" && m != "equal?" &&
+         m != "nil?" && m != "is_a?" && m != "kind_of?" && m != "respond_to?"
         return 0
       end
       k = k + 1
