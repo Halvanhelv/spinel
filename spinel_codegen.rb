@@ -17099,10 +17099,12 @@ class Compiler
       return compile_unless_expr(nid)
     end
     if t == "AndNode"
-      lt = infer_type(@nd_left[nid])
-      rt = infer_type(@nd_right[nid])
-      le = compile_expr(@nd_left[nid])
-      re = compile_expr(@nd_right[nid])
+      left_nid = @nd_left[nid]
+      right_nid = @nd_right[nid]
+      lt = infer_type(left_nid)
+      rt = infer_type(right_nid)
+      le = compile_expr(left_nid)
+      re = compile_expr(right_nid)
       le_t = lt == "poly" ? "sp_poly_truthy(" + le + ")" : le
       re_t = rt == "poly" ? "sp_poly_truthy(" + re + ")" : re
       return "(" + le_t + " && " + re_t + ")"
