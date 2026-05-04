@@ -21885,7 +21885,27 @@ class Compiler
       cname = @cls_names[i]
       midx = cls_find_method_direct(i, mname)
       if midx >= 0
-        call_expr = "sp_" + cname + "_" + sanitize_name(mname) + "((sp_" + cname + " *)" + recv_tmp + ".v.p" + arg_strs + ")"
+        # Pad with default-typed zeros when target method has more
+        # params than the call site supplied — same shape that C
+        # demands at every fixed-arity call. Per-arm padding lets us
+        # poly-dispatch `recv.m()` even when one of the candidate
+        # classes has a method that takes positional defaults.
+        arm_arg_strs = arg_strs
+        all_ptypes = @cls_meth_ptypes[i].split("|")
+        if midx < all_ptypes.length
+          arm_ptypes = all_ptypes[midx].split(",")
+          pk = arg_compiled.length
+          while pk < arm_ptypes.length
+            pad = "0"
+            pt_base = base_type(arm_ptypes[pk])
+            if pt_base == "poly"
+              pad = "sp_box_nil()"
+            end
+            arm_arg_strs = arm_arg_strs + ", " + pad
+            pk = pk + 1
+          end
+        end
+        call_expr = "sp_" + cname + "_" + sanitize_name(mname) + "((sp_" + cname + " *)" + recv_tmp + ".v.p" + arm_arg_strs + ")"
         rhs = call_expr
         if is_poly_ret == 1
           this_rt = cls_method_return(i, mname)
