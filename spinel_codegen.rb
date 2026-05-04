@@ -68,6 +68,9 @@ class Compiler
     @nd_constant_path = []
     @nd_superclass = []
     @nd_rest = []
+    # ParametersNode#keyword_rest -- holds a KeywordRestParameterNode
+    # (def f(**kw)) or NoKeywordsParameterNode (def f(**nil)).
+    @nd_keyword_rest = []
     @nd_rescue_clause = []
     @nd_ensure_clause = []
     @nd_expression = []
@@ -89,6 +92,11 @@ class Compiler
     @nd_exceptions = "".split(",")
     @nd_targets = "".split(",")
     @nd_rights = "".split(",")
+    # ParametersNode#posts -- required params after the splat
+    # (def f(*r, x, y) → posts = [x, y]). Currently unused by codegen
+    # (post-rest parameters aren't observed in test/), but the parser
+    # emits the field so future tests get a proper AST.
+    @nd_posts = "".split(",")
 
     @nd_count = 0
     @root_id = 0
@@ -421,6 +429,7 @@ class Compiler
     @nd_constant_path.push(-1)
     @nd_superclass.push(-1)
     @nd_rest.push(-1)
+    @nd_keyword_rest.push(-1)
     @nd_rescue_clause.push(-1)
     @nd_ensure_clause.push(-1)
     @nd_expression.push(-1)
@@ -440,6 +449,7 @@ class Compiler
     @nd_exceptions.push("")
     @nd_targets.push("")
     @nd_rights.push("")
+    @nd_posts.push("")
     @nd_count = @nd_count + 1
     nid
   end
@@ -663,6 +673,9 @@ class Compiler
     if field == "rest"
       @nd_rest[nid] = ref_id
     end
+    if field == "keyword_rest"
+      @nd_keyword_rest[nid] = ref_id
+    end
     if field == "rescue_clause"
       @nd_rescue_clause[nid] = ref_id
     end
@@ -743,6 +756,9 @@ class Compiler
     end
     if field == "rights"
       @nd_rights[nid] = ids_str
+    end
+    if field == "posts"
+      @nd_posts[nid] = ids_str
     end
   end
 
@@ -6146,6 +6162,36 @@ class Compiler
         result = result + @nd_name[rest]
       end
     end
+    # Post-rest required params: `def f(*r, x, y)` -> `x, y` come AFTER
+    # rest in the AST's `posts` slot. Same shape as `requireds` (each
+    # entry is a RequiredParameterNode); flow them straight through.
+    posts = parse_id_list(@nd_posts[params])
+    k = 0
+    while k < posts.length
+      if @nd_type[posts[k]] == "RequiredParameterNode"
+        if result != ""
+          result = result + ","
+        end
+        result = result + @nd_name[posts[k]]
+      end
+      k = k + 1
+    end
+    # Keyword rest (`**kw`). Anonymous `**` synthesizes `__anon_kwrest`.
+    # NoKeywordsParameterNode (`**nil`) is skipped here -- it doesn't
+    # carry a slot.
+    kwrest = @nd_keyword_rest[params]
+    if kwrest >= 0
+      if @nd_type[kwrest] == "KeywordRestParameterNode"
+        if result != ""
+          result = result + ","
+        end
+        kn = @nd_name[kwrest]
+        if kn == ""
+          kn = "__anon_kwrest"
+        end
+        result = result + kn
+      end
+    end
     # Block parameter (&block)
     blk = @nd_block[params]
     if blk >= 0
@@ -6239,6 +6285,29 @@ class Compiler
         result = result + "int_array"
       end
     end
+    # Post-rest required params (`def f(*r, x, y)`).
+    posts = parse_id_list(@nd_posts[params])
+    k = 0
+    while k < posts.length
+      if @nd_type[posts[k]] == "RequiredParameterNode"
+        if result != ""
+          result = result + ","
+        end
+        result = result + "int"
+      end
+      k = k + 1
+    end
+    # Keyword rest (**kw). Spinel kwargs use symbol keys (matches
+    # `f(a: 1)` keyword hash construction), so the slot is sym_poly_hash.
+    kwrest = @nd_keyword_rest[params]
+    if kwrest >= 0
+      if @nd_type[kwrest] == "KeywordRestParameterNode"
+        if result != ""
+          result = result + ","
+        end
+        result = result + "sym_poly_hash"
+      end
+    end
     # Block parameter (&block)
     blk = @nd_block[params]
     if blk >= 0
@@ -6299,6 +6368,29 @@ class Compiler
     rest = @nd_rest[params]
     if rest >= 0
       if @nd_type[rest] == "RestParameterNode"
+        if result != ""
+          result = result + ","
+        end
+        result = result + "-1"
+      end
+    end
+    # Post-rest required params (`def f(*r, x, y)`) — no defaults.
+    posts = parse_id_list(@nd_posts[params])
+    k = 0
+    while k < posts.length
+      if @nd_type[posts[k]] == "RequiredParameterNode"
+        if result != ""
+          result = result + ","
+        end
+        result = result + "-1"
+      end
+      k = k + 1
+    end
+    # Keyword rest (**kw): no compile-time default, slot stays NULL
+    # until the caller provides a hash.
+    kwrest = @nd_keyword_rest[params]
+    if kwrest >= 0
+      if @nd_type[kwrest] == "KeywordRestParameterNode"
         if result != ""
           result = result + ","
         end
