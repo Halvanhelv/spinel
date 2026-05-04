@@ -126,6 +126,10 @@ class Compiler
     # "best-guess inference"; only when both old and new writes are
     # definite-literal do we widen to poly on disagreement.
     @cls_ivar_init_definite = "".split(",")
+    # Top-level (script-scope) ivars. Lowered to `static` file-scope
+    # globals because `main()` / top-level `def` bodies have no `self`.
+    @toplevel_ivar_names = "".split(",")
+    @toplevel_ivar_types = "".split(",")
     @cls_meth_names = "".split(",")
     @cls_meth_params = "".split(",")
     @cls_meth_ptypes = "".split(",")
@@ -1749,6 +1753,10 @@ class Compiler
     if t == "InstanceVariableReadNode"
       if @current_class_idx >= 0
         return cls_ivar_type(@current_class_idx, @nd_name[nid])
+      end
+      tit = toplevel_ivar_type(@nd_name[nid])
+      if tit != ""
+        return tit
       end
       return "int"
     end
@@ -4694,6 +4702,70 @@ class Compiler
       return "iv_" + name[1, name.length - 1]
     end
     "iv_" + name
+  end
+
+  def toplevel_ivar_type(name)
+    i = 0
+    while i < @toplevel_ivar_names.length
+      if @toplevel_ivar_names[i] == name
+        return @toplevel_ivar_types[i]
+      end
+      i = i + 1
+    end
+    ""
+  end
+
+  # `iv_<name>` at toplevel (no self), `self->iv_<name>` inside a class.
+  def ivar_lhs(name)
+    if @current_class_idx < 0 && toplevel_ivar_type(name) != ""
+      return sanitize_ivar(name)
+    end
+    self_arrow + sanitize_ivar(name)
+  end
+
+  def register_toplevel_ivar(name, type)
+    if type == ""
+      type = "int"
+    end
+    i = 0
+    while i < @toplevel_ivar_names.length
+      if @toplevel_ivar_names[i] == name
+        cur = @toplevel_ivar_types[i]
+        if (cur == "int" || cur == "nil") && type != "int" && type != "nil"
+          @toplevel_ivar_types[i] = type
+        end
+        return
+      end
+      i = i + 1
+    end
+    @toplevel_ivar_names.push(name)
+    @toplevel_ivar_types.push(type)
+  end
+
+  # Walk the program for ivar nodes at script scope. Class/Module bodies
+  # are skipped — their ivars belong to the enclosing class. Top-level
+  # `def` bodies ARE walked: in Ruby, `def foo; @x; end` at script scope
+  # shares the same `main` ivar that bare `@x` writes.
+  def scan_toplevel_ivars(nid)
+    if nid < 0 || nid >= @nd_count
+      return
+    end
+    t = @nd_type[nid]
+    if t == "ClassNode" || t == "ModuleNode" || t == "SingletonClassNode"
+      return
+    end
+    if t == "InstanceVariableWriteNode"
+      register_toplevel_ivar(@nd_name[nid], infer_ivar_init_type(@nd_expression[nid]))
+    elsif t == "InstanceVariableReadNode" || t == "InstanceVariableTargetNode" || t == "InstanceVariableOperatorWriteNode" || t == "InstanceVariableAndWriteNode" || t == "InstanceVariableOrWriteNode"
+      register_toplevel_ivar(@nd_name[nid], "int")
+    end
+    cs = []
+    push_child_ids(nid, cs)
+    k = 0
+    while k < cs.length
+      scan_toplevel_ivars(cs[k])
+      k = k + 1
+    end
   end
 
   def sanitize_gvar(name)
@@ -12235,6 +12307,8 @@ class Compiler
     emit_class_structs
     emit_raw("/*TUPLE_INSERT_POINT*/")
     emit_gc_scan_functions
+    scan_toplevel_ivars(@root_id)
+    emit_toplevel_ivar_decls
     # Emit global variable declarations before functions
     gi = 0
     while gi < @gvar_names.length
@@ -16490,6 +16564,26 @@ class Compiler
     end
   end
 
+  def emit_toplevel_ivar_decls
+    i = 0
+    while i < @toplevel_ivar_names.length
+      type = @toplevel_ivar_types[i]
+      cname = sanitize_ivar(@toplevel_ivar_names[i])
+      ct = c_type(type)
+      if type == "string"
+        emit_raw("static " + ct + " " + cname + " = \"\";")
+      elsif type == "float"
+        emit_raw("static " + ct + " " + cname + " = 0.0;")
+      elsif type_is_pointer(type) == 1
+        emit_raw("static " + ct + " " + cname + " = NULL;")
+        @needs_gc = 1
+      else
+        emit_raw("static " + ct + " " + cname + " = 0;")
+      end
+      i = i + 1
+    end
+  end
+
   # ---- Main emission ----
   def emit_main
     stmts = get_body_stmts(@root_id)
@@ -16508,6 +16602,15 @@ class Compiler
     @in_main = 1
     @indent = 1
     push_scope
+    # Pointer-typed toplevel ivars get rooted before SAVE so they live
+    # for the program's lifetime.
+    ti = 0
+    while ti < @toplevel_ivar_names.length
+      if type_is_pointer(@toplevel_ivar_types[ti]) == 1
+        emit("  _sp_gc_root_push((void**)&" + sanitize_ivar(@toplevel_ivar_names[ti]) + ");")
+      end
+      ti = ti + 1
+    end
     if @needs_gc == 1
       emit("  SP_GC_SAVE();")
     end
@@ -16948,7 +17051,7 @@ class Compiler
         end
         mi3 = mi3 + 1
       end
-      return self_arrow + sanitize_ivar(@nd_name[nid])
+      return ivar_lhs(@nd_name[nid])
     end
     if t == "InstanceVariableWriteNode"
       # Issue #130: same poly-slot boxing as the statement-form emit.
@@ -16979,7 +17082,7 @@ class Compiler
         end
         mi3 = mi3 + 1
       end
-      return "(" + self_arrow + sanitize_ivar(iname_w) + " = " + val + ")"
+      return "(" + ivar_lhs(iname_w) + " = " + val + ")"
     end
     if t == "LocalVariableWriteNode"
       # `local = expr` used as an expression (e.g. inside a chained
@@ -24572,19 +24675,19 @@ class Compiler
         mi3 = mi3 + 1
       end
       if mod_ivar == 0
-        emit("  " + self_arrow + sanitize_ivar(iname) + " = " + val + ";")
+        emit("  " + ivar_lhs(iname) + " = " + val + ";")
       end
       return
     end
     if t == "InstanceVariableOperatorWriteNode"
       op = @nd_binop[nid]
       val = compile_expr(@nd_expression[nid])
-      ivar = sanitize_ivar(@nd_name[nid])
+      lhs = ivar_lhs(@nd_name[nid])
       if op == "+"
-        emit("  " + self_arrow + ivar + " += " + val + ";")
+        emit("  " + lhs + " += " + val + ";")
       end
       if op == "-"
-        emit("  " + self_arrow + ivar + " -= " + val + ";")
+        emit("  " + lhs + " -= " + val + ";")
       end
       return
     end
