@@ -23026,6 +23026,11 @@ class Compiler
       # boxes the pointer via SP_BUILTIN_RANGE.
       return "sp_box_range(" + val + ")"
     end
+    if at == "time"
+      # Same shape as range: sp_Time is wider than sp_RbVal's union,
+      # heap-copy via sp_box_time and box through SP_BUILTIN_TIME.
+      return "sp_box_time(" + val + ")"
+    end
     if is_obj_type(at) == 1
       cname = at[4, at.length - 4]
       ci = find_class_idx(cname)

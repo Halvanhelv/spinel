@@ -691,6 +691,7 @@ typedef uint64_t sp_RbValue;
 #define SP_BUILTIN_SYM_ARRAY    SP_BUILTIN_ARRAY_OF(SP_TAG_SYM)   /* -7 */
 #define SP_BUILTIN_PROC         (-9)                              /* sp_Proc *, distinct from any tag-based id */
 #define SP_BUILTIN_RANGE        (-10)                             /* sp_Range *, heap copy of stack-typed sp_Range when crossing into poly */
+#define SP_BUILTIN_TIME         (-11)                             /* sp_Time *, heap copy of stack-typed sp_Time when crossing into poly */
 typedef struct { int tag; int cls_id; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; } v; } sp_RbVal;
 static sp_RbVal sp_box_int(mrb_int v) { sp_RbVal r; r.tag = SP_TAG_INT; r.cls_id = 0; r.v.i = v; return r; }
 static sp_RbVal sp_box_str(const char *v) { sp_RbVal r; r.tag = SP_TAG_STR; r.cls_id = 0; r.v.s = v; return r; }
@@ -725,6 +726,29 @@ static const char *sp_Range_inspect(sp_Range *r) {
   snprintf(buf, 48, "%lld..%lld", (long long)r->first, (long long)r->last);
   return buf;
 }
+/* Same heap-box rationale as sp_Range: sp_Time is 12+ bytes (tv_sec +
+   tv_nsec), wider than sp_RbVal's 8-byte union. No internal pointers
+   so no scanner is needed. */
+static sp_RbVal sp_box_time(sp_Time v) {
+  sp_Time *p = (sp_Time *)sp_gc_alloc(sizeof(sp_Time), NULL, NULL);
+  *p = v;
+  return sp_box_obj(p, SP_BUILTIN_TIME);
+}
+static const char *sp_Time_inspect(sp_Time *t) {
+  /* "YYYY-MM-DD HH:MM:SS UTC" form via gmtime. CRuby uses localtime
+     with a numeric tz offset, but the spinel runtime keeps Time
+     timezone-naive — UTC is the unambiguous choice that doesn't need
+     the platform's tzdata. Buffer is 32 chars + a margin. */
+  char *buf = sp_str_alloc_raw(40);
+  time_t sec = (time_t)t->tv_sec;
+  struct tm *tm_ = gmtime(&sec);
+  if (tm_) {
+    strftime(buf, 40, "%Y-%m-%d %H:%M:%S UTC", tm_);
+  } else {
+    snprintf(buf, 40, "Time(%lld)", (long long)t->tv_sec);
+  }
+  return buf;
+}
 static void sp_poly_puts(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: printf("%lld\n", (long long)v.v.i); break;
@@ -745,6 +769,7 @@ static void sp_poly_puts(sp_RbVal v) {
         case SP_BUILTIN_SYM_ARRAY: puts(sp_SymArray_inspect((sp_IntArray *)v.v.p)); break;
         case SP_BUILTIN_PTR_ARRAY: puts(sp_PtrArray_inspect((sp_PtrArray *)v.v.p)); break;
         case SP_BUILTIN_RANGE: puts(sp_Range_inspect((sp_Range *)v.v.p)); break;
+        case SP_BUILTIN_TIME: puts(sp_Time_inspect((sp_Time *)v.v.p)); break;
         default: printf("#<Object:0x%p>\n", v.v.p); break;
       }
       break;
@@ -770,6 +795,7 @@ static const char *sp_poly_to_s(sp_RbVal v) {
         case SP_BUILTIN_SYM_ARRAY: return sp_SymArray_inspect((sp_IntArray *)v.v.p);
         case SP_BUILTIN_PTR_ARRAY: return sp_PtrArray_inspect((sp_PtrArray *)v.v.p);
         case SP_BUILTIN_RANGE: return sp_Range_inspect((sp_Range *)v.v.p);
+        case SP_BUILTIN_TIME: return sp_Time_inspect((sp_Time *)v.v.p);
         default: return sp_str_empty;
       }
     default: return sp_str_empty;
