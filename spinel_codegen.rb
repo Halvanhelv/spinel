@@ -2758,6 +2758,9 @@ class Compiler
       end
       return "int"
     end
+    if mname == "pred"
+      return "int"
+    end
     if mname == "getbyte"
       return "int"
     end
@@ -20624,6 +20627,9 @@ class Compiler
     end
     if mname == "succ" || mname == "next"
       return "((" + rc + ") + 1)"
+    end
+    if mname == "pred"
+      return "((" + rc + ") - 1)"
     end
     if mname == "itself"
       return rc
