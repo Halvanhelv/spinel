@@ -1,0 +1,5 @@
+pair=[1, 2] attempt=1
+pair=[2, 3] attempt=5
+pair=[3, 4] attempt=6
+pair=[4, 5] attempt=7
+total=7
