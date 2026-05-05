@@ -1061,6 +1061,18 @@ static int flatten(pm_node_t *node) {
     out_add("R %d statements %d", id, stmts_id);
     break;
   }
+  case PM_ALIAS_GLOBAL_VARIABLE_NODE: {
+    /* `alias $copy $orig` -- compile-time gvar aliasing. The
+       new_name and old_name slots are GlobalVariableReadNodes whose
+       `name` field carries the literal $-prefixed name. Spinel
+       resolves $copy to $orig everywhere the alias is in scope, so
+       the C output uses one storage slot for both. */
+    pm_alias_global_variable_node_t *n = (pm_alias_global_variable_node_t *)node;
+    N("AliasGlobalVariableNode");
+    R("new_name", n->new_name);
+    R("old_name", n->old_name);
+    break;
+  }
   default: {
     /* Fallback: emit unknown node type */
     char buf[64];
