@@ -444,6 +444,13 @@ static int flatten(pm_node_t *node) {
     R("value", n->value);
     break;
   }
+  case PM_GLOBAL_VARIABLE_AND_WRITE_NODE: {
+    pm_global_variable_and_write_node_t *n = (pm_global_variable_and_write_node_t *)node;
+    N("GlobalVariableAndWriteNode");
+    NAME("name", n->name);
+    R("value", n->value);
+    break;
+  }
   case PM_GLOBAL_VARIABLE_TARGET_NODE: {
     pm_global_variable_target_node_t *n = (pm_global_variable_target_node_t *)node;
     N("GlobalVariableTargetNode");
