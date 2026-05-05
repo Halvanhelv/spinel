@@ -10387,6 +10387,80 @@ class Compiler
   # on — even when the actual call site passes an IntArray. The body
   # signal is too weak to commit; leave the param at "int" so call-
   # site type unification (scan_new_calls) decides.
+  # Issue #305: is `mname` a method that's also defined on a primitive
+  # type (String / Array / Hash / Integer) AND on at least one user
+  # class? When both are true, an int-typed receiver shouldn't pick
+  # the user class on the auto-cast fallback path — that's almost
+  # certainly the wrong dispatch (a param that flowed in as mrb_int
+  # because no upstream call site pinned it, with the user's actual
+  # intent being the primitive method).
+  def primitive_method_shared_with_user_class(mname)
+    return 0 unless is_primitive_shared_method(mname) == 1
+    # Cheap guard: the user must define a class with this method.
+    ci2 = 0
+    while ci2 < @cls_names.length
+      mns = @cls_meth_names[ci2].split(";")
+      jj = 0
+      while jj < mns.length
+        if mns[jj] == mname
+          return 1
+        end
+        jj = jj + 1
+      end
+      ci2 = ci2 + 1
+    end
+    0
+  end
+
+  # Whitelist of methods defined on built-in primitive types that
+  # commonly collide with user-class method names. Mirrors (and
+  # delegates the surface to) the predicate
+  # `called_methods_only_on_container_builtins` introduced for
+  # issue #302 — same intent, applied at a different decision site.
+  def is_primitive_shared_method(m)
+    if m == "length" || m == "size" || m == "[]" || m == "[]=" ||
+       m == "<<" || m == "push" || m == "pop" ||
+       m == "shift" || m == "unshift" ||
+       m == "first" || m == "last" ||
+       m == "each" || m == "each_with_index" || m == "each_index" ||
+       m == "map" || m == "map!" || m == "collect" ||
+       m == "select" || m == "reject" || m == "filter" ||
+       m == "count" || m == "include?" ||
+       m == "empty?" || m == "any?" || m == "all?" || m == "none?" ||
+       m == "sort" || m == "sort!" || m == "reverse" || m == "reverse!" ||
+       m == "join" || m == "to_a" || m == "to_s" || m == "inspect" ||
+       m == "find" || m == "find_index" ||
+       m == "sum" || m == "min" || m == "max" || m == "minmax" ||
+       m == "concat" || m == "flatten" || m == "uniq" || m == "compact" ||
+       m == "slice" || m == "fetch" || m == "dig" ||
+       m == "freeze" || m == "frozen?" || m == "dup" || m == "clone" ||
+       m == "hash" || m == "class" || m == "tap" ||
+       m == "==" || m == "!=" || m == "eql?" || m == "equal?" ||
+       m == "nil?" || m == "is_a?" || m == "kind_of?" || m == "respond_to?" ||
+       # String / Hash / Integer-shared (kept in sync with the
+       # extension to called_methods_only_on_container_builtins).
+       m == "index" || m == "rindex" || m == "match" || m == "match?" ||
+       m == "scan" || m == "sub" || m == "gsub" || m == "tr" ||
+       m == "split" || m == "chars" || m == "bytes" || m == "lines" ||
+       m == "chomp" || m == "chop" || m == "strip" || m == "lstrip" || m == "rstrip" ||
+       m == "upcase" || m == "downcase" || m == "capitalize" || m == "swapcase" ||
+       m == "start_with?" || m == "end_with?" ||
+       m == "to_i" || m == "to_f" || m == "to_sym" || m == "to_str" ||
+       m == "chr" || m == "ord" || m == "bytesize" || m == "=~" ||
+       m == "ljust" || m == "rjust" || m == "center" || m == "replace" || m == "clear" ||
+       m == "keys" || m == "values" || m == "each_pair" || m == "each_key" || m == "each_value" ||
+       m == "has_key?" || m == "has_value?" || m == "key?" || m == "value?" ||
+       m == "merge" || m == "merge!" || m == "invert" ||
+       m == "transform_keys" || m == "transform_values" || m == "delete" ||
+       m == "succ" || m == "next" || m == "pred" || m == "digits" || m == "bit_length" ||
+       m == "times" || m == "upto" || m == "downto" || m == "step" ||
+       m == "abs" || m == "divmod" || m == "gcd" || m == "lcm" ||
+       m == "even?" || m == "odd?" || m == "zero?" || m == "positive?" || m == "negative?"
+      return 1
+    end
+    0
+  end
+
   def called_methods_only_on_container_builtins(called)
     k = 0
     while k < called.length
@@ -23848,7 +23922,20 @@ class Compiler
 
   def compile_int_class_fallback_expr(nid, mname, rc, recv_type)
     # Fallback: if receiver is int (e.g. from IntArray get) but method belongs to a class,
-    # cast the int to the appropriate class pointer and dispatch
+    # cast the int to the appropriate class pointer and dispatch.
+    #
+    # Issue #305: but NOT when `mname` is a method that's also defined
+    # on a primitive type (String, Array, Hash, Integer, etc.). The
+    # int-to-class cast here would silently pick the first user class
+    # that happens to define the same method name — exactly the
+    # `String#index` vs `ArticlesController#index` collision the issue
+    # reports. A param typed `mrb_int` because it wasn't pinned upstream
+    # is NOT the IntArray-of-pointers shape this fallback was written
+    # for; refuse to pick a user class and let compile_call_expr's
+    # unresolved-call diagnostic fire instead.
+    if recv_type == "int" && primitive_method_shared_with_user_class(mname) == 1
+      return ""
+    end
     if recv_type == "int"
       ci2 = 0
       while ci2 < @cls_names.length
