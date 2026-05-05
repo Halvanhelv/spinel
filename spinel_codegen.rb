@@ -20325,7 +20325,10 @@ class Compiler
       @indent = @indent + 1
       push_scope
       declare_var(bp, "int")
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29375,7 +29378,10 @@ class Compiler
     @indent = @indent + 1
     push_scope
     declare_var(bp1, rt)
+    redo_label = push_redo_label
+    emit_redo_label(redo_label)
     compile_stmts_body(@nd_body[@nd_block[nid]])
+    pop_redo_label
     pop_scope
     @indent = @indent - 1
     emit("  }")
@@ -29414,7 +29420,10 @@ class Compiler
     @indent = @indent + 1
     push_scope
     declare_var(bp1, rt)
+    redo_label = push_redo_label
+    emit_redo_label(redo_label)
     compile_stmts_body(@nd_body[@nd_block[nid]])
+    pop_redo_label
     pop_scope
     @indent = @indent - 1
     emit("  }")
@@ -29467,7 +29476,10 @@ class Compiler
       push_scope
       declare_var(bp1, elem_type_of_array(rt))
       declare_var(bp2, obj_t)
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29501,7 +29513,10 @@ class Compiler
     push_scope
     declare_var(bp1, elem_type_of_array(rt))
     declare_var(bp2, "int")
+    redo_label = push_redo_label
+    emit_redo_label(redo_label)
     compile_stmts_body(@nd_body[@nd_block[nid]])
+    pop_redo_label
     pop_scope
     @indent = @indent - 1
     emit("  }")
@@ -29559,7 +29574,10 @@ class Compiler
           if has_bp == 1
             declare_var(bp1, key_type)
           end
+          redo_label = push_redo_label
+          emit_redo_label(redo_label)
           compile_stmts_body(@nd_body[@nd_block[nid]])
+          pop_redo_label
           pop_scope
           @indent = @indent - 1
           emit("  }")
@@ -29590,7 +29608,10 @@ class Compiler
       if has_bp == 1
         declare_var(bp1, elem_type_of_array(rt))
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29606,7 +29627,10 @@ class Compiler
       if has_bp == 1
         declare_var(bp1, "symbol")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29662,7 +29686,10 @@ class Compiler
           declare_var(bp1, elem_type)
         end
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29680,7 +29707,10 @@ class Compiler
       if bp2 != ""
         declare_var(bp2, "int")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29698,7 +29728,10 @@ class Compiler
       if bp2 != ""
         declare_var(bp2, "string")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29716,7 +29749,10 @@ class Compiler
       if bp2 != ""
         declare_var(bp2, "string")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29734,7 +29770,10 @@ class Compiler
       if bp2 != ""
         declare_var(bp2, "int")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29752,7 +29791,10 @@ class Compiler
       if bp2 != ""
         declare_var(bp2, "string")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29770,7 +29812,10 @@ class Compiler
       if bp2 != ""
         declare_var(bp2, "poly")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29788,7 +29833,10 @@ class Compiler
       if bp2 != ""
         declare_var(bp2, "poly")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29803,7 +29851,10 @@ class Compiler
       if has_bp == 1
         declare_var(bp1, "int")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
@@ -29817,7 +29868,10 @@ class Compiler
       if has_bp == 1
         declare_var(bp1, "poly")
       end
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
       compile_stmts_body(@nd_body[@nd_block[nid]])
+      pop_redo_label
       pop_scope
       @indent = @indent - 1
       emit("  }")
