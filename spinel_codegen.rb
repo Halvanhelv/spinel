@@ -27390,7 +27390,10 @@ class Compiler
         @in_loop = 1
         emit("  while (1) {")
         @indent = @indent + 1
+        redo_label = push_redo_label
+        emit_redo_label(redo_label)
         compile_stmts_body(@nd_body[@nd_block[nid]])
+        pop_redo_label
         @indent = @indent - 1
         emit("  }")
         @in_loop = old
@@ -29887,7 +29890,10 @@ class Compiler
     if bp1 != ""
       declare_var(bp1, "int")
     end
+    redo_label = push_redo_label
+    emit_redo_label(redo_label)
     compile_stmts_body(@nd_body[@nd_block[nid]])
+    pop_redo_label
     pop_scope
     @indent = @indent - 1
     emit("  }")
@@ -29910,7 +29916,10 @@ class Compiler
     if bp1 != ""
       declare_var(bp1, "int")
     end
+    redo_label = push_redo_label
+    emit_redo_label(redo_label)
     compile_stmts_body(@nd_body[@nd_block[nid]])
+    pop_redo_label
     pop_scope
     @indent = @indent - 1
     emit("  }")
