@@ -2197,6 +2197,18 @@ class Compiler
         end
         return "poly_array"
       end
+      # Nested-deeper case: elements are themselves a typed
+      # ptr_array (`int_array_ptr_array`, etc.) or already
+      # poly_array. Spinel doesn't have a typed
+      # `<X>_ptr_array_ptr_array` slot, so box each level via
+      # poly_array — sp_box_*_array on each push, and the
+      # poly-builtin dispatch on `[]` recurses into the next
+      # level.
+      if is_ptr_array_type(et) == 1 || et == "poly_array"
+        @needs_gc = 1
+        @needs_rb_value = 1
+        return "poly_array"
+      end
       # Check if elements have mixed types
       k = 1
       while k < elems.length
@@ -15673,9 +15685,17 @@ class Compiler
                 while ek < elems_iv.length
                   eid = elems_iv[ek]
                   et = infer_type(eid)
-                  ev = compile_expr(eid)
-                  ebox = et == "poly" ? ev : box_value_to_poly(et, ev)
-                  emit_raw("  sp_PolyArray_push(" + tmp_iv + ", " + ebox + ");")
+                  # 3D+ shape: nested ArrayNode with ptr_array elem
+                  # type → recompile as poly_array so cls_id chain
+                  # stays tagged through every level.
+                  if @nd_type[eid] == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
+                    inner_iv = compile_array_literal_as_poly(eid)
+                    emit_raw("  sp_PolyArray_push(" + tmp_iv + ", sp_box_poly_array(" + inner_iv + "));")
+                  else
+                    ev = compile_expr(eid)
+                    ebox = et == "poly" ? ev : box_value_to_poly(et, ev)
+                    emit_raw("  sp_PolyArray_push(" + tmp_iv + ", " + ebox + ");")
+                  end
                   ek = ek + 1
                 end
                 emit_raw("  " + self_arrow + ivar + " = " + tmp_iv + ";")
@@ -23489,6 +23509,12 @@ class Compiler
       pc = "sp_PtrArray_get((sp_PtrArray *)" + recv_tmp + ".v.p, " + a0 + ")"
       prhs = is_poly_ret == 1 ? "sp_box_obj(" + pc + ", 0)" : pc
       emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_PTR_ARRAY) " + result_tmp + " = " + prhs + ";")
+      # PolyArray dispatch — sp_PolyArray_get returns sp_RbVal directly.
+      # When the result temp is poly, just assign; otherwise unbox via .v.i
+      # (the typed temp's static type drives caller-side conversion).
+      polyc = "sp_PolyArray_get((sp_PolyArray *)" + recv_tmp + ".v.p, " + a0 + ")"
+      polyrhs = is_poly_ret == 1 ? polyc : "(" + polyc + ").v.i"
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_POLY_ARRAY) " + result_tmp + " = " + polyrhs + ";")
     end
     # `length` / `size` — every built-in array exposes its own
     # `_length` helper (sym_array shares IntArray's). PtrArray is
@@ -23510,6 +23536,9 @@ class Compiler
       pc = "sp_PtrArray_length((sp_PtrArray *)" + recv_tmp + ".v.p)"
       prhs = is_poly_ret == 1 ? "sp_box_int(" + pc + ")" : pc
       emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_PTR_ARRAY) " + result_tmp + " = " + prhs + ";")
+      polyc = "sp_PolyArray_length((sp_PolyArray *)" + recv_tmp + ".v.p)"
+      polyrhs = is_poly_ret == 1 ? "sp_box_int(" + polyc + ")" : polyc
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_POLY_ARRAY) " + result_tmp + " = " + polyrhs + ";")
     end
   end
 
@@ -23681,6 +23710,9 @@ class Compiler
       if is_ptr_array_type(at) == 1
         return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_PTR_ARRAY)"
       end
+      if at == "poly_array"
+        return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_POLY_ARRAY)"
+      end
       if at == "proc" || at == "lambda"
         return "sp_box_nullable_obj(" + val + ", SP_BUILTIN_PROC)"
       end
@@ -23732,6 +23764,9 @@ class Compiler
     end
     if is_ptr_array_type(at) == 1
       return "sp_box_ptr_array(" + val + ")"
+    end
+    if at == "poly_array"
+      return "sp_box_poly_array(" + val + ")"
     end
     if at == "proc" || at == "lambda"
       return "sp_box_proc(" + val + ")"
@@ -24942,6 +24977,34 @@ class Compiler
     "(!" + cond + " ? " + then_val + " : 0)"
   end
 
+  # Compile an `ArrayNode` literal as `sp_PolyArray *`, regardless
+  # of the inferred elem type. Used by the nested-array path in
+  # the poly_array branch so 3D-and-deeper arrays preserve cls_id
+  # tags through every level (e.g. an inner `[1,2,3]` ends up
+  # boxed via `sp_box_int_array` so the dispatch can still
+  # `sp_IntArray_get` on it).
+  def compile_array_literal_as_poly(nid)
+    @needs_gc = 1
+    @needs_rb_value = 1
+    elems = parse_id_list(@nd_elements[nid])
+    tmp = new_temp
+    emit("  sp_PolyArray *" + tmp + " = sp_PolyArray_new();")
+    k = 0
+    while k < elems.length
+      eid = elems[k]
+      et = infer_type(eid)
+      if @nd_type[eid] == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
+        inner = compile_array_literal_as_poly(eid)
+        emit("  sp_PolyArray_push(" + tmp + ", sp_box_poly_array(" + inner + "));")
+      else
+        val = compile_expr(eid)
+        emit("  sp_PolyArray_push(" + tmp + ", " + box_value_to_poly(et, val) + ");")
+      end
+      k = k + 1
+    end
+    tmp
+  end
+
   def compile_array_literal(nid)
     @needs_gc = 1
     elems = parse_id_list(@nd_elements[nid])
@@ -24980,8 +25043,21 @@ class Compiler
       k = 0
       while k < elems.length
         et = infer_type(elems[k])
-        val = compile_expr(elems[k])
-        emit("  sp_PolyArray_push(" + tmp + ", " + box_value_to_poly(et, val) + ");")
+        # 3D+ shape: when the element is itself a typed
+        # `<X>_ptr_array` that came from a nested ArrayNode, the
+        # default `compile_array_literal` for that element would
+        # emit a typed sp_PtrArray and `sp_box_ptr_array` would
+        # erase the elem type (cls_id PTR_ARRAY). Recompile the
+        # nested literal as poly_array so the next-level dispatch
+        # sees `cls_id == POLY_ARRAY` and recurses with each
+        # innermost typed array still tagged correctly.
+        if @nd_type[elems[k]] == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
+          val = compile_array_literal_as_poly(elems[k])
+          emit("  sp_PolyArray_push(" + tmp + ", sp_box_poly_array(" + val + "));")
+        else
+          val = compile_expr(elems[k])
+          emit("  sp_PolyArray_push(" + tmp + ", " + box_value_to_poly(et, val) + ");")
+        end
         k = k + 1
       end
       return tmp
@@ -25588,9 +25664,17 @@ class Compiler
         while ek < elems_pa.length
           eid = elems_pa[ek]
           et = infer_type(eid)
-          ev = compile_expr(eid)
-          ebox = et == "poly" ? ev : box_value_to_poly(et, ev)
-          emit("  sp_PolyArray_push(" + tmp_arr + ", " + ebox + ");")
+          # 3D+ shape: nested ArrayNode with ptr_array element
+          # type — recompile as poly_array so cls_id chain stays
+          # tagged through every level.
+          if @nd_type[eid] == "ArrayNode" && (is_ptr_array_type(et) == 1 || et == "poly_array")
+            inner = compile_array_literal_as_poly(eid)
+            emit("  sp_PolyArray_push(" + tmp_arr + ", sp_box_poly_array(" + inner + "));")
+          else
+            ev = compile_expr(eid)
+            ebox = et == "poly" ? ev : box_value_to_poly(et, ev)
+            emit("  sp_PolyArray_push(" + tmp_arr + ", " + ebox + ");")
+          end
           ek = ek + 1
         end
         emit("  " + self_arrow + sanitize_ivar(iname) + " = " + tmp_arr + ";")

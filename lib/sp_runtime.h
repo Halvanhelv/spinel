@@ -740,6 +740,7 @@ typedef uint64_t sp_RbValue;
 #define SP_BUILTIN_PROC         (-9)                              /* sp_Proc *, distinct from any tag-based id */
 #define SP_BUILTIN_RANGE        (-10)                             /* sp_Range *, heap copy of stack-typed sp_Range when crossing into poly */
 #define SP_BUILTIN_TIME         (-11)                             /* sp_Time *, heap copy of stack-typed sp_Time when crossing into poly */
+#define SP_BUILTIN_POLY_ARRAY   (-12)                             /* sp_PolyArray *, array of sp_RbVal */
 typedef struct { int tag; int cls_id; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; } v; } sp_RbVal;
 static sp_RbVal sp_box_int(mrb_int v) { sp_RbVal r; r.tag = SP_TAG_INT; r.cls_id = 0; r.v.i = v; return r; }
 static sp_RbVal sp_box_str(const char *v) { sp_RbVal r; r.tag = SP_TAG_STR; r.cls_id = 0; r.v.s = v; return r; }
@@ -797,6 +798,7 @@ static const char *sp_Time_inspect(sp_Time *t) {
   }
   return buf;
 }
+static sp_RbVal sp_box_poly_array(void *p)  { return sp_box_obj(p, SP_BUILTIN_POLY_ARRAY); }
 static void sp_poly_puts(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: printf("%lld\n", (long long)v.v.i); break;
