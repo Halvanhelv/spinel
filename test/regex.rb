@@ -113,3 +113,40 @@ if re_ml_r =~ "a\rb"
 else
   puts "no4"
 end
+
+# InterpolatedRegularExpressionNode (/foo_#{x}/). Pattern is only known
+# at execution time; each AST site gets a `sp_re_dyn_<idx>(const char *)`
+# helper with a function-scope cache so heap is bounded to one engine
+# pattern per source location. Match-site dispatch goes through the
+# regex_pat_c_expr helper so =~, match?, match, gsub, sub, scan, and
+# split all accept either form.
+
+# match? predicate (boolean -- safe across CRuby/Spinel int/value
+# differences in =~ which returns a position vs a count).
+ir_x = "bar"
+puts "foo_bar".match?(/foo_#{ir_x}/)   #=> true
+puts "foo_baz".match?(/foo_#{ir_x}/)   #=> false
+
+# Captures populate $1
+if "foo_bar_42" =~ /foo_#{ir_x}_(\d+)/
+  puts $1   #=> 42
+end
+
+# gsub with interpolated pattern
+ir_who = "world"
+puts "hello world".gsub(/#{ir_who}/, "Ruby")   #=> hello Ruby
+
+# sub
+puts "abc 123 def".sub(/(\d+)/, "X")           #=> abc X def
+
+# Interpolation that varies per-iteration (proves no stale cache and
+# that runtime compilation actually re-fires per evaluation).
+ir_i = 0
+while ir_i < 3
+  ir_seed = ir_i.to_s
+  puts ("v_" + ir_seed).match?(/v_#{ir_seed}/)
+  ir_i = ir_i + 1
+end
+#=> true
+#=> true
+#=> true
