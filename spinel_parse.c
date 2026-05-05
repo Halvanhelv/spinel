@@ -1103,6 +1103,17 @@ static int flatten(pm_node_t *node) {
     R("old_name", n->old_name);
     break;
   }
+  case PM_UNDEF_NODE: {
+    /* `undef foo, bar` inside a class body. CRuby raises NoMethodError
+       at runtime when an undef'd method is called; Spinel's AOT model
+       resolves dispatch at compile time, so we record the undefs but
+       leave compile-time enforcement of "calling an undef'd method
+       fails" to a future pass. */
+    pm_undef_node_t *n = (pm_undef_node_t *)node;
+    N("UndefNode");
+    A("names", &n->names);
+    break;
+  }
   case PM_ALIAS_GLOBAL_VARIABLE_NODE: {
     /* `alias $copy $orig` -- compile-time gvar aliasing. The
        new_name and old_name slots are GlobalVariableReadNodes whose
