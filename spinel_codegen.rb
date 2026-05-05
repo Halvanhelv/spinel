@@ -27220,7 +27220,10 @@ class Compiler
         push_scope
         declare_var(bp1, elem_t)
         declare_var(bp2, elem_t)
+        redo_label = push_redo_label
+        emit_redo_label(redo_label)
         compile_stmts_body(@nd_body[@nd_block[nid]])
+        pop_redo_label
         pop_scope
         @indent = @indent - 1
         emit("  }")
@@ -27264,7 +27267,10 @@ class Compiler
         @indent = @indent + 1
         push_scope
         declare_var(bp1, "int")
+        redo_label = push_redo_label
+        emit_redo_label(redo_label)
         compile_stmts_body(@nd_body[@nd_block[nid]])
+        pop_redo_label
         pop_scope
         @indent = @indent - 1
         emit("  }")
@@ -27297,7 +27303,10 @@ class Compiler
         @indent = @indent + 1
         push_scope
         declare_var(bp1, et)
+        redo_label = push_redo_label
+        emit_redo_label(redo_label)
         compile_stmts_body(@nd_body[@nd_block[nid]])
+        pop_redo_label
         pop_scope
         @indent = @indent - 1
         emit("  }")
