@@ -7551,6 +7551,7 @@ class Compiler
       end
     }
 
+    in_module_function = 0
     body_stmts.each { |sid|
       if @nd_type[sid] == "ConstantWriteNode"
         collect_scoped_constant(mname, sid)
@@ -7559,28 +7560,41 @@ class Compiler
       if @nd_type[sid] == "MultiWriteNode"
         collect_scoped_multi_const(mname, sid)
       end
+      # `module_function` (no args) flips subsequent `def name`
+      # into class-method dispatch, parallel to `def self.name`.
+      # Spinel only needs the class-method shape; the full Ruby
+      # semantics also installs the methods as private instance
+      # methods (for include-mixin), unmodeled here.
+      if @nd_type[sid] == "CallNode" && @nd_receiver[sid] < 0 && @nd_name[sid] == "module_function"
+        args_id_mf = @nd_arguments[sid]
+        if args_id_mf < 0 || get_args(args_id_mf).length == 0
+          in_module_function = 1
+        end
+      end
       # Collect module class methods (def self.xxx) as top-level functions
       if @nd_type[sid] == "DefNode"
-        if @nd_receiver[sid] >= 0
-          if @nd_type[@nd_receiver[sid]] == "SelfNode"
-            dmname = @nd_name[sid]
-            # Create as top-level method with module prefix for dispatch
-            @meth_names.push(mname + "_cls_" + dmname)
-            @meth_param_names.push(collect_params_str(sid))
-            @meth_param_types.push(collect_ptypes_str(sid, -1))
-            @meth_param_empty.push("")
-            @meth_return_types.push("int")
-            @meth_body_ids.push(@nd_body[sid])
-            @meth_has_yield.push(0)
-            # Issue #239: capture default-arg expressions so call
-            # sites that omit trailing args get them filled in by
-            # compile_call_args_with_defaults. Pre-fix this slot
-            # was hardcoded to "0", which `compile_expr` lowered to
-            # the literal `0` regardless of the actual default
-            # (string literals etc.).
-            @meth_has_defaults.push(collect_defaults_str(sid))
-            @meth_rest_index.push(collect_rest_index(sid))
-          end
+        is_self_def = 0
+        if @nd_receiver[sid] >= 0 && @nd_type[@nd_receiver[sid]] == "SelfNode"
+          is_self_def = 1
+        end
+        if is_self_def == 1 || (in_module_function == 1 && @nd_receiver[sid] < 0)
+          dmname = @nd_name[sid]
+          # Create as top-level method with module prefix for dispatch
+          @meth_names.push(mname + "_cls_" + dmname)
+          @meth_param_names.push(collect_params_str(sid))
+          @meth_param_types.push(collect_ptypes_str(sid, -1))
+          @meth_param_empty.push("")
+          @meth_return_types.push("int")
+          @meth_body_ids.push(@nd_body[sid])
+          @meth_has_yield.push(0)
+          # Issue #239: capture default-arg expressions so call
+          # sites that omit trailing args get them filled in by
+          # compile_call_args_with_defaults. Pre-fix this slot
+          # was hardcoded to "0", which `compile_expr` lowered to
+          # the literal `0` regardless of the actual default
+          # (string literals etc.).
+          @meth_has_defaults.push(collect_defaults_str(sid))
+          @meth_rest_index.push(collect_rest_index(sid))
         end
       end
       # Collect module-level ivar writes as global statics
@@ -10819,6 +10833,12 @@ class Compiler
       push_scope
       # Open class self type
       mfn = @meth_names[i]
+      # Pin @current_method_name so current_lexical_scope_name can
+      # peel `<Mod>_cls_<m>` and resolve bare class refs in the body
+      # (e.g. `Video.new` inside `Top::Drv.load` resolves Video to
+      # Top_Video instead of bare Video).
+      saved_meth_ar = @current_method_name
+      @current_method_name = mfn
       if mfn.start_with?("__oc_Integer_")
         declare_var("__self_type", "int")
       end
@@ -10878,6 +10898,7 @@ class Compiler
       end
       rt = infer_body_return(@meth_body_ids[i])
       @meth_return_types[i] = rt
+      @current_method_name = saved_meth_ar
       pop_scope
       i = i + 1
     end
