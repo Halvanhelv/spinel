@@ -3825,6 +3825,15 @@ class Compiler
               if is_ptr_array_type(bret) == 1 || bret == "poly_array"
                 return "poly_array"
               end
+              # Block returns a generic `poly` (e.g. `entries[key]`
+              # where `entries` is `str_poly_hash`) — the resulting
+              # array is heterogeneous, so encode as poly_array. The
+              # @needs_rb_value bookkeeping stays in scan-pass
+              # widening; this branch only types the .map result.
+              if bret == "poly"
+                @needs_rb_value = 1
+                return "poly_array"
+              end
               # poly_array bret intentionally falls through. Returning
               # poly_array_ptr_array would be more accurate, but ivars
               # holding the result (and the corresponding `[nil] *
@@ -11305,6 +11314,49 @@ class Compiler
         end
       end
     end
+    # IndexOrWriteNode (`recv[idx] ||= val`) — scan widens the hash type
+    # the same way the regular `[]=` CallNode path does. Without this,
+    # optcarrots `entries = {}; entries[k] ||= [...]` leaves `entries`
+    # at the str_int_hash default, so reads return int (lost cls_id)
+    # and downstream `(0..N).map { entries[k] }` collapses to IntArray.
+    if @nd_type[nid] == "IndexOrWriteNode" || @nd_type[nid] == "IndexAndWriteNode" || @nd_type[nid] == "IndexOperatorWriteNode"
+      iow_recv = @nd_receiver[nid]
+      iow_args_id = @nd_arguments[nid]
+      iow_val = @nd_expression[nid]
+      if iow_recv >= 0 && iow_args_id >= 0 && iow_val >= 0
+        iow_args = get_args(iow_args_id)
+        if iow_args.length >= 1
+          iow_kt = infer_type(iow_args[0])
+          iow_vt = infer_type(iow_val)
+          # Widen the recv's hash type if it's still the empty-default
+          if @nd_type[iow_recv] == "InstanceVariableReadNode" && @current_class_idx >= 0
+            iow_iname = @nd_name[iow_recv]
+            iow_cur = cls_ivar_type(@current_class_idx, iow_iname)
+            if iow_cur == "str_int_hash"
+              iow_promoted = promote_empty_hash_for(iow_kt, iow_vt)
+              if iow_promoted != "" && iow_promoted != iow_cur
+                replace_ivar_type(@current_class_idx, iow_iname, iow_promoted)
+                if iow_promoted == "str_poly_hash" || iow_promoted == "sym_poly_hash"
+                  @needs_rb_value = 1
+                end
+              end
+            end
+          elsif @nd_type[iow_recv] == "LocalVariableReadNode"
+            iow_lname = @nd_name[iow_recv]
+            iow_cur = find_var_type(iow_lname)
+            if iow_cur == "str_int_hash"
+              iow_promoted = promote_empty_hash_for(iow_kt, iow_vt)
+              if iow_promoted != "" && iow_promoted != iow_cur
+                set_var_type(iow_lname, iow_promoted)
+                if iow_promoted == "str_poly_hash" || iow_promoted == "sym_poly_hash"
+                  @needs_rb_value = 1
+                end
+              end
+            end
+          end
+        end
+      end
+    end
     if @nd_type[nid] == "CallNode"
       mname = @nd_name[nid]
       recv = @nd_receiver[nid]
@@ -18258,6 +18310,64 @@ class Compiler
     # literal — concretely-typed hashes (`h = {"a" => 1}`) keep
     # their declared type even when later []= writes mix value
     # types.
+    # IndexOrWriteNode (`h[k] ||= v`), IndexAndWriteNode (`h[k] &&= v`),
+    # IndexOperatorWriteNode (`h[k] += v` etc.) — each implicitly does
+    # an `h[k] = ...` write, so widen the local hash type the same way
+    # as the regular `[]=` CallNode below. Without this, optcarrots
+    # `entries = {}; entries[key] ||= [...]` leaves `entries` at the
+    # str_int_hash default — `entries[key]` reads return mrb_int and
+    # the surrounding `.map { entries[key] }` collapses to IntArray,
+    # losing the cls_id chain on the value pointers.
+    if @nd_type[nid] == "IndexOrWriteNode" || @nd_type[nid] == "IndexAndWriteNode" || @nd_type[nid] == "IndexOperatorWriteNode"
+      iow_recv = @nd_receiver[nid]
+      iow_args_id = @nd_arguments[nid]
+      iow_val = @nd_expression[nid]
+      if iow_recv >= 0 && iow_args_id >= 0 && iow_val >= 0 && @nd_type[iow_recv] == "LocalVariableReadNode"
+        iow_hname = @nd_name[iow_recv]
+        iow_aargs = get_args(iow_args_id)
+        if iow_aargs.length >= 1
+          iow_ki = 0
+          while iow_ki < names.length
+            if names[iow_ki] == iow_hname
+              iow_cur = types[iow_ki]
+              iow_promotable = (iow_cur == "str_int_hash" ||
+                                iow_cur == "str_str_hash" ||
+                                iow_cur == "int_str_hash" ||
+                                iow_cur == "sym_int_hash" ||
+                                iow_cur == "sym_str_hash")
+              if iow_promotable && iow_ki < @scan_empty_hash_flags.length && @scan_empty_hash_flags[iow_ki] == "1"
+                iow_kt = scan_locals_arg_type(iow_aargs[0], names, types, params)
+                iow_vt = scan_locals_arg_type(iow_val, names, types, params)
+                iow_promoted = promote_empty_hash_for(iow_kt, iow_vt)
+                if iow_promoted != "" && iow_promoted != iow_cur
+                  types[iow_ki] = iow_promoted
+                  if iow_promoted == "str_poly_hash" || iow_promoted == "sym_poly_hash"
+                    @scan_empty_hash_flags[iow_ki] = ""
+                  end
+                  if iow_promoted == "str_str_hash"
+                    @needs_str_str_hash = 1
+                  elsif iow_promoted == "int_str_hash"
+                    @needs_int_str_hash = 1
+                    @needs_int_array = 1
+                  elsif iow_promoted == "sym_int_hash"
+                    @needs_sym_int_hash = 1
+                  elsif iow_promoted == "sym_str_hash"
+                    @needs_sym_str_hash = 1
+                  elsif iow_promoted == "str_poly_hash"
+                    @needs_str_poly_hash = 1
+                    @needs_rb_value = 1
+                  elsif iow_promoted == "sym_poly_hash"
+                    @needs_sym_poly_hash = 1
+                    @needs_rb_value = 1
+                  end
+                end
+              end
+            end
+            iow_ki = iow_ki + 1
+          end
+        end
+      end
+    end
     if @nd_type[nid] == "CallNode"
       if @nd_name[nid] == "[]="
         recv = @nd_receiver[nid]
@@ -18352,6 +18462,9 @@ class Compiler
               end
               names.push(lname)
               types.push(elem_type)
+              @scan_literal_flags.push("")
+              @scan_empty_flags.push("")
+              @scan_empty_hash_flags.push("")
             end
           end
         end
@@ -18366,6 +18479,9 @@ class Compiler
           if not_in(lname, params) == 1
             names.push(lname)
             types.push("string")
+            @scan_literal_flags.push("")
+            @scan_empty_flags.push("")
+            @scan_empty_hash_flags.push("")
           end
         end
       end
@@ -18440,6 +18556,9 @@ class Compiler
                 else
                   types.push("int")
                 end
+                @scan_literal_flags.push("")
+                @scan_empty_flags.push("")
+                @scan_empty_hash_flags.push("")
               end
             end
             nk = nk + 1
@@ -18455,6 +18574,9 @@ class Compiler
               if not_in(bname, names) == 1
                 if not_in(bname, params) == 1
                   names.push(bname)
+                  @scan_literal_flags.push("")
+                  @scan_empty_flags.push("")
+                  @scan_empty_hash_flags.push("")
                   # Infer type from receiver context
                   recv_type = ""
                   if @nd_receiver[nid] >= 0
@@ -31674,6 +31796,17 @@ class Compiler
         return
       end
     end
+    # Slice assignment with poly recv: `@bg_pixels[xfine, 8] =
+    # pattern_lut[bg_pattern]` against an iv typed as poly (because
+    # widening saw it as either an int_array or a poly_array at
+    # different points). Without this, the fall-through `[]=` path
+    # would treat arg_ids[1] (the slice length) as the value to
+    # store and silently drop the actual rhs. Dispatch by runtime
+    # cls_id and copy len elements from src to dest.
+    if arg_ids.length == 3 && rt == "poly"
+      compile_poly_slice_assign(nid, recv, rc, arg_ids)
+      return
+    end
     idx = "0"
     val = "0"
     if arg_ids.length >= 1
@@ -31783,6 +31916,48 @@ class Compiler
       emit("  sp_StrStrHash_set(" + rc + ", " + idx + ", " + val + ");")
       return
     end
+  end
+
+  # `arr[start, len] = src` where arr is a poly-typed slot (sp_RbVal).
+  # Dispatches by runtime cls_id of arr and src and emits a per-index
+  # copy. Same-length only — `src.length` must equal `len`. Falls
+  # back silently when src isn't an array (no copy emitted).
+  def compile_poly_slice_assign(nid, recv, rc, arg_ids)
+    @needs_rb_value = 1
+    start_id = arg_ids[0]
+    len_id = arg_ids[1]
+    src_id = arg_ids[2]
+    start_e = compile_expr(start_id)
+    len_e = compile_expr(len_id)
+    src_e = compile_expr_gc_rooted(src_id)
+    src_t = infer_type(src_id)
+    # Box src to poly so we can switch on cls_id at runtime even when
+    # spinel statically inferred a concrete array kind (e.g. when src
+    # is `pattern_lut[bg_pattern]` returning a poly value boxed from
+    # a typed array push).
+    if src_t != "poly"
+      src_e = box_value_to_poly(src_t, src_e)
+    end
+    rc_t = new_temp
+    src_t_v = new_temp
+    start_t = new_temp
+    len_t = new_temp
+    ii = new_temp
+    emit("  {")
+    emit("    sp_RbVal " + rc_t + " = " + rc + ";")
+    emit("    sp_RbVal " + src_t_v + " = " + src_e + ";")
+    emit("    mrb_int " + start_t + " = " + start_e + ";")
+    emit("    mrb_int " + len_t + " = " + len_e + ";")
+    emit("    if (" + rc_t + ".cls_id == SP_BUILTIN_INT_ARRAY && " + src_t_v + ".cls_id == SP_BUILTIN_INT_ARRAY) {")
+    emit("      for (mrb_int " + ii + " = 0; " + ii + " < " + len_t + "; " + ii + "++) sp_IntArray_set((sp_IntArray *)" + rc_t + ".v.p, " + start_t + " + " + ii + ", sp_IntArray_get((sp_IntArray *)" + src_t_v + ".v.p, " + ii + "));")
+    emit("    } else if (" + rc_t + ".cls_id == SP_BUILTIN_POLY_ARRAY && " + src_t_v + ".cls_id == SP_BUILTIN_POLY_ARRAY) {")
+    emit("      for (mrb_int " + ii + " = 0; " + ii + " < " + len_t + "; " + ii + "++) sp_PolyArray_set((sp_PolyArray *)" + rc_t + ".v.p, " + start_t + " + " + ii + ", sp_PolyArray_get((sp_PolyArray *)" + src_t_v + ".v.p, " + ii + "));")
+    emit("    } else if (" + rc_t + ".cls_id == SP_BUILTIN_INT_ARRAY && " + src_t_v + ".cls_id == SP_BUILTIN_POLY_ARRAY) {")
+    emit("      for (mrb_int " + ii + " = 0; " + ii + " < " + len_t + "; " + ii + "++) sp_IntArray_set((sp_IntArray *)" + rc_t + ".v.p, " + start_t + " + " + ii + ", sp_PolyArray_get((sp_PolyArray *)" + src_t_v + ".v.p, " + ii + ").v.i);")
+    emit("    } else if (" + rc_t + ".cls_id == SP_BUILTIN_POLY_ARRAY && " + src_t_v + ".cls_id == SP_BUILTIN_INT_ARRAY) {")
+    emit("      for (mrb_int " + ii + " = 0; " + ii + " < " + len_t + "; " + ii + "++) sp_PolyArray_set((sp_PolyArray *)" + rc_t + ".v.p, " + start_t + " + " + ii + ", sp_box_int(sp_IntArray_get((sp_IntArray *)" + src_t_v + ".v.p, " + ii + ")));")
+    emit("    }")
+    emit("  }")
   end
 
   # Compile `arr[start, len] = src` slice assignment. Replaces
@@ -33773,7 +33948,7 @@ class Compiler
       block_is_typed_array = (block_ret_r == "int_array" || block_ret_r == "str_array" ||
                               block_ret_r == "float_array" || block_ret_r == "sym_array" ||
                               is_ptr_array_type(block_ret_r) == 1 || block_ret_r == "poly_array")
-      if block_ret_r != "int" && block_ret_r != "string" && block_ret_r != "float" && block_is_typed_array == false
+      if block_ret_r != "int" && block_ret_r != "string" && block_ret_r != "float" && block_ret_r != "poly" && block_is_typed_array == false
         return "0"
       end
       @needs_int_array = 1
@@ -33785,6 +33960,12 @@ class Compiler
       elsif block_ret_r == "float"
         @needs_float_array = 1
         emit("  sp_FloatArray *" + tmp_arr + " = sp_FloatArray_new();")
+      elsif block_ret_r == "poly"
+        # Block returns a generic poly value (e.g. `entries[key]`
+        # over a str_poly_hash) — accumulator must be PolyArray
+        # since IntArray would lose the cls_id tag on the value.
+        @needs_rb_value = 1
+        emit("  sp_PolyArray *" + tmp_arr + " = sp_PolyArray_new();")
       elsif block_is_typed_array
         # Array-of-<X>: 1D-block-return uses PtrArray (matches
         # the inferred `<bret>_ptr_array` type). Deeper nesting
@@ -33861,6 +34042,8 @@ class Compiler
             emit("  sp_StrArray_push(" + tmp_arr + ", " + lastv_r + ");")
           elsif block_ret_r == "float"
             emit("  sp_FloatArray_push(" + tmp_arr + ", " + lastv_r + ");")
+          elsif block_ret_r == "poly"
+            emit("  sp_PolyArray_push(" + tmp_arr + ", " + lastv_r + ");")
           elsif block_is_typed_array
             if is_ptr_array_type(block_ret_r) == 1 || block_ret_r == "poly_array"
               emit("  sp_PolyArray_push(" + tmp_arr + ", " + box_value_to_poly(block_ret_r, lastv_r) + ");")
