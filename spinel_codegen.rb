@@ -134,6 +134,18 @@ class Compiler
     # "best-guess inference"; only when both old and new writes are
     # definite-literal do we widen to poly on disagreement.
     @cls_ivar_init_definite = "".split(",")
+    # Issue #247: per-(class, ivar) accumulator of distinct concrete
+    # writer types observed by scan_writer_calls. After all writer-scan
+    # iterations finish, if the list contains 2+ distinct entries the
+    # slot is widened to poly. Observations are recorded with the scope
+    # active inside scan_writer_calls (params declared with their
+    # iteratively-widened ptypes), so `value` in
+    # `def write_any(value); @id = value` resolves to its caller-pinned
+    # string type rather than the placeholder "int" it would default to
+    # outside that scope. Each entry is a comma-separated list of
+    # distinct types per ivar; the outer dimension is semicolon-
+    # separated and parallel to `@cls_ivar_names[ci]`.
+    @cls_ivar_observed_types = "".split(",")
     # Top-level (script-scope) ivars. Lowered to `static` file-scope
     # globals because `main()` / top-level `def` bodies have no `self`.
     @toplevel_ivar_names = "".split(",")
@@ -6060,6 +6072,17 @@ class Compiler
       sk2 = sk2 + 1
     end
     @cls_ivar_init_definite.push(struct_definite)
+    # Initialize observed_types parallel to ivar_names: one empty
+    # comma-list per struct field, joined by semicolons.
+    obs_init = ""
+    sk3 = 0
+    while sk3 < struct_fields.length
+      if sk3 > 0
+        obs_init = obs_init + ";"
+      end
+      sk3 = sk3 + 1
+    end
+    @cls_ivar_observed_types.push(obs_init)
     # Auto-generate initialize method for struct-derived classes
     if struct_fields.length > 0
       init_params = ""
@@ -6769,18 +6792,87 @@ class Compiler
       @cls_ivar_names[ci] = @cls_ivar_names[ci] + ";" + iname
       @cls_ivar_types[ci] = @cls_ivar_types[ci] + ";" + itype
       @cls_ivar_init_definite[ci] = @cls_ivar_init_definite[ci] + ";" + definite.to_s
+      @cls_ivar_observed_types[ci] = @cls_ivar_observed_types[ci] + ";"
     else
       @cls_ivar_names[ci] = iname
       @cls_ivar_types[ci] = itype
       @cls_ivar_init_definite[ci] = definite.to_s
+      @cls_ivar_observed_types[ci] = ""
+    end
+  end
+
+  # Issue #247: record `at` as a distinct observation for the slot if
+  # it's a concrete (non-fallback) type. "Concrete" means either
+  # `at != "int"` and `at != "nil"` (those are infer_type's catch-all
+  # placeholders), or the rhs is a definite-literal AST. The dedup
+  # keeps the list short — a slot written with int from twenty
+  # different `obj.length` call sites still records "int" once.
+  def record_ivar_observation(ci, iname, at, expr_id)
+    is_concrete = 0
+    if at != "int" && at != "nil"
+      is_concrete = 1
+    elsif expr_id >= 0 && is_definite_ivar_init(expr_id) == 1
+      is_concrete = 1
+    end
+    if is_concrete == 0
+      return
+    end
+    names = @cls_ivar_names[ci].split(";")
+    # Pad obs to names.length: split(";", -1) preserves trailing "" but
+    # an entirely-empty storage gives a 0-length array. Walk by index
+    # and treat missing entries as "".
+    obs_str = @cls_ivar_observed_types[ci]
+    k = 0
+    while k < names.length
+      if names[k] == iname
+        # Build an array of slots, one per ivar, defaulting empty.
+        slots = "".split(",")
+        ix = 0
+        while ix < names.length
+          slots.push("")
+          ix = ix + 1
+        end
+        if obs_str != ""
+          parts = obs_str.split(";", -1)
+          px = 0
+          while px < parts.length && px < slots.length
+            slots[px] = parts[px]
+            px = px + 1
+          end
+        end
+        existing = slots[k].split(",")
+        ex = 0
+        while ex < existing.length
+          if existing[ex] == at
+            return
+          end
+          ex = ex + 1
+        end
+        if slots[k] == ""
+          slots[k] = at
+        else
+          slots[k] = slots[k] + "," + at
+        end
+        @cls_ivar_observed_types[ci] = slots.join(";")
+        return
+      end
+      k = k + 1
     end
   end
 
   # Issue #130: was the AST expression a definite-literal that
   # `infer_ivar_init_type` types unambiguously? Used by scan_ivars to
-  # decide when to widen a multi-write ivar slot to poly. Only literal
-  # AST kinds count; CallNodes and LocalVariableReadNodes don't, even
-  # if the inference happens to return a known concrete type.
+  # decide when to widen a multi-write ivar slot to poly.
+  #
+  # Issue #247: also accepts typed-hash[key] reads — when the receiver
+  # is a hash whose value type is statically known
+  # (str_int_hash / sym_int_hash / *_str_hash / int_str_hash), the call
+  # always produces that value type. Letting the heterogeneity check
+  # in finalize_ivar_heterogeneity record this writer's "int" (or
+  # "string") as a *concrete* observation lets a sibling-method writer
+  # of a different concrete type trigger the poly widen, instead of
+  # silently narrowing the slot to whichever sibling won the type
+  # race.
   def is_definite_ivar_init(nid)
     if nid < 0
       return 0
@@ -6791,6 +6883,15 @@ class Compiler
     end
     if t == "SymbolNode" || t == "TrueNode" || t == "FalseNode"
       return 1
+    end
+    if t == "CallNode" && @nd_name[nid] == "[]"
+      recv = @nd_receiver[nid]
+      if recv >= 0
+        rt = infer_type(recv)
+        if rt == "str_int_hash" || rt == "sym_int_hash" || rt == "str_str_hash" || rt == "sym_str_hash" || rt == "int_str_hash"
+          return 1
+        end
+      end
     end
     # Issue #131: a ternary whose branches are themselves definite is
     # definite. Lets the #130 multi-write widening rule still fire when
@@ -8013,6 +8114,7 @@ class Compiler
     @cls_ivar_names.push("")
     @cls_ivar_types.push("")
     @cls_ivar_init_definite.push("")
+    @cls_ivar_observed_types.push("")
     @cls_meth_names.push("")
     @cls_meth_params.push("")
     @cls_meth_ptypes.push("")
@@ -9925,6 +10027,39 @@ class Compiler
     # Scan main-level code
     scan_writer_calls(@root_id)
     pop_scope
+    # Issue #247: now that every writer's concrete type observation is
+    # recorded into @cls_ivar_observed_types[ci] (deduped per slot),
+    # widen any slot with 2+ distinct concrete types to poly. The
+    # narrow-then-overwrite path in update_ivar_type can otherwise
+    # leave the slot pinned to whichever writer's update_ivar_type
+    # call ran last, causing the loser's emit site to type-mismatch.
+    finalize_ivar_heterogeneity
+  end
+
+  def finalize_ivar_heterogeneity
+    ci = 0
+    while ci < @cls_names.length
+      names = @cls_ivar_names[ci].split(";")
+      types = @cls_ivar_types[ci].split(";")
+      obs = @cls_ivar_observed_types[ci].split(";", -1)
+      changed = 0
+      ivk = 0
+      while ivk < names.length
+        if ivk < types.length && ivk < obs.length && types[ivk] != "poly"
+          distinct = obs[ivk].split(",")
+          if distinct.length >= 2
+            types[ivk] = "poly"
+            @needs_rb_value = 1
+            changed = 1
+          end
+        end
+        ivk = ivk + 1
+      end
+      if changed == 1
+        @cls_ivar_types[ci] = types.join(";")
+      end
+      ci = ci + 1
+    end
   end
 
   def scan_writer_calls(nid)
@@ -9961,6 +10096,13 @@ class Compiler
         # widen the promoted type to poly on the next iteration.
         if is_empty_hash_literal(bottom) == 0 && is_empty_array_literal(bottom) == 0
           at = infer_type(bottom)
+          # Issue #247: record this writer's concrete type observation
+          # while the local-scope context is set up (params declared at
+          # their iteratively-widened ptypes). After all writer-scans
+          # finish, finalize_ivar_heterogeneity reads the accumulated
+          # per-slot list and widens to poly when 2+ distinct concrete
+          # types appear.
+          record_ivar_observation(@current_class_idx, iname, at, bottom)
           # Chain participants bypass the `int` guard so that
           # `@string_slot = @int_slot = expr_returning_int` widens
           # the head to poly instead of leaving it stuck at
