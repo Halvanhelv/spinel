@@ -2264,6 +2264,17 @@ class Compiler
           if all_sym_keys == 1 && (first_vt == "int" || first_vt == "bool" || first_vt == "nil")
             return "sym_int_hash"
           end
+          # Issue #287: every value already inferred as poly (the slot
+          # was widened upstream — typically an ivar that #247's
+          # finalize_ivar_heterogeneity widened on a sibling-writer
+          # disagreement). Same poly-hash storage as the mixed-types
+          # `else` branch — every value carries its own tag.
+          if first_vt == "poly"
+            if all_sym_keys == 1
+              return "sym_poly_hash"
+            end
+            return "str_poly_hash"
+          end
         else
           # Mixed value types: use a *_poly_hash so each slot carries its
           # own tag (sp_RbVal) rather than coercing everything to one type.
@@ -8859,6 +8870,48 @@ class Compiler
               ak = ak + 1
             end
             @meth_param_types[mi] = ptypes.join(",")
+          end
+        end
+        # Issue #286: bare call inside a class method body that
+        # resolves to an inherited instance method. find_method_idx
+        # above only finds *top-level* methods; an `assert_not_nil(x)`
+        # inside `T2 < T`'s body needs to widen T's `assert_not_nil`
+        # ptypes from this call's args. Mirror the obj.method() walk
+        # in the recv >= 0 branch below — find_method_owner finds the
+        # ancestor that actually defines the method, then we update
+        # *that* class's @cls_meth_ptypes.
+        if @current_class_idx >= 0
+          cls_ci_286 = @current_class_idx
+          cls_owner_286 = cls_ci_286
+          midx_286 = cls_find_method_direct(cls_ci_286, mname)
+          if midx_286 < 0
+            owner_286 = find_method_owner(cls_ci_286, mname)
+            if owner_286 != "" && owner_286 != @cls_names[cls_ci_286]
+              cls_owner_286 = find_class_idx(owner_286)
+              if cls_owner_286 >= 0
+                midx_286 = cls_find_method_direct(cls_owner_286, mname)
+              end
+            end
+          end
+          if midx_286 >= 0
+            args_id_286 = @nd_arguments[nid]
+            if args_id_286 >= 0
+              arg_ids_286 = get_args(args_id_286)
+              all_ptypes_286 = @cls_meth_ptypes[cls_owner_286].split("|")
+              if midx_286 < all_ptypes_286.length
+                ptypes_286 = all_ptypes_286[midx_286].split(",")
+                kk_286 = 0
+                while kk_286 < arg_ids_286.length
+                  at_286 = infer_type(arg_ids_286[kk_286])
+                  if kk_286 < ptypes_286.length
+                    ptypes_286[kk_286] = unify_call_types(ptypes_286[kk_286], at_286, arg_ids_286[kk_286])
+                  end
+                  kk_286 = kk_286 + 1
+                end
+                all_ptypes_286[midx_286] = ptypes_286.join(",")
+                @cls_meth_ptypes[cls_owner_286] = all_ptypes_286.join("|")
+              end
+            end
           end
         end
       end
@@ -19556,7 +19609,17 @@ class Compiler
             bp = "0"
           end
         end
-        return "sp_" + owner + "_" + sanitize_name(mname) + "(" + self_expr + build_call_tail(ca, bp) + ")"
+        # Issue #286: when the call resolves through inheritance to an
+        # ancestor's method, the C function takes `sp_<owner> *self`.
+        # Our `self` here is `sp_<current> *`. Cast so the `-Werror`
+        # build doesn't trip on -Wincompatible-pointer-types. The same
+        # cast pattern is already used by the recv >= 0 / instance_eval
+        # branches a few lines above.
+        recv_arg = self_expr
+        if owner != "" && owner != @cls_names[@current_class_idx]
+          recv_arg = "(sp_" + owner + " *)" + self_expr
+        end
+        return "sp_" + owner + "_" + sanitize_name(mname) + "(" + recv_arg + build_call_tail(ca, bp) + ")"
       end
       # Check attr_readers (bare method call like `x` meaning self.x)
       readers = @cls_attr_readers[@current_class_idx].split(";")
