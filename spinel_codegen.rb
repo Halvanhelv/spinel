@@ -24782,7 +24782,7 @@ class Compiler
       i = i + 1
     end
     # Built-in type dispatch (cls_id < 0).
-    emit_poly_builtin_dispatch(recv_tmp, mname, arg_compiled, tmp, is_poly_ret)
+    emit_poly_builtin_dispatch(recv_tmp, mname, arg_compiled, arg_types, tmp, is_poly_ret)
     emit("  }")
     tmp
   end
@@ -24790,10 +24790,18 @@ class Compiler
   # Emit branches for the built-in (negative cls_id) entries. Each
   # entry maps a (SP_BUILTIN_*, method) pair to a C expression.
   # Adding a new built-in type means one more `if` branch here.
-  def emit_poly_builtin_dispatch(recv_tmp, mname, arg_compiled, result_tmp, is_poly_ret)
+  def emit_poly_builtin_dispatch(recv_tmp, mname, arg_compiled, arg_types, result_tmp, is_poly_ret)
     a0 = ""
     if arg_compiled.length > 0
       a0 = arg_compiled[0]
+      # Unbox if poly — every built-in `[]` arm here passes a0 to a
+      # function expecting `mrb_int` (sp_IntArray_get etc., or the
+      # Method fn_ptr's int parameter). When the caller's arg is
+      # poly (e.g. `def fetch(addr); @fetch[addr][addr]; end` with
+      # addr widened), we must unbox before the C call.
+      if arg_types.length > 0 && arg_types[0] == "poly"
+        a0 = "(" + a0 + ").v.i"
+      end
     end
     # `[]` — element types differ per built-in. When the result temp
     # is sp_RbVal (poly return), every branch can box into it. When
