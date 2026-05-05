@@ -26009,7 +26009,10 @@ class Compiler
     cond = compile_cond_expr(@nd_predicate[nid])
     emit("  while (" + cond + ") {")
     @indent = @indent + 1
+    redo_label = push_redo_label
+    emit_redo_label(redo_label)
     compile_stmts_body(@nd_body[nid])
+    pop_redo_label
     @indent = @indent - 1
     emit("  }")
     @hoisted_strlen_var = saved_var
@@ -26023,7 +26026,10 @@ class Compiler
     cond = compile_cond_expr(@nd_predicate[nid])
     emit("  while (!(" + cond + ")) {")
     @indent = @indent + 1
+    redo_label = push_redo_label
+    emit_redo_label(redo_label)
     compile_stmts_body(@nd_body[nid])
+    pop_redo_label
     @indent = @indent - 1
     emit("  }")
     @in_loop = old
@@ -26047,7 +26053,10 @@ class Compiler
         cmp = range_excl_end(coll) == 1 ? "<" : "<="
         emit("  for (lv_" + vname + " = " + left + "; lv_" + vname + " " + cmp + " " + right + "; lv_" + vname + "++) {")
         @indent = @indent + 1
+        redo_label = push_redo_label
+        emit_redo_label(redo_label)
         compile_stmts_body(@nd_body[nid])
+        pop_redo_label
         @indent = @indent - 1
         emit("  }")
       else
@@ -26057,10 +26066,15 @@ class Compiler
         tmp = new_temp
         pfx = array_c_prefix(ct)
         emit("  for (mrb_int " + tmp + " = 0; " + tmp + " < sp_" + pfx + "_length(" + rc + "); " + tmp + "++) {")
+        # Loop-var assignment stays OUTSIDE the redo label so `redo` re-runs
+        # the body with the same value (matches MRI: `redo` does not advance).
         emit("    lv_" + vname + " = sp_" + pfx + "_get(" + rc + ", " + tmp + ");")
 
         @indent = @indent + 1
+        redo_label = push_redo_label
+        emit_redo_label(redo_label)
         compile_stmts_body(@nd_body[nid])
+        pop_redo_label
         @indent = @indent - 1
         emit("  }")
       end
