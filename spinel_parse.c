@@ -942,6 +942,13 @@ static int flatten(pm_node_t *node) {
     A("parts", &n->parts);
     break;
   }
+  case PM_REDO_NODE:
+    /* `redo`. Re-run the current iteration of the enclosing loop
+       without re-evaluating the loop guard or advancing the
+       iterator. Codegen emits a labeled `goto` to a label installed
+       at the top of the iteration body. */
+    N("RedoNode");
+    break;
   default: {
     /* Fallback: emit unknown node type */
     char buf[64];

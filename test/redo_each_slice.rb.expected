@@ -1,0 +1,4 @@
+slice=[1, 2] attempt=1
+slice=[3, 4] attempt=5
+slice=[5, 6] attempt=6
+total=6
