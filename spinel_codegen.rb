@@ -10085,7 +10085,33 @@ class Compiler
          m != "+" && m != "-" && m != "*" && m != "/" && m != "%" &&
          m != "&" && m != "|" && m != "^" && m != "~" &&
          m != "<" && m != ">" && m != "<=" && m != ">=" && m != "<=>" &&
-         m != "===" && m != "!"
+         m != "===" && m != "!" &&
+         # Issue #302: methods shared across String / Hash / Integer
+         # primitive types that the body-side inference must NOT use as
+         # evidence of a user-class receiver. The Rails pattern of
+         # `def index` / `def show` / `def create` on every controller
+         # collides with `String#index` etc., and the canonical caller
+         # (`s.index("[")` on a string) was being routed to whichever
+         # user-class `index` the inference picked first.
+         m != "index" && m != "rindex" && m != "match" && m != "match?" &&
+         m != "scan" && m != "sub" && m != "gsub" && m != "tr" &&
+         m != "split" && m != "chars" && m != "bytes" && m != "lines" &&
+         m != "chomp" && m != "chop" && m != "strip" && m != "lstrip" && m != "rstrip" &&
+         m != "upcase" && m != "downcase" && m != "capitalize" && m != "swapcase" &&
+         m != "start_with?" && m != "end_with?" &&
+         m != "to_i" && m != "to_f" && m != "to_sym" && m != "to_str" &&
+         m != "chr" && m != "ord" && m != "bytesize" && m != "=~" &&
+         m != "ljust" && m != "rjust" && m != "center" && m != "replace" && m != "clear" &&
+         # Hash-shared
+         m != "keys" && m != "values" && m != "each_pair" && m != "each_key" && m != "each_value" &&
+         m != "has_key?" && m != "has_value?" && m != "key?" && m != "value?" &&
+         m != "merge" && m != "merge!" && m != "invert" &&
+         m != "transform_keys" && m != "transform_values" && m != "delete" &&
+         # Integer-shared (`succ` is also Range/String etc.)
+         m != "succ" && m != "next" && m != "pred" && m != "digits" && m != "bit_length" &&
+         m != "times" && m != "upto" && m != "downto" && m != "step" &&
+         m != "abs" && m != "divmod" && m != "gcd" && m != "lcm" &&
+         m != "even?" && m != "odd?" && m != "zero?" && m != "positive?" && m != "negative?"
         return 0
       end
       k = k + 1
