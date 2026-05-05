@@ -794,6 +794,16 @@ static int flatten(pm_node_t *node) {
     node_counter--;
     return flatten(n->value);
   }
+  case PM_MISSING_NODE: {
+    /* Prism emits MissingNode as an error-recovery placeholder. main()
+       bails out before flatten() runs when parser.error_list is
+       non-empty, so reaching this case means Prism produced a
+       MissingNode without flagging an error -- a contract violation we
+       surface clearly rather than silently miscompile. */
+    fprintf(stderr, "spinel_parse: internal error: MissingNode reached flatten() at byte offset %td; parse error not in error_list\n",
+            node->location.start - g_parser->start);
+    exit(1);
+  }
   case PM_SPLAT_NODE: {
     pm_splat_node_t *n = (pm_splat_node_t *)node;
     N("SplatNode");
