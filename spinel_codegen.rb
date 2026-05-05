@@ -662,6 +662,11 @@ class Compiler
     if field == "unescaped"
       @nd_unescaped[nid] = val
     end
+    if field == "kind"
+      # UnsupportedNode carries the Prism node-type name here so
+      # codegen can surface a precise compile error.
+      @nd_content[nid] = val
+    end
   end
 
   def set_int_field(nid, field, val)
@@ -678,6 +683,11 @@ class Compiler
       @nd_value[nid] = val
     end
     if field == "start_line"
+      @nd_value[nid] = val
+    end
+    if field == "source_line"
+      # UnsupportedNode carries the source line so codegen can cite
+      # location in the compile error.
       @nd_value[nid] = val
     end
   end
@@ -17791,6 +17801,13 @@ class Compiler
       return "0"
     end
     t = @nd_type[nid]
+    if t == "UnsupportedNode"
+      # The parser emitted this sentinel because it hit a Prism node
+      # type it doesn't know how to serialize. Refusing to compile is
+      # far better than the historical silent "0".
+      $stderr.puts "Spinel: cannot compile " + @nd_content[nid] + " at line " + @nd_value[nid].to_s + " (unsupported Ruby syntax)"
+      exit(1)
+    end
     if t == "IntegerNode"
       return @nd_value[nid].to_s
     end
@@ -25358,6 +25375,11 @@ class Compiler
       return
     end
     t = @nd_type[nid]
+    if t == "UnsupportedNode"
+      # Same loud-error path as compile_expr's UnsupportedNode arm.
+      $stderr.puts "Spinel: cannot compile " + @nd_content[nid] + " at line " + @nd_value[nid].to_s + " (unsupported Ruby syntax)"
+      exit(1)
+    end
     if t == "MultiWriteNode"
       compile_multi_write(nid)
       return

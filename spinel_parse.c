@@ -77,6 +77,23 @@ static char *escape_pm_string(const pm_string_t *s) {
   return escape_str(pm_string_source(s), pm_string_length(s));
 }
 
+/* Convert "PM_FOO_BAR_NODE" -> "FooBarNode" into `out`, truncated to
+   out_size-1 chars + NUL. Prism's node-type strings are pure ASCII
+   upper + underscore so we add 32 to lowercase non-leading letters. */
+static size_t prism_kind_to_pascal(const char *raw, char *out, size_t out_size) {
+  if (out_size == 0) return 0;
+  if (strncmp(raw, "PM_", 3) == 0) raw += 3;
+  size_t j = 0;
+  int upper = 1;
+  for (; *raw && j < out_size - 1; raw++) {
+    if (*raw == '_') { upper = 1; continue; }
+    out[j++] = upper ? *raw : (char)(*raw + 32);
+    upper = 0;
+  }
+  out[j] = '\0';
+  return j;
+}
+
 /* ---- Forward ---- */
 static int flatten(pm_node_t *node);
 
@@ -1074,10 +1091,20 @@ static int flatten(pm_node_t *node) {
     break;
   }
   default: {
-    /* Fallback: emit unknown node type */
-    char buf[64];
-    snprintf(buf, sizeof(buf), "UnknownNode_%d", (int)t);
-    out_add("N %d %s", id, buf);
+    /* Previously emitted UnknownNode_<n> which silently degraded to
+       "0" in codegen. Now emit a hard-error sentinel carrying the
+       Prism node kind name (in human-friendly Ruby vocabulary) + the
+       source line so codegen refuses to compile and tells the user
+       exactly what's wrong. */
+    char pretty[128];
+    size_t plen = prism_kind_to_pascal(pm_node_type_to_str(t), pretty, sizeof(pretty));
+    int32_t line = pm_newline_list_line(&g_parser->newline_list, node->location.start, g_parser->start_line);
+
+    N("UnsupportedNode");
+    char *kind_e = escape_str((const uint8_t *)pretty, plen);
+    emit_str(id, "kind", kind_e);
+    free(kind_e);
+    emit_int(id, "source_line", (long long)line);
     break;
   }
   }
