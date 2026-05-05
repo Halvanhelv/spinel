@@ -30,5 +30,16 @@ puts (Math.log10(3.0) * 1000).to_i      # 477
 # Hypot
 puts (Math.hypot(3.0, 4.0) * 1000).to_i # 5000
 
+# Hyperbolic
+puts (Math.tanh(0.5) * 1000).to_i       # 462
+puts (Math.tanh(1.0) * 1000).to_i       # 761
+puts (Math.sinh(1.0) * 1000).to_i       # 1175
+puts (Math.cosh(1.0) * 1000).to_i       # 1543
+
+# Inverse hyperbolic
+puts (Math.atanh(0.5) * 1000).to_i      # 549
+puts (Math.asinh(1.0) * 1000).to_i      # 881
+puts (Math.acosh(2.0) * 1000).to_i      # 1316
+
 # PI
 puts (Math::PI * 1000).to_i             # 3141

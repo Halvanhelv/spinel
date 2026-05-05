@@ -4031,6 +4031,17 @@ class Compiler
     if mname == "acos" || mname == "asin" || mname == "atan"
       return "float"
     end
+    # Hyperbolic + inverse hyperbolic — same C99 libm wrappers as the
+    # circular ones above. Issue: returning "float" here lets call sites
+    # that lift `Math.tanh(x)` into a non-Float context (e.g. into an
+    # IntArray slot via `arr[i] = Math.tanh(x)`) get caught at type-
+    # check time instead of silently emitting `0`.
+    if mname == "sinh" || mname == "cosh" || mname == "tanh"
+      return "float"
+    end
+    if mname == "asinh" || mname == "acosh" || mname == "atanh"
+      return "float"
+    end
     if mname == "log"
       return "float"
     end
@@ -22944,6 +22955,24 @@ class Compiler
         end
         if mname == "atan"
           return "atan(" + compile_arg0(nid) + ")"
+        end
+        if mname == "sinh"
+          return "sinh(" + compile_arg0(nid) + ")"
+        end
+        if mname == "cosh"
+          return "cosh(" + compile_arg0(nid) + ")"
+        end
+        if mname == "tanh"
+          return "tanh(" + compile_arg0(nid) + ")"
+        end
+        if mname == "asinh"
+          return "asinh(" + compile_arg0(nid) + ")"
+        end
+        if mname == "acosh"
+          return "acosh(" + compile_arg0(nid) + ")"
+        end
+        if mname == "atanh"
+          return "atanh(" + compile_arg0(nid) + ")"
         end
         if mname == "log"
           return "log(" + compile_arg0(nid) + ")"
