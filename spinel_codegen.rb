@@ -30786,6 +30786,41 @@ class Compiler
       emit("  sp_PtrArray_set(" + rc + ", " + idx + ", (void *)" + val + ");")
       return
     end
+    if rt == "poly_array"
+      vbox = val
+      if arg_ids.length >= 2
+        vt = infer_type(arg_ids[1])
+        if vt != "poly"
+          vbox = box_value_to_poly(vt, val)
+        end
+      end
+      emit("  sp_PolyArray_set(" + rc + ", " + idx + ", " + vbox + ");")
+      return
+    end
+    if rt == "poly"
+      # Slot is sp_RbVal — runtime cls_id determines which storage
+      # the underlying pointer points at. Optcarrot's `@fetch[a] =
+      # method(:peek_X)` lands here when @fetch was widened to poly
+      # (rather than poly_array) by the heterogeneous IntArray + Method
+      # writes. Dispatch by cls_id, mirroring sp_PolyArray_set's
+      # interface for the POLY_ARRAY case and using element-typed
+      # setters for the homogeneous storage variants. Extract the
+      # appropriate payload from the boxed value via .v.p / .v.i.
+      vbox = val
+      vt = "int"
+      if arg_ids.length >= 2
+        vt = infer_type(arg_ids[1])
+        if vt != "poly"
+          vbox = box_value_to_poly(vt, val)
+        end
+      end
+      vbox_tmp = new_temp
+      emit("  sp_RbVal " + vbox_tmp + " = " + vbox + ";")
+      emit("  if (" + rc + ".cls_id == SP_BUILTIN_POLY_ARRAY) sp_PolyArray_set((sp_PolyArray *)" + rc + ".v.p, " + idx + ", " + vbox_tmp + ");")
+      emit("  else if (" + rc + ".cls_id == SP_BUILTIN_PTR_ARRAY) sp_PtrArray_set((sp_PtrArray *)" + rc + ".v.p, " + idx + ", " + vbox_tmp + ".v.p);")
+      emit("  else if (" + rc + ".cls_id == SP_BUILTIN_INT_ARRAY) sp_IntArray_set((sp_IntArray *)" + rc + ".v.p, " + idx + ", " + vbox_tmp + ".v.i);")
+      return
+    end
     if rt == "str_int_hash"
       emit("  sp_StrIntHash_set(" + rc + ", " + idx + ", " + val + ");")
       return
