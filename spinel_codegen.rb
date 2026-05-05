@@ -24678,6 +24678,21 @@ class Compiler
     if mname == "to_s"
       return "sp_poly_to_s(" + rc + ")"
     end
+    if mname == "to_i"
+      # Unbox the poly value's int payload. For SP_TAG_INT it's the
+      # raw `v.i`. For SP_TAG_OBJ branches the runtime values are
+      # always pointers — `.to_i` on a class that doesn't define
+      # `to_i` is the obj-id in Ruby; we approximate as 0 since
+      # spinel doesn't expose a stable obj-id and the only practical
+      # use is unboxing a poly-with-int payload (e.g. the result of
+      # `arr[i][j]` over a heterogeneous IntArray + Method array,
+      # whose dispatch arms all box back to SP_TAG_INT).
+      tmp = new_temp
+      recv_tmp = new_temp
+      emit("  sp_RbVal " + recv_tmp + " = " + rc + ";")
+      emit("  mrb_int " + tmp + " = (" + recv_tmp + ".tag == SP_TAG_INT) ? " + recv_tmp + ".v.i : 0;")
+      return tmp
+    end
     # For object method calls, dispatch based on cls_id. Two namespaces
     # of cls_id share SP_TAG_OBJ:
     #   - non-negative: index into @cls_names (user-defined classes)
