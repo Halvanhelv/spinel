@@ -23264,6 +23264,20 @@ class Compiler
       if args_id >= 0
         aargs = get_args(args_id)
         if aargs.length > 0
+          # Skip bit-extract when the index is a non-int — `row[:id]`
+          # / `row["id"]` is hash subscript, not bit indexing on an
+          # integer. Without this gate, a poly/hash-receiver param
+          # that defaulted to "int" (no upstream pinning) routed
+          # `row[:id]` to `(row >> SPS_id) & 1`, shifting an int by
+          # the symbol's interned id (>= 64) which is undefined
+          # behavior under -Wshift-count-overflow. Surfaces in
+          # Roundhouse's `def self.from_raw(row); row[:id] || 0;
+          # end` where `row` is unpinned. Issue #314 (Roundhouse
+          # warnings family).
+          idx_t = infer_type(aargs[0])
+          if idx_t != "int" && idx_t != "poly"
+            return ""
+          end
           idx = compile_expr(aargs[0])
           return "(((" + rc + ") >> (" + idx + ")) & 1)"
         end
