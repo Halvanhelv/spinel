@@ -765,6 +765,15 @@ typedef uint64_t sp_RbValue;
 #define SP_BUILTIN_RANGE        (-10)                             /* sp_Range *, heap copy of stack-typed sp_Range when crossing into poly */
 #define SP_BUILTIN_TIME         (-11)                             /* sp_Time *, heap copy of stack-typed sp_Time when crossing into poly */
 #define SP_BUILTIN_POLY_ARRAY   (-12)                             /* sp_PolyArray *, array of sp_RbVal */
+/* Hash variant cls_ids — boxed into the cls_id of a poly slot so
+   Hash#dig can recover the concrete hash type at runtime. */
+#define SP_BUILTIN_STR_INT_HASH  (-13)
+#define SP_BUILTIN_STR_STR_HASH  (-14)
+#define SP_BUILTIN_INT_STR_HASH  (-15)
+#define SP_BUILTIN_SYM_INT_HASH  (-16)
+#define SP_BUILTIN_SYM_STR_HASH  (-17)
+#define SP_BUILTIN_STR_POLY_HASH (-18)
+#define SP_BUILTIN_SYM_POLY_HASH (-19)
 typedef struct { int tag; int cls_id; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; } v; } sp_RbVal;
 static sp_RbVal sp_box_int(mrb_int v) { sp_RbVal r; r.tag = SP_TAG_INT; r.cls_id = 0; r.v.i = v; return r; }
 static sp_RbVal sp_box_str(const char *v) { sp_RbVal r; r.tag = SP_TAG_STR; r.cls_id = 0; r.v.s = v; return r; }

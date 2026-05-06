@@ -2438,6 +2438,16 @@ class Compiler
             end
             return "str_poly_hash"
           end
+          # Inner hash/array values need a poly outer so each pointer
+          # can carry its own cls_id through SP_TAG_OBJ.
+          if is_hash_type(first_vt) == 1 || is_array_type(first_vt) == 1
+            if all_sym_keys == 1
+              return "sym_poly_hash"
+            end
+            if all_int_keys == 0
+              return "str_poly_hash"
+            end
+          end
         else
           # Mixed value types: use a *_poly_hash so each slot carries its
           # own tag (sp_RbVal) rather than coercing everything to one type.
@@ -3247,6 +3257,31 @@ class Compiler
       # recognize as a built-in collection — let later dispatch resolve
       # a user-defined `def fetch` against the receiver class.
       return ""
+    end
+    if mname == "dig"
+      if recv < 0
+        return ""
+      end
+      rt = infer_type(recv)
+      if is_hash_type(rt) != 1
+        return ""
+      end
+      args_id = @nd_arguments[nid]
+      arg_count = 0
+      if args_id >= 0
+        arg_count = get_args(args_id).length
+      end
+      if arg_count == 1
+        kt = infer_type(get_args(args_id)[0])
+        if hash_key_matches_recv(rt, kt) == 1
+          lt = hash_leaf_type(rt)
+          if lt == "int" || lt == "string"
+            return lt
+          end
+        end
+      end
+      @needs_rb_value = 1
+      return "poly"
     end
     if mname == "has_key?" || mname == "key?" || mname == "member?"
       return "bool"
@@ -5263,6 +5298,59 @@ class Compiler
       return 1
     end
     if t == "str_poly_hash" || t == "sym_poly_hash"
+      return 1
+    end
+    0
+  end
+
+  def cls_id_for_hash_type(at)
+    if at == "str_int_hash"
+      return "SP_BUILTIN_STR_INT_HASH"
+    end
+    if at == "str_str_hash"
+      return "SP_BUILTIN_STR_STR_HASH"
+    end
+    if at == "int_str_hash"
+      return "SP_BUILTIN_INT_STR_HASH"
+    end
+    if at == "sym_int_hash"
+      return "SP_BUILTIN_SYM_INT_HASH"
+    end
+    if at == "sym_str_hash"
+      return "SP_BUILTIN_SYM_STR_HASH"
+    end
+    if at == "str_poly_hash"
+      return "SP_BUILTIN_STR_POLY_HASH"
+    end
+    if at == "sym_poly_hash"
+      return "SP_BUILTIN_SYM_POLY_HASH"
+    end
+    ""
+  end
+
+  def hash_leaf_type(recv_type)
+    if recv_type == "str_int_hash" || recv_type == "sym_int_hash"
+      return "int"
+    end
+    if recv_type == "str_str_hash" || recv_type == "sym_str_hash" || recv_type == "int_str_hash"
+      return "string"
+    end
+    if recv_type == "str_poly_hash" || recv_type == "sym_poly_hash"
+      return "poly"
+    end
+    ""
+  end
+
+  # CRuby returns nil for static mismatches (e.g. `{a: 1}.dig("a")`)
+  # since no key compares equal — Hash#dig short-circuits to nil here.
+  def hash_key_matches_recv(recv_type, key_type)
+    if recv_type.start_with?("sym_") && key_type == "symbol"
+      return 1
+    end
+    if recv_type.start_with?("str_") && key_type == "string"
+      return 1
+    end
+    if recv_type.start_with?("int_") && key_type == "int"
       return 1
     end
     0
@@ -12673,6 +12761,41 @@ class Compiler
       end
       if mname == "system"
         @needs_system = 1
+      end
+      # Hash variants are emitted on-demand. A multi-key dig step
+      # references every variant of the key family (poly + typed),
+      # so flag them all — otherwise the generated C fails to link.
+      if mname == "dig"
+        if @nd_receiver[nid] >= 0
+          drt = infer_type(@nd_receiver[nid])
+          if is_hash_type(drt) == 1
+            args_id_d = @nd_arguments[nid]
+            arg_count_d = 0
+            if args_id_d >= 0
+              arg_count_d = get_args(args_id_d).length
+            end
+            if arg_count_d >= 2
+              @needs_rb_value = 1
+              dargs = get_args(args_id_d)
+              dki = 1
+              while dki < dargs.length
+                dkt = infer_type(dargs[dki])
+                if dkt == "symbol"
+                  @needs_sym_poly_hash = 1
+                  @needs_sym_int_hash = 1
+                  @needs_sym_str_hash = 1
+                elsif dkt == "string"
+                  @needs_str_poly_hash = 1
+                  @needs_str_int_hash = 1
+                  @needs_str_str_hash = 1
+                elsif dkt == "int"
+                  @needs_int_str_hash = 1
+                end
+                dki = dki + 1
+              end
+            end
+          end
+        end
       end
       if mname == "keys"
         @needs_str_array = 1
@@ -23607,6 +23730,9 @@ class Compiler
 
   def compile_hash_method_expr(nid, mname, rc, recv_type)
     # Hash methods
+    if mname == "dig"
+      return compile_hash_dig(nid, rc, recv_type)
+    end
     if recv_type == "sym_int_hash"
       if mname == "[]"
         args_id0 = @nd_arguments[nid]
@@ -24014,6 +24140,130 @@ class Compiler
       end
     end
     ""
+  end
+
+  # Multi-key Hash#dig walks across poly slots: each step dispatches
+  # on acc.cls_id to pick a concrete-hash variant (cls_ids stamped in
+  # box_value_to_poly via cls_id_for_hash_type). A cls_id that matches
+  # no known variant collapses the walk to nil, covering both "key
+  # missing mid-walk" and "value at this depth isn't a hash".
+  def compile_hash_dig(nid, rc, recv_type)
+    args_id = @nd_arguments[nid]
+    aargs = []
+    if args_id >= 0
+      aargs = get_args(args_id)
+    end
+    if aargs.length == 0
+      @needs_rb_value = 1
+      return "sp_box_nil()"
+    end
+
+    # `"".split(",")` builds an empty str_array — bare `[]` would be
+    # inferred as int_array under spinel's self-host rules and can't
+    # hold the string temps below.
+    key_tmps = "".split(",")
+    key_types = "".split(",")
+    ki = 0
+    while ki < aargs.length
+      kt = infer_type(aargs[ki])
+      tmp = new_temp
+      if kt == "symbol"
+        emit("  sp_sym " + tmp + " = " + compile_expr(aargs[ki]) + ";")
+      elsif kt == "string"
+        emit("  const char *" + tmp + " = " + compile_expr_as_string(aargs[ki]) + ";")
+      elsif kt == "int"
+        emit("  mrb_int " + tmp + " = " + compile_expr(aargs[ki]) + ";")
+      else
+        emit("  mrb_int " + tmp + " = 0; (void)" + tmp + ";")
+      end
+      key_tmps.push(tmp)
+      key_types.push(kt)
+      ki = ki + 1
+    end
+
+    # First-key static mismatch: short-circuit before the typed `_get`
+    # so we don't fabricate a sentinel 0/"" leaf that would round-trip
+    # through boxing as a real boxed 0/"".
+    if hash_key_matches_recv(recv_type, key_types[0]) == 0
+      @needs_rb_value = 1
+      return "sp_box_nil()"
+    end
+
+    if aargs.length == 1
+      return hash_get_expr(recv_type, rc, key_tmps[0])
+    end
+
+    @needs_rb_value = 1
+    acc = new_temp
+    emit("  sp_RbVal " + acc + ";")
+    first_get = hash_get_expr(recv_type, rc, key_tmps[0])
+    emit("  " + acc + " = " + box_non_nullable_value_to_poly(hash_leaf_type(recv_type), first_get) + ";")
+
+    si = 1
+    while si < aargs.length
+      emit_dig_step(acc, key_tmps[si], key_types[si])
+      si = si + 1
+    end
+    acc
+  end
+
+  # Caller must pass `key_expr` typed for recv_type's key family —
+  # compile_hash_dig validates this with hash_key_matches_recv first.
+  def hash_get_expr(recv_type, rc, key_expr)
+    if recv_type == "sym_int_hash"
+      return "sp_SymIntHash_get((sp_SymIntHash *)(" + rc + "), " + key_expr + ")"
+    end
+    if recv_type == "sym_str_hash"
+      return "sp_SymStrHash_get((sp_SymStrHash *)(" + rc + "), " + key_expr + ")"
+    end
+    if recv_type == "sym_poly_hash"
+      @needs_rb_value = 1
+      return "sp_SymPolyHash_get((sp_SymPolyHash *)(" + rc + "), " + key_expr + ")"
+    end
+    if recv_type == "str_poly_hash"
+      @needs_rb_value = 1
+      return "sp_StrPolyHash_get(" + rc + ", " + key_expr + ")"
+    end
+    if recv_type == "str_int_hash"
+      return "sp_StrIntHash_get(" + rc + ", " + key_expr + ")"
+    end
+    if recv_type == "str_str_hash"
+      return "sp_StrStrHash_get(" + rc + ", " + key_expr + ")"
+    end
+    if recv_type == "int_str_hash"
+      return "sp_IntStrHash_get(" + rc + ", " + key_expr + ")"
+    end
+    "0"
+  end
+
+  # Non-poly inner hashes need a has_key guard: their typed `_get`
+  # returns 0/"" on miss, which sp_box_int/sp_box_str would otherwise
+  # round-trip as a genuine 0/"" leaf indistinguishable from a real
+  # value. Poly inner hashes don't need the guard — their `_get`
+  # already returns sp_box_nil() on miss.
+  def emit_dig_step(acc, key_expr, key_type)
+    emit("  if (" + acc + ".tag != SP_TAG_OBJ) { " + acc + " = sp_box_nil(); } else {")
+    if key_type == "symbol"
+      emit_dig_arm_poly(acc, key_expr, "SP_BUILTIN_SYM_POLY_HASH", "sp_SymPolyHash")
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_SYM_INT_HASH", "sp_SymIntHash", "sp_box_int")
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_SYM_STR_HASH", "sp_SymStrHash", "sp_box_str")
+    elsif key_type == "string"
+      emit_dig_arm_poly(acc, key_expr, "SP_BUILTIN_STR_POLY_HASH", "sp_StrPolyHash")
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_STR_INT_HASH", "sp_StrIntHash", "sp_box_int")
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_STR_STR_HASH", "sp_StrStrHash", "sp_box_str")
+    elsif key_type == "int"
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_INT_STR_HASH", "sp_IntStrHash", "sp_box_str")
+    end
+    emit("    " + acc + " = sp_box_nil();")
+    emit("  }")
+  end
+
+  def emit_dig_arm_poly(acc, key_expr, cls_id, cstruct)
+    emit("    if (" + acc + ".cls_id == " + cls_id + ") { " + acc + " = " + cstruct + "_get((" + cstruct + " *)" + acc + ".v.p, " + key_expr + "); } else")
+  end
+
+  def emit_dig_arm_typed(acc, key_expr, cls_id, cstruct, box_fn)
+    emit("    if (" + acc + ".cls_id == " + cls_id + ") { " + cstruct + " *_dh = (" + cstruct + " *)" + acc + ".v.p; " + acc + " = " + cstruct + "_has_key(_dh, " + key_expr + ") ? " + box_fn + "(" + cstruct + "_get(_dh, " + key_expr + ")) : sp_box_nil(); } else")
   end
 
   def compile_enumerable_expr(nid, mname)
@@ -25048,6 +25298,12 @@ class Compiler
         ci = find_class_idx(cname)
         return "sp_box_nullable_obj(" + val + ", " + ci.to_s + ")"
       end
+      # Stamp hash cls_id so Hash#dig can recover the concrete type;
+      # falling through to cls_id=0 would make dig collapse to nil.
+      hcid = cls_id_for_hash_type(at)
+      if hcid != ""
+        return "sp_box_nullable_obj((void *)(" + val + "), " + hcid + ")"
+      end
       if type_is_pointer(at) == 1
         return "sp_box_nullable_obj((void *)(" + val + "), 0)"
       end
@@ -25114,7 +25370,11 @@ class Compiler
       ci = find_class_idx(cname)
       return "sp_box_obj(" + val + ", " + ci.to_s + ")"
     end
-    # Other pointer types (hashes, mutable strings, etc.) — box with a
+    hcid = cls_id_for_hash_type(at)
+    if hcid != ""
+      return "sp_box_obj((void *)(" + val + "), " + hcid + ")"
+    end
+    # Other pointer types (mutable strings, etc.) — box with a
     # neutral cls_id of 0 rather than truncating the pointer to int.
     if type_is_pointer(at) == 1
       return "sp_box_obj((void *)(" + val + "), 0)"
