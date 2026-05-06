@@ -24130,10 +24130,17 @@ class Compiler
         jtmp = new_temp
         cols = new_temp
         emit("  sp_PtrArray *" + tmp + " = sp_PtrArray_new();")
+        # GC-root the result PtrArray and the per-column IntArray. Both
+        # outlive the inner allocation calls (`sp_IntArray_new`,
+        # `sp_PtrArray_push`'s realloc) that may trigger collection. Without
+        # the root, an inner sp_IntArray_new could free `tmp` mid-loop and
+        # the next push dereferences a freed pointer.
+        emit("  SP_GC_ROOT(" + tmp + ");")
         emit("  if (sp_PtrArray_length(" + rc + ") > 0) {")
         emit("    mrb_int " + cols + " = sp_IntArray_length((sp_IntArray *)sp_PtrArray_get(" + rc + ", 0));")
         emit("    for (mrb_int " + jtmp + " = 0; " + jtmp + " < " + cols + "; " + jtmp + "++) {")
         emit("      sp_IntArray *" + col + " = sp_IntArray_new();")
+        emit("      SP_GC_ROOT(" + col + ");")
         emit("      for (mrb_int " + itmp + " = 0; " + itmp + " < sp_PtrArray_length(" + rc + "); " + itmp + "++) {")
         emit("        sp_IntArray_push(" + col + ", sp_IntArray_get((sp_IntArray *)sp_PtrArray_get(" + rc + ", " + itmp + "), " + jtmp + "));")
         emit("      }")
@@ -27076,6 +27083,19 @@ class Compiler
               # `self_arrow`) or as the first arg of a same-class
               # method call (via `self_expr`).
               recv_c = compile_expr_gc_rooted(recv_for_default)
+              # Cast the recv expression to the target class's
+              # pointer type when the static type of the recv is not
+              # already that pointer (e.g. an inherited @apu ivar
+              # whose slot was inferred as mrb_int but the runtime
+              # value is sp_Optcarrot_APU *). Without the cast, an
+              # `@cpu` reference inside the default expression
+              # lowers to `(<recv>)->iv_cpu` which gcc rejects when
+              # `<recv>` is mrb_int.
+              recv_t = infer_type(recv_for_default)
+              target_obj_t = "obj_" + @cls_names[target_ci]
+              if base_type(recv_t) != target_obj_t && @cls_is_value_type[target_ci] != 1
+                recv_c = "(sp_" + @cls_names[target_ci] + " *)" + recv_c
+              end
               @self_override = "(" + recv_c + ")"
               @current_class_idx = target_ci
             end
