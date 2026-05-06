@@ -3070,6 +3070,9 @@ class Compiler
     if mname == "cover?"
       return "bool"
     end
+    if mname == "==="
+      return "bool"
+    end
     if mname == "match?"
       return "bool"
     end
@@ -20754,6 +20757,93 @@ class Compiler
       r = compile_lambda_call_expr(nid, mname, recv)
       if r != ""
         return r
+      end
+    end
+
+    # `Class === expr` — case-when membership for primitive type names.
+    # Resolve at compile time based on the arg's inferred type. Has to
+    # run before compile_operator_expr / compile_eq (both of which would
+    # mishandle the constant receiver as a regular C identifier and emit
+    # `<undeclared identifier> == arg`).
+    if mname == "===" && recv >= 0 && (@nd_type[recv] == "ConstantReadNode" || @nd_type[recv] == "ConstantPathNode")
+      rcname_threeq = resolve_const_ref_name(recv)
+      args_id_threeq = @nd_arguments[nid]
+      if args_id_threeq >= 0
+        a_threeq = get_args(args_id_threeq)
+        if a_threeq.length > 0
+          at_threeq = infer_type(a_threeq[0])
+          if rcname_threeq == "Integer"
+            return at_threeq == "int" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Float"
+            return at_threeq == "float" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Numeric"
+            return (at_threeq == "int" || at_threeq == "float") ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Comparable"
+            # Comparable is included by Integer, Float, String, Symbol.
+            return (at_threeq == "int" || at_threeq == "float" ||
+                    at_threeq == "string" || at_threeq == "mutable_str" ||
+                    at_threeq == "symbol") ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "String"
+            return at_threeq == "string" || at_threeq == "mutable_str" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Symbol"
+            return at_threeq == "symbol" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Array"
+            return is_array_type(at_threeq) == 1 ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Hash"
+            # Hash type names all end in `_hash` (sym_int_hash, str_str_hash,
+            # sym_poly_hash, etc.); poly_hash also matches the runtime form.
+            is_hash = 0
+            if at_threeq == "poly_hash"
+              is_hash = 1
+            elsif at_threeq.length > 5 && at_threeq[at_threeq.length - 5, 5] == "_hash"
+              is_hash = 1
+            end
+            return is_hash == 1 ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Range"
+            return at_threeq == "range" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "TrueClass"
+            # TrueClass === arg matches only the literal `true` value.
+            # Compile-time decide for TrueNode/FalseNode literals; emit a
+            # runtime check for other bool-typed values; FALSE for non-bool.
+            if @nd_type[a_threeq[0]] == "TrueNode"
+              return "TRUE"
+            end
+            if @nd_type[a_threeq[0]] == "FalseNode"
+              return "FALSE"
+            end
+            if at_threeq == "bool"
+              return "((" + compile_expr(a_threeq[0]) + ") == TRUE)"
+            end
+            return "FALSE"
+          end
+          if rcname_threeq == "FalseClass"
+            if @nd_type[a_threeq[0]] == "FalseNode"
+              return "TRUE"
+            end
+            if @nd_type[a_threeq[0]] == "TrueNode"
+              return "FALSE"
+            end
+            if at_threeq == "bool"
+              return "((" + compile_expr(a_threeq[0]) + ") == FALSE)"
+            end
+            return "FALSE"
+          end
+          if rcname_threeq == "NilClass"
+            return at_threeq == "nil" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Object" || rcname_threeq == "Kernel" || rcname_threeq == "BasicObject"
+            return "TRUE"
+          end
+        end
       end
     end
 
