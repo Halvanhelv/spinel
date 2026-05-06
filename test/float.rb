@@ -112,3 +112,12 @@ p 1.0
 p 1234567890.5
 p 1.0e16
 p(-0.0)
+
+# === Kernel#Float coerces strings, ints, and floats ===
+puts Float("3.14")        # 3.14
+puts Float("0")           # 0.0
+puts Float("-2.5")        # -2.5
+puts Float(1)             # 1.0
+puts Float(42)            # 42.0
+puts Float(2.71)          # 2.71
+puts Float("1e2")         # 100.0
