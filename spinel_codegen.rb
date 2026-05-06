@@ -31811,6 +31811,20 @@ class Compiler
       @needs_int_array = 1
       return "sp_SymArrayPtrArray_inspect(" + val + ")"
     end
+    # Tuples produced by methods that return Ruby Arrays of fixed
+    # arity (Integer#divmod, Array#minmax, etc.).  Without an inspect
+    # path here, `p arr.minmax` would fall through to printf("%lld",...)
+    # and emit the struct pointer.  Format as Ruby's "[a, b]" so the
+    # output round-trips with CRuby.
+    if at == "tuple:int,int"
+      return "sp_sprintf(\"[%lld, %lld]\", (long long)" + val + "->_0, (long long)" + val + "->_1)"
+    end
+    if at == "tuple:int,float"
+      return "sp_sprintf(\"[%lld, %s]\", (long long)" + val + "->_0, sp_float_inspect(" + val + "->_1))"
+    end
+    if at == "tuple:float,float"
+      return "sp_sprintf(\"[%s, %s]\", sp_float_inspect(" + val + "->_0), sp_float_inspect(" + val + "->_1))"
+    end
     ""
   end
 
