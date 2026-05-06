@@ -17042,6 +17042,19 @@ class Compiler
       end
       if bid >= 0
         @current_class_idx = ci
+        # Issue #337: pin the synthesized sp_<C>_new function's return
+        # type so a bare `return` inside the initialize body lowers to
+        # `return self;` (the partially-initialized instance) rather
+        # than the default `return 0;` (which silently NULLs the
+        # pointer-returning constructor for the heap-allocated shape).
+        # Value-type constructors return a struct, leave at "" so the
+        # bare-return path falls through to its existing 0 default.
+        saved_method_return = @current_method_return
+        if @cls_is_value_type[ci] == 1
+          @current_method_return = ""
+        else
+          @current_method_return = "obj_" + cname
+        end
         all_params = @cls_meth_params[ci].split("|")
         all_ptypes = @cls_meth_ptypes[ci].split("|")
         pnames = "".split(",")
@@ -17248,6 +17261,7 @@ class Compiler
         }
         pop_scope
         @current_class_idx = -1
+        @current_method_return = saved_method_return
       end
     else
       # No own initialize - call parent's if it exists
@@ -17296,6 +17310,12 @@ class Compiler
         bid = bodies[init_idx].to_i
       end
       if bid >= 0
+        # Issue #337: this wrapper has C return type `void`. Pin
+        # @current_method_return so a bare `return` inside the body
+        # lowers to the void shape (`return;`) instead of leaking
+        # whatever was set during the prior _new emission.
+        saved_method_return = @current_method_return
+        @current_method_return = "void"
         @current_class_idx = ci
         all_params = @cls_meth_params[ci].split("|")
         all_ptypes = @cls_meth_ptypes[ci].split("|")
@@ -17333,6 +17353,7 @@ class Compiler
         }
         pop_scope
         @current_class_idx = -1
+        @current_method_return = saved_method_return
       end
       emit_raw("}")
       emit_raw("")
@@ -29445,11 +29466,28 @@ class Compiler
         return
       end
     end
-    # bare return — use NULL for nullable pointer types, 0 otherwise
+    # bare return — emit shape depends on the enclosing function's
+    # C return type:
+    #   void              → return;
+    #   obj_<C>           → return self;       (constructor synthesis;
+    #                                           returns the partially-
+    #                                           initialized instance)
+    #   nullable pointer  → return NULL;
+    #   anything else     → return 0;
+    # Issue #337: `return if x.nil?` inside a `def initialize` was
+    # emitted as `return 0;` regardless of the wrapping function. In
+    # the synthesized `sp_<C>_new` (sp_<C> *-returning) it silently
+    # NULLed the instance on the early-return branch; in the void
+    # `sp_<C>_initialize` form it was a `void function should not
+    # return a value` C error.
     if @in_gc_scope == 1
       emit("  SP_GC_RESTORE();")
     end
-    if is_nullable_pointer_type(@current_method_return) == 1
+    if @current_method_return == "void"
+      emit("  return;")
+    elsif is_obj_type(@current_method_return) == 1
+      emit("  return self;")
+    elsif is_nullable_pointer_type(@current_method_return) == 1
       emit("  return NULL;")
     else
       emit("  return 0;")
