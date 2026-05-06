@@ -2573,6 +2573,32 @@ class Compiler
           end
           return "int"
         end
+        # Method#call / Method#[]: the C-level signature lowers to
+        # `(void *self, mrb_int...) -> mrb_int`, so the inferred
+        # return is `int`. Non-int returns (string, obj, etc.) from
+        # the bound underlying method are out of scope. Ref #215.
+        if rt == "obj_Method"
+          return "int"
+        end
+      end
+    end
+
+    # `method(:foo)` produces a heap-allocated Method (the synthetic
+    # class registered in register_builtin_classes). Two captured
+    # forms produce a real Method:
+    #   - no receiver, inside a class body → bound to `self`.
+    #   - obj-typed receiver (e.g. `@foo.method(:bar)`) → bound to
+    #     the inferred receiver, regardless of where the call sits.
+    # Top-level `method(:foo)` with no receiver keeps the legacy
+    # static-alias placeholder; LocalVariableWriteNode then records
+    # the binding and `m.call(x)` rewrites to a direct `sp_<foo>(x)`
+    # call. Ref #215.
+    if mname == "method"
+      if recv < 0 && @current_class_idx >= 0
+        return "obj_Method"
+      end
+      if recv >= 0 && is_obj_type(infer_type(recv)) == 1
+        return "obj_Method"
       end
     end
 
@@ -5616,6 +5642,13 @@ class Compiler
         collect_class(sid)
       end
     }
+    # Pass 1.3: synthetic built-in classes (Method). Appended AFTER
+    # user classes so existing user-class indices don't shift; the
+    # poly-dispatch BUILTIN_PTR_ARRAY branch in
+    # emit_poly_builtin_dispatch assumes `cls_id 0` is the first user
+    # class and would silently misroute every poly call if Method
+    # took that slot. Ref #215.
+    register_builtin_classes
     # Pass 1.4: register class variables (@@var). Walks each class
     # body for any ClassVariable*WriteNode (Write, Operator, Or, And,
     # Target) and records the inferred type per (class, name). The
@@ -8757,6 +8790,55 @@ class Compiler
       @multi_const_inits = "".split(",")
     end
     @multi_const_inits.push(scope_name + "|" + nid.to_s)
+  end
+
+  # Synthetic built-in user class for `method(:foo)` capture: every
+  # `m = method(:foo)` / `obj.method(:foo)` produces an instance of
+  # this class, allocated by sp_Method_new and walked by the auto-
+  # generated sp_Method_gc_scan. Ref #215.
+  #
+  # The two ivars:
+  # - `@self_obj` typed `obj_Method`. Load-bearing hack: this type
+  #   makes ivar_is_gc_ptr true, which makes the auto-generated gc
+  #   scanner emit `sp_gc_mark(self->iv_self_obj)`. The actual
+  #   captured pointer is the bound receiver (any user class), cast
+  #   to `sp_Method *`. sp_gc_mark dispatches via the GC header's
+  #   `scan` field — set at the *bound receiver's* allocation time —
+  #   not via the static pointer type, so the cast is safe at the
+  #   GC level even though it's a type lie at the C level.
+  #   detect_method_taken_classes excludes the bound receiver's
+  #   class from value-type optimization so the captured pointer
+  #   never dangles (value-type instances live on the caller's
+  #   stack and would be reclaimed when the binding method returns).
+  # - `@fn_ptr` typed `int`. Holds `(uintptr_t)&sp_<DefCls>_<mname>`
+  #   reinterpreted as mrb_int (int64_t — wide enough on every
+  #   target). The Method.call/[] codegen in compile_call_expr casts
+  #   it back to a function pointer of the right shape.
+  def register_builtin_classes
+    @cls_names.push("Method")
+    @cls_is_value_type.push(0)
+    @cls_is_sra.push(0)
+    @cls_parents.push("")
+    @cls_ivar_names.push("@self_obj;@fn_ptr")
+    @cls_ivar_types.push("obj_Method;int")
+    @cls_ivar_init_definite.push("1;1")
+    @cls_ivar_observed_types.push("obj_Method;int")
+    @cls_meth_names.push("initialize")
+    @cls_meth_params.push("self_obj,fn_ptr")
+    @cls_meth_ptypes.push("obj_Method,int")
+    @cls_meth_returns.push("void")
+    @cls_meth_bodies.push("-2")
+    @cls_meth_defaults.push("0,0")
+    @cls_meth_ptypes_empty.push("")
+    @cls_attr_readers.push("")
+    @cls_attr_writers.push("")
+    @cls_cmeth_names.push("")
+    @cls_cmeth_params.push("")
+    @cls_cmeth_ptypes.push("")
+    @cls_cmeth_returns.push("")
+    @cls_cmeth_bodies.push("")
+    @cls_cmeth_defaults.push("")
+    @cls_meth_has_yield.push("0")
   end
 
   def collect_struct_class(cname, call_nid)
@@ -14996,6 +15078,146 @@ class Compiler
     end
   end
 
+  # Build the set of class indices whose instances are captured by a
+  # `method(:foo)` / `<obj>.method(:foo)` and end up stored in a
+  # heap-allocated Method's `@self_obj`. Such classes must stay
+  # heap-allocated — value-type optimization would put `self` on the
+  # caller's stack, and the captured pointer would dangle when the
+  # binding method returns. Ref #215.
+  #
+  # The walk needs scope set up so `infer_type` on a chained
+  # `<recv>.method(:foo)` can resolve `<recv>` (a local, an ivar via
+  # attr_reader, or a chained call) back to its `obj_<X>` type.
+  def detect_method_taken_classes
+    @method_taken_class_indices = "".split(",")
+    # Walk class methods first.
+    i = 0
+    while i < @cls_names.length
+      mnames_str = @cls_meth_names[i]
+      if mnames_str != ""
+        mnames = mnames_str.split(";")
+        all_params = @cls_meth_params[i].split("|")
+        all_ptypes = @cls_meth_ptypes[i].split("|")
+        bodies = @cls_meth_bodies[i].split(";")
+        saved_ci = @current_class_idx
+        @current_class_idx = i
+        mi = 0
+        while mi < mnames.length
+          if mi < bodies.length
+            bid = bodies[mi].to_i
+            if bid >= 0
+              pnames = ""
+              ptypes = ""
+              if mi < all_params.length
+                pnames = all_params[mi]
+              end
+              if mi < all_ptypes.length
+                ptypes = all_ptypes[mi]
+              end
+              method_taken_walk_with_scope(bid, pnames, ptypes, i)
+            end
+          end
+          mi = mi + 1
+        end
+        @current_class_idx = saved_ci
+      end
+      i = i + 1
+    end
+    # Walk top-level methods.
+    mi = 0
+    while mi < @meth_names.length
+      bid = @meth_body_ids[mi]
+      if bid >= 0
+        method_taken_walk_with_scope(bid, @meth_param_names[mi], @meth_param_types[mi], -1)
+      end
+      mi = mi + 1
+    end
+    # Walk the top-level main script body too — `bm = make().method(:foo)`
+    # at script scope must propagate the captured-receiver class into
+    # the heap-stay set just like the same shape inside a method body.
+    if @nd_type[@root_id] == "ProgramNode"
+      stmts = get_body_stmts(@root_id)
+      push_scope
+      lnames = "".split(",")
+      ltypes = "".split(",")
+      sk = 0
+      while sk < stmts.length
+        scan_locals(stmts[sk], lnames, ltypes, "".split(","))
+        sk = sk + 1
+      end
+      lk = 0
+      while lk < lnames.length
+        declare_var(lnames[lk], ltypes[lk])
+        lk = lk + 1
+      end
+      sk = 0
+      while sk < stmts.length
+        collect_method_taken(stmts[sk], -1)
+        sk = sk + 1
+      end
+      pop_scope
+    end
+  end
+
+  def method_taken_walk_with_scope(bid, pnames_str, ptypes_str, enclosing_ci)
+    push_scope
+    pnames = pnames_str.split(",")
+    ptypes = ptypes_str.split(",")
+    k = 0
+    while k < pnames.length
+      pt = "int"
+      if k < ptypes.length
+        pt = ptypes[k]
+      end
+      declare_var(pnames[k], pt)
+      k = k + 1
+    end
+    lnames = "".split(",")
+    ltypes = "".split(",")
+    scan_locals(bid, lnames, ltypes, pnames)
+    lk = 0
+    while lk < lnames.length
+      declare_var(lnames[lk], ltypes[lk])
+      lk = lk + 1
+    end
+    collect_method_taken(bid, enclosing_ci)
+    pop_scope
+  end
+
+  def collect_method_taken(nid, enclosing_ci)
+    if nid < 0
+      return
+    end
+    if @nd_type[nid] == "CallNode" && @nd_name[nid] == "method"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length >= 1
+          recv = @nd_receiver[nid]
+          target = -1
+          if recv < 0
+            target = enclosing_ci
+          else
+            rt = infer_type(recv)
+            if is_obj_type(rt) == 1
+              target = find_class_idx(rt[4, rt.length - 4])
+            end
+          end
+          if target >= 0 && not_in(target.to_s, @method_taken_class_indices) == 1
+            @method_taken_class_indices.push(target.to_s)
+          end
+        end
+      end
+    end
+    cs = []
+    push_child_ids(nid, cs)
+    k = 0
+    while k < cs.length
+      collect_method_taken(cs[k], enclosing_ci)
+      k = k + 1
+    end
+  end
+
   def recalc_needs_gc
     # Recalculate @needs_gc: only needed if non-value-type classes are used
     @needs_gc = 0
@@ -15038,6 +15260,7 @@ class Compiler
     detect_param_mutated_types
     detect_ptr_array_stored_types
     detect_poly_returned_types
+    detect_method_taken_classes
     # Multiple passes: value type detection depends on other classes
     2.times do
       i = 0
@@ -15119,6 +15342,17 @@ class Compiler
               pri = pri + 1
             end
           end
+          # Exclude classes whose instances are captured by a Method
+          # (via `method(:foo)` on self, or `<obj>.method(:foo)` from
+          # anywhere). The captured receiver must be a stable heap
+          # pointer; value-type instances live on the caller's stack
+          # and the pointer would dangle once the binding method
+          # returns. Ref #215.
+          if all_val == 1
+            if not_in(i.to_s, @method_taken_class_indices) == 0
+              all_val = 0
+            end
+          end
           if all_val == 1
             @cls_is_value_type[i] = 1
           end
@@ -15175,6 +15409,18 @@ class Compiler
             eligible = 0
           end
           mk = mk + 1
+        end
+      end
+      # Method-captured receivers must stay heap-allocated. SRA
+      # explodes the instance into stack-resident scalars, which is
+      # the same dangling-pointer hazard as value-type. Defensive:
+      # current test corpus doesn't exercise an SRA-eligible class
+      # (initialize + attr_* only) being captured, but a future
+      # `class X; attr_accessor :n; end` followed by
+      # `X.new(...).method(:n)` would. Ref #215.
+      if eligible == 1
+        if not_in(i.to_s, @method_taken_class_indices) == 0
+          eligible = 0
         end
       end
       if eligible == 1
@@ -15718,6 +15964,29 @@ class Compiler
       j = j + 1
     end
     -1
+  end
+
+  # Walk the inheritance chain starting at class `ci` looking for the
+  # first ancestor that defines `mname` directly. Returns that class's
+  # name, or "" if no ancestor defines it. Used by the
+  # `method(:foo)` codegen to build the C symbol of the bound function:
+  # an inherited method's generated C function lives under the
+  # *defining* class (`sp_Parent_foo`), not the receiver's own class
+  # (`sp_Child_foo`), so `&sp_Child_foo` would be an unresolved symbol
+  # at link time. When this returns "" the codegen falls back to a
+  # null fn_ptr — Ruby's NoMethodError-on-invoke equivalent. Ref #215.
+  def find_defining_class_name(ci, mname)
+    walker = ci
+    while walker >= 0
+      if cls_find_method_direct(walker, mname) >= 0
+        return @cls_names[walker]
+      end
+      if @cls_parents[walker] == ""
+        return ""
+      end
+      walker = find_class_idx(@cls_parents[walker])
+    end
+    ""
   end
 
   def method_params_decl(mi)
@@ -19868,6 +20137,63 @@ class Compiler
       end
     end
 
+    # `bm.call(args)` / `bm[args]` where bm is a Method instance —
+    # lower to a function-pointer cast and an indirect call. The
+    # bound function's C signature is
+    # `(void *self, mrb_int...) -> mrb_int`. The receiver expression
+    # is stashed in a temp first so a side-effecting receiver (e.g.
+    # `factory().method(:foo).call(x)`) evaluates exactly once. Ref #215.
+    if (mname == "call" || mname == "[]") && recv >= 0
+      if base_type(infer_type(recv)) == "obj_Method"
+        rc = compile_expr(recv)
+        bm_tmp = new_temp
+        emit("  sp_Method *" + bm_tmp + " = " + rc + ";")
+        args_id = @nd_arguments[nid]
+        joined = ""
+        sig_args = "void *"
+        if args_id >= 0
+          aargs = get_args(args_id)
+          k = 0
+          while k < aargs.length
+            joined = joined + ", " + compile_expr(aargs[k])
+            sig_args = sig_args + ", mrb_int"
+            k = k + 1
+          end
+        end
+        return "((mrb_int (*)(" + sig_args + "))(uintptr_t)" + bm_tmp + "->iv_fn_ptr)((void *)" + bm_tmp + "->iv_self_obj" + joined + ")"
+      end
+    end
+
+    # `<obj>.method(:bar)` — bind to a non-self receiver. The
+    # detect_method_taken_classes pass keeps the receiver class
+    # heap-allocated so `<obj>` evaluates to a stable pointer that
+    # the resulting Method can capture. Walks the inheritance chain
+    # to point at the *defining* class's C symbol; if no ancestor
+    # defines the method, falls back to a null fn_ptr. Ref #215.
+    if mname == "method" && recv >= 0
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        arg_ids = get_args(args_id)
+        if arg_ids.length >= 1
+          recv_t = infer_type(recv)
+          if is_obj_type(recv_t) == 1
+            mref = @nd_content[arg_ids[0]]
+            if mref == ""
+              mref = @nd_name[arg_ids[0]]
+            end
+            recv_cname = recv_t[4, recv_t.length - 4]
+            owner_cname = find_defining_class_name(find_class_idx(recv_cname), mref)
+            rc = compile_expr(recv)
+            if owner_cname != ""
+              return "sp_Method_new((sp_Method *)(" + rc + "), (mrb_int)(uintptr_t)&sp_" + owner_cname + "_" + sanitize_name(mref) + ")"
+            else
+              return "sp_Method_new((sp_Method *)(" + rc + "), (mrb_int)0)"
+            end
+          end
+        end
+      end
+    end
+
     # Hoisted instance_eval block: emit a direct C call to the synthetic
     # file-scope function. The receiver is a local variable known to
     # carry a class instance (the rewriter checked this); pass it as the
@@ -20361,7 +20687,6 @@ class Compiler
       end
     end
     if mname == "method"
-      # method(:name) - record the method reference
       args_id = @nd_arguments[nid]
       if args_id >= 0
         arg_ids = get_args(args_id)
@@ -20370,8 +20695,23 @@ class Compiler
           if mref == ""
             mref = @nd_name[arg_ids[0]]
           end
-          # Return a placeholder - the actual dispatch happens in .call
-          # We store this in the parent LocalVariableWriteNode handler
+          # No receiver, inside a class body: bind to `self`. Same
+          # inheritance-walk + null-fallback as the obj-recv path so
+          # the C symbol points at the defining class and a missing
+          # method gives a Ruby-NoMethodError-shaped null fn_ptr
+          # instead of a link error. Ref #215.
+          if @current_class_idx >= 0
+            owner_cname = find_defining_class_name(@current_class_idx, mref)
+            if owner_cname != ""
+              return "sp_Method_new((sp_Method *)self, (mrb_int)(uintptr_t)&sp_" + owner_cname + "_" + sanitize_name(mref) + ")"
+            else
+              return "sp_Method_new((sp_Method *)self, (mrb_int)0)"
+            end
+          end
+          # Top-level: keep the static-alias placeholder. The matching
+          # LocalVariableWriteNode handler in compile_stmt picks up
+          # @pending_method_ref and records (lname, mref) so a later
+          # `m.call(x)` rewrites to a direct `sp_<mref>(x)`.
           @pending_method_ref = mref
           return "0 /* method:" + mref + " */"
         end
@@ -26370,11 +26710,18 @@ class Compiler
     end
     if t == "LocalVariableWriteNode"
       lname = @nd_name[nid]
-      # Check for method(:name) assignment
+      # `var = method(:name)` (no receiver, top-level) is the legacy
+      # static-alias path: the call_expr handler returns a `0`
+      # placeholder, we record (lname, mref) here, and a later
+      # `m.call(x)` is rewritten in compile_dot_call_expr to a
+      # direct `sp_<name>(x)` call. Inside a class body OR with a
+      # receiver (`var = recv.method(:_)`), the call expr already
+      # produced a real obj_Method instance — fall through to the
+      # normal compile path so the typed local picks it up. Ref #215.
       expr_id = @nd_expression[nid]
       if expr_id >= 0
         if @nd_type[expr_id] == "CallNode"
-          if @nd_name[expr_id] == "method"
+          if @nd_name[expr_id] == "method" && @nd_receiver[expr_id] < 0 && @current_class_idx < 0
             args_id = @nd_arguments[expr_id]
             if args_id >= 0
               arg_ids = get_args(args_id)
