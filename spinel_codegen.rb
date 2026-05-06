@@ -14568,6 +14568,11 @@ class Compiler
     emit_raw("static void sp_SymIntHash_delete(sp_SymIntHash*h,sp_sym k){mrb_int idx=(mrb_int)(((mrb_int)k)&h->mask);while(h->keys[idx]>=0){if(h->keys[idx]==k){h->keys[idx]=-1;h->vals[idx]=0;h->len--;mrb_int j=(idx+1)&h->mask;while(h->keys[j]>=0){mrb_int nj=(mrb_int)(((mrb_int)h->keys[j])&h->mask);if((j>idx&&(nj<=idx||nj>j))||(j<idx&&nj<=idx&&nj>j)){h->keys[idx]=h->keys[j];h->vals[idx]=h->vals[j];h->keys[j]=-1;h->vals[j]=0;idx=j;}j=(j+1)&h->mask;}{mrb_int oi=0;while(oi<=h->len){if(h->order[oi]==k){while(oi<h->len){h->order[oi]=h->order[oi+1];oi++;}break;}oi++;}}return;}idx=(idx+1)&h->mask;}}")
     emit_raw("static sp_IntArray*sp_SymIntHash_keys(sp_SymIntHash*h){sp_IntArray*a=sp_IntArray_new();for(mrb_int i=0;i<h->len;i++)sp_IntArray_push(a,(mrb_int)h->order[i]);return a;}")
     emit_raw("static sp_IntArray*sp_SymIntHash_values(sp_SymIntHash*h){sp_IntArray*a=sp_IntArray_new();for(mrb_int i=0;i<h->len;i++)sp_IntArray_push(a,sp_SymIntHash_get(h,h->order[i]));return a;}")
+    # Hash inspect — Ruby's modern shorthand `{k: v, ...}`.  All keys
+    # in a sym_int_hash are valid identifier symbols (the parser only
+    # routes literal symbol keys here), so the bare-name form always
+    # round-trips correctly.
+    emit_raw("static const char*sp_SymIntHash_inspect(sp_SymIntHash*h){sp_String*s=sp_String_new(\"{\");for(mrb_int i=0;i<h->len;i++){if(i>0)sp_String_append(s,\", \");sp_String_append(s,sp_sym_to_s(h->order[i]));sp_String_append(s,\": \");sp_String_append(s,sp_int_to_s(sp_SymIntHash_get(h,h->order[i])));}sp_String_append(s,\"}\");return s->data;}")
     # sym_array.tally — emitted alongside sp_SymIntHash because the
     # helper depends on the typedef. sym_array storage is sp_IntArray
     # (sym ids stored as mrb_int); cast each element to sp_sym for the
@@ -24312,6 +24317,34 @@ class Compiler
         @needs_int_array = 1
         return "sp_SymIntHash_values(" + rc + ")"
       end
+      # transform_values { |v| ... } — same key set, block-transformed
+      # int values.  Keeps the result a sym_int_hash; the block's last
+      # expression is set as the new value (truncated to mrb_int by
+      # sp_SymIntHash_set's signature when the block returns int).
+      if mname == "transform_values"
+        if @nd_block[nid] >= 0
+          blk = @nd_block[nid]
+          bp = get_block_param(nid, 0)
+          tmp = new_temp
+          emit("  sp_SymIntHash *" + tmp + " = sp_SymIntHash_new();")
+          emit("  for (mrb_int _i = 0; _i < " + rc + "->len; _i++) {")
+          emit("    mrb_int lv_" + bp + " = sp_SymIntHash_get(" + rc + ", " + rc + "->order[_i]);")
+          push_scope
+          declare_var(bp, "int")
+          bbody = @nd_body[blk]
+          bexpr = "0"
+          if bbody >= 0
+            bs = get_stmts(bbody)
+            if bs.length > 0
+              bexpr = compile_expr(bs.last)
+            end
+          end
+          emit("    sp_SymIntHash_set(" + tmp + ", " + rc + "->order[_i], " + bexpr + ");")
+          pop_scope
+          emit("  }")
+          return tmp
+        end
+      end
     end
     if recv_type == "sym_str_hash"
       if mname == "[]"
@@ -32049,6 +32082,10 @@ class Compiler
     end
     if at == "tuple:float,float"
       return "sp_sprintf(\"[%s, %s]\", sp_float_inspect(" + val + "->_0), sp_float_inspect(" + val + "->_1))"
+    end
+    if at == "sym_int_hash"
+      @needs_sym_int_hash = 1
+      return "sp_SymIntHash_inspect(" + val + ")"
     end
     ""
   end
