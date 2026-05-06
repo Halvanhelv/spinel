@@ -81,6 +81,11 @@ static mrb_int sp_lcm(mrb_int a,mrb_int b){if(a==0||b==0)return 0;mrb_int g=sp_g
 static mrb_int sp_powmod(mrb_int base,mrb_int exp,mrb_int mod){if(mod==0)return 0;mrb_int r=1;mrb_int m=mod<0?-mod:mod;if(m==1){r=0;}else{base=base%m;if(base<0)base+=m;while(exp>0){if(exp%2==1)r=r*base%m;exp=exp/2;base=base*base%m;}}if(mod<0&&r>0)r-=m;return r;}
 static mrb_int sp_ceildiv(mrb_int a,mrb_int b){if(b==0)return 0;if(b==-1)return -a;mrb_int q=a/b;if(a%b!=0&&((a^b)>=0))q++;return q;}
 static mrb_int sp_int_clamp(mrb_int v,mrb_int lo,mrb_int hi){return v<lo?lo:v>hi?hi:v;}
+/* Integer square root via Newton's method — exact for the full mrb_int
+   range (no double-precision rounding loss for n > 2^53). CRuby raises
+   on negative input; we mirror Spinel's other arithmetic helpers and
+   return 0 to avoid an exception path. */
+static mrb_int sp_int_sqrt(mrb_int n){if(n<0)return 0;if(n<2)return n;mrb_int x=n,y=(x+1)/2;while(y<x){x=y;y=(x+n/x)/2;}return x;}
 static inline char *sp_str_alloc_raw(size_t total_with_null);  /* fwd decl */
 static const char*sp_int_chr(mrb_int n){char*s=sp_str_alloc_raw(2);s[0]=(char)n;s[1]=0;return s;}
 typedef struct{mrb_int first;mrb_int last;}sp_Range;
@@ -509,6 +514,12 @@ static mrb_bool sp_str_include(const char*s,const char*sub){return strstr(s,sub)
 static mrb_bool sp_str_start_with(const char*s,const char*p){return strncmp(s,p,strlen(p))==0;}
 static mrb_bool sp_str_end_with(const char*s,const char*suf){size_t ls=strlen(s),lsuf=strlen(suf);if(lsuf>ls)return FALSE;return strcmp(s+ls-lsuf,suf)==0;}
 static sp_StrArray*sp_str_split(const char*s,const char*sep){sp_StrArray*a=sp_StrArray_new();if(*s==0)return a;size_t sl=strlen(sep);if(sl==0){const char*p=s;while(*p){int cn=sp_utf8_advance(p);char*c=sp_str_alloc_raw(cn+1);memcpy(c,p,cn);c[cn]=0;sp_StrArray_push(a,c);p+=cn;}return a;}const char*p=s;while(1){const char*f=strstr(p,sep);if(!f){char*r=sp_str_alloc_raw(strlen(p)+1);strcpy(r,p);sp_StrArray_push(a,r);break;}size_t n=f-p;char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_StrArray_push(a,r);p=f+sl;}return a;}
+/* String#lines: split on \n but PRESERVE the trailing newline on each
+   line (CRuby semantics). The last line keeps its terminator if present;
+   if absent, it just stops there. Empty string returns an empty array.
+   `end` is computed once at entry so a string with no newlines avoids
+   a redundant strlen call on the trailing piece. */
+static sp_StrArray*sp_str_lines(const char*s){sp_StrArray*a=sp_StrArray_new();if(*s==0)return a;const char*end=s+strlen(s);const char*p=s;while(p<end){const char*nl=strchr(p,'\n');size_t n=nl?(size_t)(nl-p+1):(size_t)(end-p);char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_StrArray_push(a,r);if(!nl)break;p=nl+1;}return a;}
 static const char*sp_str_gsub(const char*s,const char*pat,const char*rep){size_t pl=strlen(pat),rl=strlen(rep),sl=strlen(s);if(pl==0)return s;size_t cap=sl*2+1;char*out=(char*)malloc(cap);size_t ol=0;const char*p=s;while(*p){const char*f=strstr(p,pat);if(!f){size_t n=strlen(p);if(ol+n>=cap){cap=(ol+n)*2+1;out=(char*)realloc(out,cap);}memcpy(out+ol,p,n);ol+=n;break;}size_t n=f-p;if(ol+n+rl>=cap){cap=(ol+n+rl)*2+1;out=(char*)realloc(out,cap);}memcpy(out+ol,p,n);ol+=n;memcpy(out+ol,rep,rl);ol+=rl;p=f+pl;}out[ol]=0;return out;}
 /* Returns a *character* offset (codepoint index), not a byte offset. */
 static mrb_int sp_str_index(const char*s,const char*sub){const char*f=strstr(s,sub);if(!f)return -1;mrb_int n=0;const char*p=s;while(p<f){p+=sp_utf8_advance(p);n++;}return n;}
@@ -765,6 +776,15 @@ typedef uint64_t sp_RbValue;
 #define SP_BUILTIN_RANGE        (-10)                             /* sp_Range *, heap copy of stack-typed sp_Range when crossing into poly */
 #define SP_BUILTIN_TIME         (-11)                             /* sp_Time *, heap copy of stack-typed sp_Time when crossing into poly */
 #define SP_BUILTIN_POLY_ARRAY   (-12)                             /* sp_PolyArray *, array of sp_RbVal */
+/* Hash variant cls_ids — boxed into the cls_id of a poly slot so
+   Hash#dig can recover the concrete hash type at runtime. */
+#define SP_BUILTIN_STR_INT_HASH  (-13)
+#define SP_BUILTIN_STR_STR_HASH  (-14)
+#define SP_BUILTIN_INT_STR_HASH  (-15)
+#define SP_BUILTIN_SYM_INT_HASH  (-16)
+#define SP_BUILTIN_SYM_STR_HASH  (-17)
+#define SP_BUILTIN_STR_POLY_HASH (-18)
+#define SP_BUILTIN_SYM_POLY_HASH (-19)
 typedef struct { int tag; int cls_id; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; } v; } sp_RbVal;
 static sp_RbVal sp_box_int(mrb_int v) { sp_RbVal r; r.tag = SP_TAG_INT; r.cls_id = 0; r.v.i = v; return r; }
 static sp_RbVal sp_box_str(const char *v) { sp_RbVal r; r.tag = SP_TAG_STR; r.cls_id = 0; r.v.s = v; return r; }
