@@ -3001,11 +3001,26 @@ class Compiler
     # Float; zero-arg / Integer#ceil etc. return Integer. (truncate's arm
     # used to live next to nan?/infinite? — folded in here for one place
     # to update.)
+    #
+    # Issue #314: gate on a Float receiver. `ViewHelpers.truncate(s,
+    # length: 100)` is a user-defined module method that returns a
+    # string; without this gate it matched here purely by name and
+    # returned "float", so the call site boxed truncate's `const char *`
+    # return as `sp_box_float(...)` — invalid C.
+    #
+    # The gate is `rt == "float"` exclusively, not "int": a module
+    # ConstantReadNode's infer_type falls back to "int" by default,
+    # and we don't want module method calls to slide through. Integer
+    # ceil/floor/round/truncate with an arg are rare in practice — if
+    # the codebase needs them later, a future pass on call-site type
+    # narrowing can claim it more carefully.
     if mname == "ceil" || mname == "floor" || mname == "round" || mname == "truncate"
-      if @nd_arguments[nid] >= 0
-        return "float"
+      if recv >= 0 && infer_type(recv) == "float"
+        if @nd_arguments[nid] >= 0
+          return "float"
+        end
+        return "int"
       end
-      return "int"
     end
     if mname == "upcase" || mname == "downcase"
       if recv >= 0 && infer_type(recv) == "symbol"
