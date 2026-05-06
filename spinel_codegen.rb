@@ -27320,8 +27320,20 @@ class Compiler
         compile_stmts_body(@nd_body[sub])
         @indent = @indent - 1
       else
-        emit("  } else")
+        # Issue #310: wrap elsif in braces. compile_cond_expr for the
+        # nested predicate may emit prologue C (temp decls, tag checks)
+        # before returning the cond expression — e.g. `value.is_a?(B)`
+        # on a poly receiver expands to `sp_RbVal _t = ...; if (_t.tag
+        # == SP_TAG_OBJ) {...}; if (_flag) ...`. Without wrapping, the
+        # `} else <prologue> if (...)` shape is invalid C: the bare-
+        # else's body is the first statement only (the prologue decl),
+        # and the inner if sits in the outer scope with the decl out
+        # of reach.
+        emit("  } else {")
+        @indent = @indent + 1
         compile_if_stmt(sub)
+        @indent = @indent - 1
+        emit("  }")
         return
       end
     end
@@ -34418,8 +34430,15 @@ class Compiler
         end
         @indent = @indent - 1
       else
-        emit("  } else")
+        # Issue #310: wrap elsif in braces. See compile_if_stmt for
+        # the same fix; predicates that emit prologue C statements
+        # (poly is_a? etc.) leak declarations out of a bare else
+        # because the bare else's body is one statement.
+        emit("  } else {")
+        @indent = @indent + 1
         compile_if_return(sub, rt)
+        @indent = @indent - 1
+        emit("  }")
         return
       end
     else
