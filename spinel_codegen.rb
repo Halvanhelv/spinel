@@ -2034,6 +2034,19 @@ class Compiler
       end
       return "int"
     end
+    if t == "LocalVariableWriteNode"
+      # `var = expr` used as an expression — the value of the
+      # expression is the assigned slot's value (after any boxing
+      # done by the LocalVariableWriteNode emit path). Reporting the
+      # slot type lets compile_cond_expr know to wrap with
+      # sp_poly_truthy when the slot is poly (e.g.
+      # `if (sprite = arr[i])` where sprite is a sp_RbVal local).
+      vt = find_var_type(@nd_name[nid])
+      if vt != ""
+        return vt
+      end
+      return infer_type(@nd_expression[nid])
+    end
     if t == "GlobalVariableReadNode"
       # `alias $copy $orig` -- a $copy read must look up $orig's
       # registered type so the C codegen sees the correct format
@@ -19423,13 +19436,22 @@ class Compiler
     end
     if t == "LocalVariableWriteNode"
       # `local = expr` used as an expression (e.g. inside a chained
-      # `@a = local = expr` write). Without this branch compile_expr
-      # falls through and returns the default "0", which silently
-      # zeroed the outer write — every `@_p_nz = ___a__ = __data__`
-      # in optcarrots OptimizedCodeBuilder CPU output became
-      # `iv__p_nz = 0`. Lower as a parenthesized C-style assignment.
+      # `@a = local = expr` write, or `if (sprite = arr[i])` in a
+      # conditional). Without this branch compile_expr falls through
+      # and returns the default "0", which silently zeroed the outer
+      # write — every `@_p_nz = ___a__ = __data__` in optcarrots
+      # OptimizedCodeBuilder CPU output became `iv__p_nz = 0`.
+      # Lower as a parenthesized C-style assignment, boxing scalar
+      # RHS into poly when the local slot is poly (mirrors compile_stmt
+      # InstanceVariableWriteNode logic).
       val = compile_expr(@nd_expression[nid])
-      return "(" + fiber_var_ref(@nd_name[nid]) + " = " + val + ")"
+      lname2 = @nd_name[nid]
+      vt = find_var_type(lname2)
+      rhs_t = infer_type(@nd_expression[nid])
+      if vt == "poly" && rhs_t != "" && rhs_t != "poly"
+        val = box_value_to_poly(rhs_t, val)
+      end
+      return "(" + fiber_var_ref(lname2) + " = " + val + ")"
     end
     if t == "LocalVariableOperatorWriteNode"
       # `local OP= expr` used as an expression (e.g. ORA's
@@ -20023,6 +20045,27 @@ class Compiler
       arg_ids = get_args(args_id)
       if arg_ids.length > 0
         return compile_expr(arg_ids[0])
+      end
+    end
+    "0"
+  end
+
+  # Like compile_arg0, but unboxes the result to mrb_int when the
+  # argument's static type is poly. Use at call sites that pass the
+  # arg directly to a C function expecting `mrb_int` (sp_IntArray_get,
+  # sp_IntArray_push integer-element variants, runtime helpers that
+  # take an int index, etc.). Without unboxing, gcc rejects passing
+  # `sp_RbVal` to a `mrb_int` parameter.
+  def compile_arg0_as_int(nid)
+    args_id = @nd_arguments[nid]
+    if args_id >= 0
+      arg_ids = get_args(args_id)
+      if arg_ids.length > 0
+        ce = compile_expr(arg_ids[0])
+        if infer_type(arg_ids[0]) == "poly"
+          return "(" + ce + ").v.i"
+        end
+        return ce
       end
     end
     "0"
@@ -23799,10 +23842,10 @@ class Compiler
             return "sp_IntArray_slice(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
           end
         end
-        return "sp_IntArray_get(" + rc + ", " + compile_arg0(nid) + ")"
+        return "sp_IntArray_get(" + rc + ", " + compile_arg0_as_int(nid) + ")"
       end
       if mname == "push"
-        return "(sp_IntArray_push(" + rc + ", " + compile_arg0(nid) + "), 0)"
+        return "(sp_IntArray_push(" + rc + ", " + compile_arg0_as_int(nid) + "), 0)"
       end
       if mname == "pop"
         return "sp_IntArray_pop(" + rc + ")"
@@ -24059,7 +24102,7 @@ class Compiler
             return "sp_FloatArray_slice(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
           end
         end
-        return "sp_FloatArray_get(" + rc + ", " + compile_arg0(nid) + ")"
+        return "sp_FloatArray_get(" + rc + ", " + compile_arg0_as_int(nid) + ")"
       end
       if mname == "push"
         return "(sp_FloatArray_push(" + rc + ", " + compile_arg0(nid) + "), 0)"
@@ -24111,7 +24154,7 @@ class Compiler
         return "sp_PtrArray_length(" + rc + ")"
       end
       if mname == "[]"
-        return "((" + ct + ")sp_PtrArray_get(" + rc + ", " + compile_arg0(nid) + "))"
+        return "((" + ct + ")sp_PtrArray_get(" + rc + ", " + compile_arg0_as_int(nid) + "))"
       end
       if mname == "push"
         return "(sp_PtrArray_push(" + rc + ", " + compile_arg0(nid) + "), 0)"
@@ -24178,7 +24221,7 @@ class Compiler
             return "sp_StrArray_slice(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
           end
         end
-        return "sp_StrArray_get(" + rc + ", " + compile_arg0(nid) + ")"
+        return "sp_StrArray_get(" + rc + ", " + compile_arg0_as_int(nid) + ")"
       end
       if mname == "first"
         return "sp_StrArray_get(" + rc + ", 0)"
@@ -24254,7 +24297,7 @@ class Compiler
         return "sp_PolyArray_length(" + rc + ")"
       end
       if mname == "[]"
-        return "sp_PolyArray_get(" + rc + ", " + compile_arg0(nid) + ")"
+        return "sp_PolyArray_get(" + rc + ", " + compile_arg0_as_int(nid) + ")"
       end
       if mname == "push"
         arg_id = -1
@@ -27787,6 +27830,13 @@ class Compiler
         emit("  " + vref + " = NULL;")
       else
         val = compile_expr(@nd_expression[nid])
+        # Box scalar RHS into poly when the local slot is poly. Without
+        # this, `lv = sp_IntArray_get(...)` (int RHS) into a sp_RbVal
+        # slot fails C compile. Mirrors the InstanceVariableWriteNode
+        # path's box-when-slot-is-poly logic.
+        if vt == "poly" && rhs_t != "" && rhs_t != "poly"
+          val = box_value_to_poly(rhs_t, val)
+        end
         emit("  " + vref + " = " + val + ";")
       end
       if rhs_t != "nil" || is_nullable_type(vt) == 0
@@ -28544,11 +28594,15 @@ class Compiler
       while k < targets.length
         tid = targets[k]
         rhs = "sp_IntArray_get(" + tmp + ", " + k.to_s + ")"
+        # Route ivar / local writes through emit_multi_write_target so
+        # the box-when-slot-is-poly logic fires. Without boxing, an int
+        # RHS into a sp_RbVal slot fails C compile (`@x, @y = arr` where
+        # @y is poly because other writers store other types).
         if @nd_type[tid] == "LocalVariableTargetNode"
-          emit("  " + fiber_var_ref(@nd_name[tid]) + " = " + rhs + ";")
+          emit_multi_write_target(tid, rhs, "int")
         end
         if @nd_type[tid] == "InstanceVariableTargetNode"
-          emit("  " + self_arrow + sanitize_ivar(@nd_name[tid]) + " = " + rhs + ";")
+          emit_multi_write_target(tid, rhs, "int")
         end
         if @nd_type[tid] == "ConstantTargetNode"
           if find_const_idx(@nd_name[tid]) >= 0
