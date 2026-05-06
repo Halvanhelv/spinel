@@ -23389,6 +23389,18 @@ class Compiler
     if is_array_type(recv_type) == 0
       return ""
     end
+    # Array#dig with a single index reduces to []. Multi-arg dig that
+    # walks into nested arrays/hashes isn't supported here yet — fall
+    # through to the unsupported-call warning.
+    if mname == "dig"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        aargs = get_args(args_id)
+        if aargs.length == 1
+          return compile_array_method_expr(nid, "[]", rc, recv_type)
+        end
+      end
+    end
     # arr.slice!(from, n) — returns a fresh array of `n` elements
     # starting at `from` and removes them from the receiver. Each
     # array type lowers to its own runtime helper that mutates the
