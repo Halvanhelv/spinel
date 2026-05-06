@@ -21561,6 +21561,17 @@ class Compiler
       if lt == "mutable_str"
         @needs_mutable_str = 1
         rc = compile_expr_gc_rooted(recv)
+        # Issue #313: unbox a poly-typed arg to const char * before
+        # sp_String_append (which takes const char *). sp_poly_to_s
+        # handles every tag — string passes through, others coerce.
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          arg_ids = get_args(args_id)
+          if arg_ids.length > 0 && infer_type(arg_ids[0]) == "poly"
+            val = "sp_poly_to_s(" + compile_expr(arg_ids[0]) + ")"
+            return "(sp_String_append(" + rc + ", " + val + "), " + rc + ")"
+          end
+        end
         val = compile_arg0(nid)
         return "(sp_String_append(" + rc + ", " + val + "), " + rc + ")"
       end
@@ -28622,7 +28633,15 @@ class Compiler
                 if at == "mutable_str"
                   emit("  sp_String_append(" + rc + ", " + val + "->data);")
                 else
-                  emit("  sp_String_append(" + rc + ", " + val + ");")
+                  if at == "poly"
+                    # Issue #313: a poly-typed source (e.g. a module
+                    # method returning sp_RbVal from a SymPolyHash
+                    # read) needs runtime unbox to const char * before
+                    # sp_String_append. sp_poly_to_s handles every tag.
+                    emit("  sp_String_append(" + rc + ", sp_poly_to_s(" + val + "));")
+                  else
+                    emit("  sp_String_append(" + rc + ", " + val + ");")
+                  end
                 end
               end
             end
