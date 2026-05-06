@@ -10896,63 +10896,6 @@ class Compiler
     0
   end
 
-  # Issue #314 (A): true when `mname` is defined on 2+ user classes
-  # (as a method, attr_reader, or attr_writer for `=`-suffixed
-  # `mname`). Used to gate compile_int_class_fallback_expr — when the
-  # name is ambiguous across user classes, the "pick first match"
-  # walk silently grabs an arbitrary class, and an unpinned-mrb_int
-  # receiver routed through it is almost certainly wrong. Refuse the
-  # cast and let the unresolved-call placeholder fire instead.
-  def method_defined_on_multiple_user_classes(mname)
-    is_writer = 0
-    base_mname = mname
-    if mname.length > 1 && mname[mname.length - 1] == "="
-      is_writer = 1
-      base_mname = mname[0, mname.length - 1]
-    end
-    count = 0
-    ci = 0
-    while ci < @cls_names.length
-      found = 0
-      mns = @cls_meth_names[ci].split(";")
-      jj = 0
-      while jj < mns.length
-        if mns[jj] == mname
-          found = 1
-        end
-        jj = jj + 1
-      end
-      if found == 0
-        readers = @cls_attr_readers[ci].split(";")
-        rk = 0
-        while rk < readers.length
-          if readers[rk] == base_mname
-            found = 1
-          end
-          rk = rk + 1
-        end
-      end
-      if found == 0 && is_writer == 1
-        writers = @cls_attr_writers[ci].split(";")
-        wk = 0
-        while wk < writers.length
-          if writers[wk] == base_mname
-            found = 1
-          end
-          wk = wk + 1
-        end
-      end
-      if found == 1
-        count = count + 1
-        if count >= 2
-          return 1
-        end
-      end
-      ci = ci + 1
-    end
-    0
-  end
-
   # Whitelist of methods defined on built-in primitive types that
   # commonly collide with user-class method names. Mirrors (and
   # delegates the surface to) the predicate
