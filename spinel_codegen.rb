@@ -22563,7 +22563,7 @@ class Compiler
     end
     if mname == "lines"
       @needs_str_array = 1
-      return "sp_str_split(" + rc + ", \"\\n\")"
+      return "sp_str_lines(" + rc + ")"
     end
     if mname == "scan"
       if @nd_block[nid] < 0
