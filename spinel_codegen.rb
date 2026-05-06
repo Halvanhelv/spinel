@@ -2997,6 +2997,16 @@ class Compiler
     if mname == "to_f"
       return "float"
     end
+    # Kernel coercion methods: Integer(x) / Float(x) return their class.
+    # Only treat as a Kernel call when there's no explicit receiver — with
+    # a receiver, "Integer" / "Float" would be ConstantReadNode lookups,
+    # not method calls, and wouldn't reach this name dispatch anyway.
+    if recv < 0 && mname == "Integer"
+      return "int"
+    end
+    if recv < 0 && mname == "Float"
+      return "float"
+    end
     # Float#ceil(n)/floor(n)/round(n)/truncate(n) with n given return
     # Float; zero-arg / Integer#ceil etc. return Integer. (truncate's arm
     # used to live next to nan?/infinite? — folded in here for one place
@@ -20694,6 +20704,29 @@ class Compiler
       return "(mrb_int)(" + compile_arg0(nid) + ")"
     end
     if mname == "Float"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        arg_ids = get_args(args_id)
+        if arg_ids.length > 0
+          a0 = arg_ids[0]
+          at = infer_type(a0)
+          if at == "string" || at == "argv"
+            return "(mrb_float)strtod(" + compile_expr(a0) + ", NULL)"
+          end
+          if at == "int"
+            return "(mrb_float)(" + compile_expr(a0) + ")"
+          end
+          if at == "float"
+            return compile_expr(a0)
+          end
+          if at == "poly"
+            # Polymorphic — string / int / float branches resolve at
+            # runtime via sp_poly_to_f, which already handles each tag.
+            @needs_rb_value = 1
+            return "sp_poly_to_f(" + compile_expr(a0) + ")"
+          end
+        end
+      end
       return "(mrb_float)(" + compile_arg0(nid) + ")"
     end
     if mname == "proc"
