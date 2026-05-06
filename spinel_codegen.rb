@@ -8184,9 +8184,26 @@ class Compiler
 
   def refine_module_ivar_types(mname, body_stmts)
     body_stmts.each { |sid|
-      next unless @nd_type[sid] == "InstanceVariableWriteNode"
-      iname = @nd_name[sid]
-      cname2 = mname + "_" + iname[1, iname.length - 1]
+      # Two shapes both refine the same `@const_types` slot:
+      #   @slots = {}  (InstanceVariableWriteNode in a module body —
+      #                 spinel hoists module ivars to file-scope
+      #                 constants named `<Mod>_<iname>`)
+      #   LOG    = []  (ConstantWriteNode — registered directly as
+      #                 `<Mod>_<cname>`)
+      # Issue #303 covered the ivar shape; #333 added the bare-
+      # constant shape, where `LOG << some_hash` writes never
+      # propagated back to flip the constant off the empty-array
+      # `int_array` default.
+      iv_write = @nd_type[sid] == "InstanceVariableWriteNode"
+      const_write = @nd_type[sid] == "ConstantWriteNode"
+      next unless iv_write || const_write
+      if iv_write
+        iname = @nd_name[sid]
+        cname2 = mname + "_" + iname[1, iname.length - 1]
+      else
+        iname = @nd_name[sid]
+        cname2 = mname + "_" + iname
+      end
       ci = find_const_idx(cname2)
       next if ci < 0
       cur = @const_types[ci]
@@ -8225,10 +8242,30 @@ class Compiler
             declare_var(pnames3[k3], pt3)
             k3 = k3 + 1
           end
+          # Issue #333: declare body locals too. Without this, a
+          # `LOG << entry` write where `entry = { ... }` was assigned
+          # earlier in the body has the LocalVariableReadNode read on
+          # `entry` resolve via infer_type's "int" default — and
+          # val_t_set ends up `["int"]` so pick_array_class returns
+          # the same int_array we started with. The ivar shape
+          # (`@slots[k] = v` where k/v are params) didn't need this
+          # because params were already declared above.
+          local_names = "".split(",")
+          local_types = "".split(",")
+          scan_locals(bid, local_names, local_types, pnames3)
+          lk = 0
+          while lk < local_names.length
+            declare_var(local_names[lk], local_types[lk])
+            lk = lk + 1
+          end
         end
         saved_meth = @current_method_name
         @current_method_name = synth_name
-        scan_module_ivar_writes(bid, iname, key_t_set, val_t_set)
+        if iv_write
+          scan_module_ivar_writes(bid, iname, key_t_set, val_t_set)
+        else
+          scan_module_const_writes(bid, iname, key_t_set, val_t_set)
+        end
         @current_method_name = saved_meth
         pop_scope
       }
@@ -8282,6 +8319,40 @@ class Compiler
 
   # Walk `nid` accumulating distinct key + value types observed at
   # `@<iname>[k] = v` / `@<iname> << v` style writes.
+  # Issue #333: parallel to scan_module_ivar_writes for module-level
+  # constants. `LOG << v` / `LOG[k] = v` / `LOG.push(v)` where LOG is
+  # a ConstantReadNode (resolving via the enclosing module's lexical
+  # scope) contributes its key/value types to the same set the
+  # refinement uses to pick the typed-array / typed-hash shape.
+  def scan_module_const_writes(nid, cname, key_t_set, val_t_set)
+    if nid < 0
+      return
+    end
+    if @nd_type[nid] == "CallNode"
+      mname_call = @nd_name[nid]
+      recv = @nd_receiver[nid]
+      if recv >= 0 && @nd_type[recv] == "ConstantReadNode" && @nd_name[recv] == cname
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          arg_ids = get_args(args_id)
+          if mname_call == "[]=" && arg_ids.length >= 2
+            uniq_push(key_t_set, infer_type(arg_ids[0]))
+            uniq_push(val_t_set, infer_type(arg_ids[1]))
+          elsif (mname_call == "<<" || mname_call == "push") && arg_ids.length >= 1
+            uniq_push(val_t_set, infer_type(arg_ids[0]))
+          end
+        end
+      end
+    end
+    cs = []
+    push_child_ids(nid, cs)
+    k = 0
+    while k < cs.length
+      scan_module_const_writes(cs[k], cname, key_t_set, val_t_set)
+      k = k + 1
+    end
+  end
+
   def scan_module_ivar_writes(nid, iname, key_t_set, val_t_set)
     if nid < 0
       return
