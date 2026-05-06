@@ -81,6 +81,11 @@ static mrb_int sp_lcm(mrb_int a,mrb_int b){if(a==0||b==0)return 0;mrb_int g=sp_g
 static mrb_int sp_powmod(mrb_int base,mrb_int exp,mrb_int mod){if(mod==0)return 0;mrb_int r=1;mrb_int m=mod<0?-mod:mod;if(m==1){r=0;}else{base=base%m;if(base<0)base+=m;while(exp>0){if(exp%2==1)r=r*base%m;exp=exp/2;base=base*base%m;}}if(mod<0&&r>0)r-=m;return r;}
 static mrb_int sp_ceildiv(mrb_int a,mrb_int b){if(b==0)return 0;if(b==-1)return -a;mrb_int q=a/b;if(a%b!=0&&((a^b)>=0))q++;return q;}
 static mrb_int sp_int_clamp(mrb_int v,mrb_int lo,mrb_int hi){return v<lo?lo:v>hi?hi:v;}
+/* Integer square root via Newton's method — exact for the full mrb_int
+   range (no double-precision rounding loss for n > 2^53). CRuby raises
+   on negative input; we mirror Spinel's other arithmetic helpers and
+   return 0 to avoid an exception path. */
+static mrb_int sp_int_sqrt(mrb_int n){if(n<0)return 0;if(n<2)return n;mrb_int x=n,y=(x+1)/2;while(y<x){x=y;y=(x+n/x)/2;}return x;}
 static inline char *sp_str_alloc_raw(size_t total_with_null);  /* fwd decl */
 static const char*sp_int_chr(mrb_int n){char*s=sp_str_alloc_raw(2);s[0]=(char)n;s[1]=0;return s;}
 typedef struct{mrb_int first;mrb_int last;}sp_Range;

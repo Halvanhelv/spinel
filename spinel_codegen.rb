@@ -4100,6 +4100,11 @@ class Compiler
             return "string"
           end
         end
+        if rcname == "Integer"
+          if mname == "sqrt"
+            return "int"
+          end
+        end
       end
     end
     # User-defined class methods
@@ -24178,6 +24183,17 @@ class Compiler
               return "hypot(" + compile_expr(arg_ids[0]) + ", " + compile_expr(arg_ids[1]) + ")"
             end
           end
+        end
+      end
+      # Integer class methods (Ruby 2.5+)
+      if rcname == "Integer"
+        if mname == "sqrt"
+          # Integer.sqrt(n) is the integer square root, distinct from
+          # Math.sqrt's float result. Use sp_int_sqrt (Newton's method,
+          # exact for the full mrb_int range) instead of casting through
+          # double — double has only 53 bits of mantissa so values above
+          # ~2^53 round and produce off-by-one results.
+          return "sp_int_sqrt(" + compile_arg0(nid) + ")"
         end
       end
       # File operations
