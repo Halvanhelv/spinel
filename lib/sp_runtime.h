@@ -547,7 +547,25 @@ static const char*sp_str_dup(const char*s){char*r=sp_str_alloc_raw(strlen(s)+1);
 
 typedef struct{char*data;int64_t len;int64_t cap;}sp_String;
 static void sp_String_fin(void*p){free(((sp_String*)p)->data);}
-static sp_String*sp_String_new(const char*s){sp_String*r=(sp_String*)sp_gc_alloc(sizeof(sp_String),sp_String_fin,NULL);r->len=(int64_t)strlen(s);r->cap=r->len*2+16;r->data=(char*)malloc(r->cap+1);memcpy(r->data,s,r->len+1);{sp_gc_hdr*h=(sp_gc_hdr*)((char*)r-sizeof(sp_gc_hdr));h->size+=r->cap+1;sp_gc_bytes+=r->cap+1;}return r;}
+static sp_String*sp_String_new(const char*s){
+  /* Copy s's payload into a raw-malloc'd buffer BEFORE sp_gc_alloc.
+     If s is a heap string (sp_str_alloc) whose only liveness anchor
+     is this C stack frame, sp_gc_alloc can trigger sp_gc_collect →
+     sp_str_sweep, which would free s mid-call; a post-alloc strlen +
+     memcpy on s would then read freed memory (heap-use-after-free
+     under ASAN, non-deterministic crash on Windows MinGW where the
+     allocator reuses freed regions faster). The malloc'd buffer is
+     not on the GC heap and not on the string heap, so it survives
+     any GC inside sp_gc_alloc. */
+  int64_t len=(int64_t)strlen(s);
+  int64_t cap=len*2+16;
+  char*data=(char*)malloc(cap+1);
+  memcpy(data,s,len+1);
+  sp_String*r=(sp_String*)sp_gc_alloc(sizeof(sp_String),sp_String_fin,NULL);
+  r->len=len;r->cap=cap;r->data=data;
+  {sp_gc_hdr*h=(sp_gc_hdr*)((char*)r-sizeof(sp_gc_hdr));h->size+=r->cap+1;sp_gc_bytes+=r->cap+1;}
+  return r;
+}
 static inline void sp_String_append(sp_String*s,const char*t){int64_t tl=(int64_t)strlen(t);if(s->len+tl>=s->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));sp_gc_bytes-=s->cap+1;h->size-=s->cap+1;s->cap=(s->len+tl)*2+16;s->data=(char*)realloc(s->data,s->cap+1);h->size+=s->cap+1;sp_gc_bytes+=s->cap+1;}memcpy(s->data+s->len,t,tl+1);s->len+=tl;}
 static inline void sp_String_prepend(sp_String*s,const char*t){int64_t tl=(int64_t)strlen(t);if(s->len+tl>=s->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));sp_gc_bytes-=s->cap+1;h->size-=s->cap+1;s->cap=(s->len+tl)*2+16;s->data=(char*)realloc(s->data,s->cap+1);h->size+=s->cap+1;sp_gc_bytes+=s->cap+1;}memmove(s->data+tl,s->data,s->len+1);memcpy(s->data,t,tl);s->len+=tl;}
 static inline const char*sp_String_cstr(sp_String*s){return s->data;}
