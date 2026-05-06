@@ -10358,6 +10358,47 @@ class Compiler
     if @nd_receiver[nid] >= 0
       collect_param_methods(@nd_receiver[nid], pname, acc)
     end
+    # Issue #314 (A): an IfNode's predicate / else-branch and a
+    # CaseNode's predicate / when-conditions used to be invisible to
+    # this walk. `def update(p); if p.title.nil?; ...; else self.title
+    # = p.title; end; end` had `p.title` only inside the predicate +
+    # else, so collect returned []; body-side type inference then
+    # left `p` at "int" and the int-class fallback (or its companion
+    # in infer_recv_method_type) silently picked an arbitrary user
+    # class.
+    if @nd_predicate[nid] >= 0
+      collect_param_methods(@nd_predicate[nid], pname, acc)
+    end
+    if @nd_subsequent[nid] >= 0
+      collect_param_methods(@nd_subsequent[nid], pname, acc)
+    end
+    if @nd_else_clause[nid] >= 0
+      collect_param_methods(@nd_else_clause[nid], pname, acc)
+    end
+    if @nd_collection[nid] >= 0
+      collect_param_methods(@nd_collection[nid], pname, acc)
+    end
+    if @nd_block[nid] >= 0
+      collect_param_methods(@nd_block[nid], pname, acc)
+    end
+    elems = parse_id_list(@nd_elements[nid])
+    k = 0
+    while k < elems.length
+      collect_param_methods(elems[k], pname, acc)
+      k = k + 1
+    end
+    parts = parse_id_list(@nd_parts[nid])
+    k = 0
+    while k < parts.length
+      collect_param_methods(parts[k], pname, acc)
+      k = k + 1
+    end
+    conds = parse_id_list(@nd_conditions[nid])
+    k = 0
+    while k < conds.length
+      collect_param_methods(conds[k], pname, acc)
+      k = k + 1
+    end
   end
 
   # Issue #58: collect every element type seen in `pname.push(elem)`
@@ -10746,6 +10787,63 @@ class Compiler
         jj = jj + 1
       end
       ci2 = ci2 + 1
+    end
+    0
+  end
+
+  # Issue #314 (A): true when `mname` is defined on 2+ user classes
+  # (as a method, attr_reader, or attr_writer for `=`-suffixed
+  # `mname`). Used to gate compile_int_class_fallback_expr — when the
+  # name is ambiguous across user classes, the "pick first match"
+  # walk silently grabs an arbitrary class, and an unpinned-mrb_int
+  # receiver routed through it is almost certainly wrong. Refuse the
+  # cast and let the unresolved-call placeholder fire instead.
+  def method_defined_on_multiple_user_classes(mname)
+    is_writer = 0
+    base_mname = mname
+    if mname.length > 1 && mname[mname.length - 1] == "="
+      is_writer = 1
+      base_mname = mname[0, mname.length - 1]
+    end
+    count = 0
+    ci = 0
+    while ci < @cls_names.length
+      found = 0
+      mns = @cls_meth_names[ci].split(";")
+      jj = 0
+      while jj < mns.length
+        if mns[jj] == mname
+          found = 1
+        end
+        jj = jj + 1
+      end
+      if found == 0
+        readers = @cls_attr_readers[ci].split(";")
+        rk = 0
+        while rk < readers.length
+          if readers[rk] == base_mname
+            found = 1
+          end
+          rk = rk + 1
+        end
+      end
+      if found == 0 && is_writer == 1
+        writers = @cls_attr_writers[ci].split(";")
+        wk = 0
+        while wk < writers.length
+          if writers[wk] == base_mname
+            found = 1
+          end
+          wk = wk + 1
+        end
+      end
+      if found == 1
+        count = count + 1
+        if count >= 2
+          return 1
+        end
+      end
+      ci = ci + 1
     end
     0
   end
