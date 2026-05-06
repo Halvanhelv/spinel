@@ -9397,6 +9397,62 @@ class Compiler
     end
   end
 
+  # Issue #314: widen a callee's `ptypes` array from a single call
+  # site's argument list, correctly handling keyword args. Positional
+  # args unify by index; a `KeywordHashNode` (kwargs) unifies each
+  # `key: value` pair into the slot whose param-name matches the key.
+  # Mutates `ptypes` in place; the caller is responsible for joining
+  # the result back into the storage table (`@meth_param_types[mi]`,
+  # `@cls_cmeth_ptypes[ci]`, etc.).
+  #
+  # Without kwargs handling, the existing positional-only loop
+  # unifies a `KeywordHashNode` into `ptypes[0]` (because the AST
+  # presents kwargs as a single trailing hash arg), so a callee's
+  # required kwargs default-fall-through-to-int never widens — every
+  # kwarg-only call site through a module class method (e.g.
+  # `M.render(model: <obj>, label: "x")`) lands as
+  # `sp_M_cls_render(mrb_int, mrb_int)` regardless of what the call
+  # site actually passes.
+  def widen_ptypes_from_args(arg_ids, pnames, ptypes)
+    pos_idx = 0
+    ai = 0
+    while ai < arg_ids.length
+      aid = arg_ids[ai]
+      if @nd_type[aid] == "KeywordHashNode"
+        elems = parse_id_list(@nd_elements[aid])
+        ei = 0
+        while ei < elems.length
+          if @nd_type[elems[ei]] == "AssocNode"
+            key_id = @nd_key[elems[ei]]
+            val_id = @nd_expression[elems[ei]]
+            if key_id >= 0 && val_id >= 0 && @nd_type[key_id] == "SymbolNode"
+              kname = @nd_content[key_id]
+              if kname == ""
+                kname = @nd_name[key_id]
+              end
+              pi = 0
+              while pi < pnames.length
+                if pnames[pi] == kname && pi < ptypes.length
+                  at = infer_type(val_id)
+                  ptypes[pi] = unify_call_types(ptypes[pi], at, val_id)
+                end
+                pi = pi + 1
+              end
+            end
+          end
+          ei = ei + 1
+        end
+      else
+        if pos_idx < ptypes.length
+          at = infer_type(aid)
+          ptypes[pos_idx] = unify_call_types(ptypes[pos_idx], at, aid)
+        end
+        pos_idx = pos_idx + 1
+      end
+      ai = ai + 1
+    end
+  end
+
   def scan_new_calls(nid)
     if nid < 0
       return
@@ -9767,15 +9823,9 @@ class Compiler
                 args_id239 = @nd_arguments[nid]
                 if args_id239 >= 0
                   arg_ids239 = get_args(args_id239)
+                  pnames239 = @meth_param_names[mi239].split(",")
                   ptypes239 = @meth_param_types[mi239].split(",")
-                  kk239 = 0
-                  while kk239 < arg_ids239.length
-                    at239 = infer_type(arg_ids239[kk239])
-                    if kk239 < ptypes239.length
-                      ptypes239[kk239] = unify_call_types(ptypes239[kk239], at239, arg_ids239[kk239])
-                    end
-                    kk239 = kk239 + 1
-                  end
+                  widen_ptypes_from_args(arg_ids239, pnames239, ptypes239)
                   @meth_param_types[mi239] = ptypes239.join(",")
                 end
               end
@@ -13253,6 +13303,16 @@ class Compiler
       if bid >= 0
         # Build local scope for this function
         push_scope
+        # Issue #314: pin @current_method_name so
+        # current_lexical_scope_name's `<Mod>_cls_<m>` peel resolves
+        # bare class refs in the body. Without this, scan_new_calls'
+        # constructor branch on `Inner.new(x)` inside `M.make` does
+        # find_class_idx("Inner") (returning -1, since the class is
+        # registered as `M_Inner`) and skips param widening — so a
+        # poly arg flowing in via the kwargs widening above never
+        # reaches the inner class's initialize ptypes.
+        saved_method_name = @current_method_name
+        @current_method_name = @meth_names[mi]
         pnames = @meth_param_names[mi].split(",")
         ptypes = @meth_param_types[mi].split(",")
         pk = 0
@@ -13273,6 +13333,7 @@ class Compiler
         end
         # Now scan for calls within this function body
         scan_new_calls(bid)
+        @current_method_name = saved_method_name
         pop_scope
       end
       mi = mi + 1
@@ -14952,6 +15013,131 @@ class Compiler
     end
   end
 
+  # Issue #314: classes whose instances flow into a poly-typed param
+  # slot at any call site. The boxing helper `sp_box_obj(p, ci)` takes
+  # `void *p`; a value-type-eligible class would emit
+  # `sp_box_obj(sp_<C>_new(...), ci)` (or `sp_box_obj(local, ci)`
+  # where `local` is the value-type struct), feeding a struct-by-value
+  # into a `void *` slot — a C type error. Excluding such classes
+  # from the value-type optimization keeps `<C>` heap-allocated, so
+  # the boxing argument is a stable pointer.
+  #
+  # Surfaces specifically when a kwargs widening pass (this issue's
+  # main fix) collapses two or more concrete obj-typed call sites for
+  # the same kwarg into "poly" — at which point the call site starts
+  # boxing the instance, hitting the same struct-by-void-* mismatch
+  # the ptr_array / poly-return passes already guard against.
+  def detect_poly_arg_passed_types
+    @poly_arg_passed_types = "".split(",")
+    nid = 0
+    while nid < @nd_type.length
+      if @nd_type[nid] == "CallNode"
+        # Top-level / module class method (no recv, or recv is module
+        # constant). Look up the callee in @meth_*.
+        mfn = ""
+        recv = @nd_receiver[nid]
+        mname = @nd_name[nid]
+        if recv < 0
+          mfn = mname
+        else
+          if @nd_type[recv] == "ConstantReadNode" || @nd_type[recv] == "ConstantPathNode"
+            rcn = resolve_const_ref_name(recv)
+            if rcn != "" && module_name_exists(rcn) == 1
+              mfn = rcn + "_cls_" + mname
+            end
+          end
+        end
+        if mfn != ""
+          mi = find_method_idx(mfn)
+          if mi >= 0
+            pnames = @meth_param_names[mi].split(",")
+            ptypes = @meth_param_types[mi].split(",")
+            args_id = @nd_arguments[nid]
+            if args_id >= 0
+              arg_ids = get_args(args_id)
+              record_obj_args_into_poly_params(arg_ids, pnames, ptypes)
+            end
+          end
+        end
+        # Constructor `<C>.new(args)` — params live in @cls_meth_*.
+        if mname == "new" && recv >= 0
+          cname2 = constructor_class_name(recv)
+          if cname2 != ""
+            ci2 = find_class_idx(cname2)
+            if ci2 >= 0
+              init_idx = cls_find_method_direct(ci2, "initialize")
+              if init_idx >= 0
+                all_params = @cls_meth_params[ci2].split("|")
+                all_ptypes = @cls_meth_ptypes[ci2].split("|")
+                pnames2 = "".split(",")
+                ptypes2 = "".split(",")
+                if init_idx < all_params.length
+                  pnames2 = all_params[init_idx].split(",")
+                end
+                if init_idx < all_ptypes.length
+                  ptypes2 = all_ptypes[init_idx].split(",")
+                end
+                args_id2 = @nd_arguments[nid]
+                if args_id2 >= 0
+                  record_obj_args_into_poly_params(get_args(args_id2), pnames2, ptypes2)
+                end
+              end
+            end
+          end
+        end
+      end
+      nid = nid + 1
+    end
+  end
+
+  def record_obj_args_into_poly_params(arg_ids, pnames, ptypes)
+    pos_idx = 0
+    ai = 0
+    while ai < arg_ids.length
+      aid = arg_ids[ai]
+      if @nd_type[aid] == "KeywordHashNode"
+        elems = parse_id_list(@nd_elements[aid])
+        ei = 0
+        while ei < elems.length
+          if @nd_type[elems[ei]] == "AssocNode"
+            key_id = @nd_key[elems[ei]]
+            val_id = @nd_expression[elems[ei]]
+            if key_id >= 0 && val_id >= 0 && @nd_type[key_id] == "SymbolNode"
+              kname = @nd_content[key_id]
+              if kname == ""
+                kname = @nd_name[key_id]
+              end
+              pi = 0
+              while pi < pnames.length
+                if pnames[pi] == kname && pi < ptypes.length && ptypes[pi] == "poly"
+                  at = infer_type(val_id)
+                  if is_obj_type(at) == 1
+                    if not_in(at, @poly_arg_passed_types) == 1
+                      @poly_arg_passed_types.push(at)
+                    end
+                  end
+                end
+                pi = pi + 1
+              end
+            end
+          end
+          ei = ei + 1
+        end
+      else
+        if pos_idx < ptypes.length && ptypes[pos_idx] == "poly"
+          at = infer_type(aid)
+          if is_obj_type(at) == 1
+            if not_in(at, @poly_arg_passed_types) == 1
+              @poly_arg_passed_types.push(at)
+            end
+          end
+        end
+        pos_idx = pos_idx + 1
+      end
+      ai = ai + 1
+    end
+  end
+
   def detect_ptr_array_stored_types
     # Find object types `obj_<C>` that appear as the element type of an
     # array literal. Such an array becomes a `sp_PtrArray *` whose
@@ -15275,6 +15461,7 @@ class Compiler
     detect_param_mutated_types
     detect_ptr_array_stored_types
     detect_poly_returned_types
+    detect_poly_arg_passed_types
     detect_method_taken_classes
     # Multiple passes: value type detection depends on other classes
     2.times do
@@ -15355,6 +15542,21 @@ class Compiler
                 all_val = 0
               end
               pri = pri + 1
+            end
+          end
+          # Issue #314: same exclusion for classes whose instances flow
+          # into a poly-typed param at any call site. Surfaces when
+          # kwargs widening collapses two obj types into "poly" — the
+          # call site then boxes a value-type instance, mismatching
+          # sp_box_obj's `void *` slot.
+          if all_val == 1
+            type_str314 = "obj_" + @cls_names[i]
+            pai = 0
+            while pai < @poly_arg_passed_types.length
+              if @poly_arg_passed_types[pai] == type_str314
+                all_val = 0
+              end
+              pai = pai + 1
             end
           end
           # Exclude classes whose instances are captured by a Method
@@ -25452,7 +25654,7 @@ class Compiler
   # single SplatNode in positional args. The conceptual positional list
   # is (prefix... ++ splat_array ++ suffix...); fixed params eat from the
   # left; the rest param (if any) gets the remainder.
-  def compile_call_args_splat(nid, mi, pnames, ptypes, defaults, kw_names, kw_vals, positional_ids, splat_idx, rest_param_idx)
+  def compile_call_args_splat(nid, mi, pnames, ptypes, defaults, kw_names, kw_vals, kw_arg_ids, positional_ids, splat_idx, rest_param_idx)
     splat_node = positional_ids[splat_idx]
     splat_src_id = @nd_expression[splat_node]
     prefix_count = splat_idx
@@ -25501,7 +25703,13 @@ class Compiler
         if kw_names[ki] == pnames[k]
           kw_found = 1
           if k < ptypes.length && ptypes[k] == "poly"
-            result = result + "sp_box_str(" + kw_vals[ki] + ")"
+            # Issue #314: pick the box helper from the arg's actual
+            # source type via box_expr_to_poly. The pre-fix sp_box_str
+            # hardcoding mistyped any non-string source (e.g. an
+            # `obj_<C>` instance) as SP_TAG_STR — invalid C and the
+            # boxed value disagrees with sp_RbVal's tag/cls_id contract
+            # at runtime.
+            result = result + box_expr_to_poly(kw_arg_ids[ki])
           else
             result = result + kw_vals[ki]
           end
@@ -25654,9 +25862,14 @@ class Compiler
       rest_param_idx = -1
     end
 
-    # Check if args contain a KeywordHashNode - extract kw pairs
+    # Check if args contain a KeywordHashNode - extract kw pairs.
+    # Track kw_arg_ids parallel to kw_vals so the poly-boxing branch
+    # below (Issue #314) can pick the right box helper from the arg's
+    # actual source type via box_expr_to_poly, rather than hardcoding
+    # sp_box_str.
     kw_names = "".split(",")
     kw_vals = "".split(",")
+    kw_arg_ids = []
     positional_ids = []
     splat_idx = -1
     splat_count_local = 0
@@ -25675,6 +25888,7 @@ class Compiler
               end
               kw_names.push(kname)
               kw_vals.push(compile_expr(@nd_expression[elems[ek]]))
+              kw_arg_ids.push(@nd_expression[elems[ek]])
             end
           end
           ek = ek + 1
@@ -25692,7 +25906,7 @@ class Compiler
     end
 
     if splat_count_local == 1
-      return compile_call_args_splat(nid, mi, pnames, ptypes, defaults, kw_names, kw_vals, positional_ids, splat_idx, rest_param_idx)
+      return compile_call_args_splat(nid, mi, pnames, ptypes, defaults, kw_names, kw_vals, kw_arg_ids, positional_ids, splat_idx, rest_param_idx)
     end
 
     result = ""
@@ -25710,8 +25924,14 @@ class Compiler
           # Check if param is poly
           if k < ptypes.length
             if ptypes[k] == "poly"
-              # Need to box - kw_vals[ki] is already compiled
-              result = result + "sp_box_str(" + kw_vals[ki] + ")"
+              # Issue #314: pick the box helper from the arg's actual
+              # source type via box_expr_to_poly. The pre-fix sp_box_str
+              # hardcoding mistyped any non-string source — and a kwargs
+              # call site with a poly-widened param (e.g. `model:` after
+              # the call-site widening pass folds Article+Comment into
+              # poly) is exactly the path that flows non-string objs
+              # through here.
+              result = result + box_expr_to_poly(kw_arg_ids[ki])
             else
               result = result + kw_vals[ki]
             end
