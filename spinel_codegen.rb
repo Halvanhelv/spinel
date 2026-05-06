@@ -3103,7 +3103,7 @@ class Compiler
     if mname == "frozen?"
       return "bool"
     end
-    if mname == "is_a?"
+    if mname == "is_a?" || mname == "kind_of?" || mname == "instance_of?"
       return "bool"
     end
     if mname == "respond_to?"
@@ -22462,6 +22462,38 @@ class Compiler
   end
 
   def compile_string_method_expr(nid, mname, rc)
+    # is_a? / kind_of? / instance_of? for primitive String.  Decide at
+    # compile time based on Ruby's class hierarchy (String < Comparable
+    # < Object).  Anything outside that chain is FALSE.
+    if mname == "is_a?" || mname == "kind_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "String" || arg_name == "Comparable" ||
+             arg_name == "Object" || arg_name == "Kernel" || arg_name == "BasicObject"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
+    if mname == "instance_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "String"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
     # String#each_byte returns the receiver per CRuby. The statement-level
     # handler at compile_block_iteration_stmt emits the loop for `do …
     # end` / `{ … }` with no captured value; the expression-level form
@@ -22989,6 +23021,35 @@ class Compiler
 
   # Symbol methods. rc is a sp_sym expression.
   def compile_symbol_method_expr(nid, mname, rc)
+    if mname == "is_a?" || mname == "kind_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Symbol" || arg_name == "Comparable" ||
+             arg_name == "Object" || arg_name == "Kernel" || arg_name == "BasicObject"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
+    if mname == "instance_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Symbol"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
     if mname == "to_s" || mname == "id2name" || mname == "name"
       return "sp_sym_to_s(" + rc + ")"
     end
@@ -23060,6 +23121,41 @@ class Compiler
   end
 
   def compile_int_method_expr(nid, mname, rc)
+    # is_a? / kind_of? on a primitive int: resolve at compile time.  The
+    # arg is a class constant (Integer / Numeric / Comparable / etc.);
+    # answer based on Ruby's class hierarchy.  Anything not in the int
+    # ancestor chain is FALSE.
+    if mname == "is_a?" || mname == "kind_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Integer" || arg_name == "Numeric" ||
+             arg_name == "Comparable" || arg_name == "Object" ||
+             arg_name == "Kernel" || arg_name == "BasicObject"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
+    # instance_of? is is_a? without superclass / mixin matching.
+    if mname == "instance_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Integer"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
     if mname == "to_s"
       if @nd_arguments[nid] >= 0
         aargs = get_args(@nd_arguments[nid])
@@ -23187,6 +23283,36 @@ class Compiler
   end
 
   def compile_float_method_expr(nid, mname, rc)
+    if mname == "is_a?" || mname == "kind_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Float" || arg_name == "Numeric" ||
+             arg_name == "Comparable" || arg_name == "Object" ||
+             arg_name == "Kernel" || arg_name == "BasicObject"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
+    if mname == "instance_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Float"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
     if mname == "itself"
       return rc
     end
