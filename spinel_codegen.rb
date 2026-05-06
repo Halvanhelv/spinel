@@ -2438,6 +2438,16 @@ class Compiler
             end
             return "str_poly_hash"
           end
+          # Inner hash/array values need a poly outer so each pointer
+          # can carry its own cls_id through SP_TAG_OBJ.
+          if is_hash_type(first_vt) == 1 || is_array_type(first_vt) == 1
+            if all_sym_keys == 1
+              return "sym_poly_hash"
+            end
+            if all_int_keys == 0
+              return "str_poly_hash"
+            end
+          end
         else
           # Mixed value types: use a *_poly_hash so each slot carries its
           # own tag (sp_RbVal) rather than coercing everything to one type.
@@ -3001,11 +3011,26 @@ class Compiler
     # Float; zero-arg / Integer#ceil etc. return Integer. (truncate's arm
     # used to live next to nan?/infinite? — folded in here for one place
     # to update.)
+    #
+    # Issue #314: gate on a Float receiver. `ViewHelpers.truncate(s,
+    # length: 100)` is a user-defined module method that returns a
+    # string; without this gate it matched here purely by name and
+    # returned "float", so the call site boxed truncate's `const char *`
+    # return as `sp_box_float(...)` — invalid C.
+    #
+    # The gate is `rt == "float"` exclusively, not "int": a module
+    # ConstantReadNode's infer_type falls back to "int" by default,
+    # and we don't want module method calls to slide through. Integer
+    # ceil/floor/round/truncate with an arg are rare in practice — if
+    # the codebase needs them later, a future pass on call-site type
+    # narrowing can claim it more carefully.
     if mname == "ceil" || mname == "floor" || mname == "round" || mname == "truncate"
-      if @nd_arguments[nid] >= 0
-        return "float"
+      if recv >= 0 && infer_type(recv) == "float"
+        if @nd_arguments[nid] >= 0
+          return "float"
+        end
+        return "int"
       end
-      return "int"
     end
     if mname == "upcase" || mname == "downcase"
       if recv >= 0 && infer_type(recv) == "symbol"
@@ -3045,6 +3070,9 @@ class Compiler
     if mname == "cover?"
       return "bool"
     end
+    if mname == "==="
+      return "bool"
+    end
     if mname == "match?"
       return "bool"
     end
@@ -3075,10 +3103,10 @@ class Compiler
     if mname == "frozen?"
       return "bool"
     end
-    if mname == "is_a?"
+    if mname == "is_a?" || mname == "kind_of?" || mname == "instance_of?"
       return "bool"
     end
-    if mname == "respond_to?"
+    if mname == "respond_to?" || mname == "method_defined?"
       return "bool"
     end
     if mname == "chr"
@@ -3247,6 +3275,31 @@ class Compiler
       # recognize as a built-in collection — let later dispatch resolve
       # a user-defined `def fetch` against the receiver class.
       return ""
+    end
+    if mname == "dig"
+      if recv < 0
+        return ""
+      end
+      rt = infer_type(recv)
+      if is_hash_type(rt) != 1
+        return ""
+      end
+      args_id = @nd_arguments[nid]
+      arg_count = 0
+      if args_id >= 0
+        arg_count = get_args(args_id).length
+      end
+      if arg_count == 1
+        kt = infer_type(get_args(args_id)[0])
+        if hash_key_matches_recv(rt, kt) == 1
+          lt = hash_leaf_type(rt)
+          if lt == "int" || lt == "string"
+            return lt
+          end
+        end
+      end
+      @needs_rb_value = 1
+      return "poly"
     end
     if mname == "has_key?" || mname == "key?" || mname == "member?"
       return "bool"
@@ -4083,6 +4136,11 @@ class Compiler
         if rcname == "Dir"
           if mname == "home"
             return "string"
+          end
+        end
+        if rcname == "Integer"
+          if mname == "sqrt"
+            return "int"
           end
         end
       end
@@ -5263,6 +5321,59 @@ class Compiler
       return 1
     end
     if t == "str_poly_hash" || t == "sym_poly_hash"
+      return 1
+    end
+    0
+  end
+
+  def cls_id_for_hash_type(at)
+    if at == "str_int_hash"
+      return "SP_BUILTIN_STR_INT_HASH"
+    end
+    if at == "str_str_hash"
+      return "SP_BUILTIN_STR_STR_HASH"
+    end
+    if at == "int_str_hash"
+      return "SP_BUILTIN_INT_STR_HASH"
+    end
+    if at == "sym_int_hash"
+      return "SP_BUILTIN_SYM_INT_HASH"
+    end
+    if at == "sym_str_hash"
+      return "SP_BUILTIN_SYM_STR_HASH"
+    end
+    if at == "str_poly_hash"
+      return "SP_BUILTIN_STR_POLY_HASH"
+    end
+    if at == "sym_poly_hash"
+      return "SP_BUILTIN_SYM_POLY_HASH"
+    end
+    ""
+  end
+
+  def hash_leaf_type(recv_type)
+    if recv_type == "str_int_hash" || recv_type == "sym_int_hash"
+      return "int"
+    end
+    if recv_type == "str_str_hash" || recv_type == "sym_str_hash" || recv_type == "int_str_hash"
+      return "string"
+    end
+    if recv_type == "str_poly_hash" || recv_type == "sym_poly_hash"
+      return "poly"
+    end
+    ""
+  end
+
+  # CRuby returns nil for static mismatches (e.g. `{a: 1}.dig("a")`)
+  # since no key compares equal — Hash#dig short-circuits to nil here.
+  def hash_key_matches_recv(recv_type, key_type)
+    if recv_type.start_with?("sym_") && key_type == "symbol"
+      return 1
+    end
+    if recv_type.start_with?("str_") && key_type == "string"
+      return 1
+    end
+    if recv_type.start_with?("int_") && key_type == "int"
       return 1
     end
     0
@@ -9382,6 +9493,62 @@ class Compiler
     end
   end
 
+  # Issue #314: widen a callee's `ptypes` array from a single call
+  # site's argument list, correctly handling keyword args. Positional
+  # args unify by index; a `KeywordHashNode` (kwargs) unifies each
+  # `key: value` pair into the slot whose param-name matches the key.
+  # Mutates `ptypes` in place; the caller is responsible for joining
+  # the result back into the storage table (`@meth_param_types[mi]`,
+  # `@cls_cmeth_ptypes[ci]`, etc.).
+  #
+  # Without kwargs handling, the existing positional-only loop
+  # unifies a `KeywordHashNode` into `ptypes[0]` (because the AST
+  # presents kwargs as a single trailing hash arg), so a callee's
+  # required kwargs default-fall-through-to-int never widens — every
+  # kwarg-only call site through a module class method (e.g.
+  # `M.render(model: <obj>, label: "x")`) lands as
+  # `sp_M_cls_render(mrb_int, mrb_int)` regardless of what the call
+  # site actually passes.
+  def widen_ptypes_from_args(arg_ids, pnames, ptypes)
+    pos_idx = 0
+    ai = 0
+    while ai < arg_ids.length
+      aid = arg_ids[ai]
+      if @nd_type[aid] == "KeywordHashNode"
+        elems = parse_id_list(@nd_elements[aid])
+        ei = 0
+        while ei < elems.length
+          if @nd_type[elems[ei]] == "AssocNode"
+            key_id = @nd_key[elems[ei]]
+            val_id = @nd_expression[elems[ei]]
+            if key_id >= 0 && val_id >= 0 && @nd_type[key_id] == "SymbolNode"
+              kname = @nd_content[key_id]
+              if kname == ""
+                kname = @nd_name[key_id]
+              end
+              pi = 0
+              while pi < pnames.length
+                if pnames[pi] == kname && pi < ptypes.length
+                  at = infer_type(val_id)
+                  ptypes[pi] = unify_call_types(ptypes[pi], at, val_id)
+                end
+                pi = pi + 1
+              end
+            end
+          end
+          ei = ei + 1
+        end
+      else
+        if pos_idx < ptypes.length
+          at = infer_type(aid)
+          ptypes[pos_idx] = unify_call_types(ptypes[pos_idx], at, aid)
+        end
+        pos_idx = pos_idx + 1
+      end
+      ai = ai + 1
+    end
+  end
+
   def scan_new_calls(nid)
     if nid < 0
       return
@@ -9752,15 +9919,9 @@ class Compiler
                 args_id239 = @nd_arguments[nid]
                 if args_id239 >= 0
                   arg_ids239 = get_args(args_id239)
+                  pnames239 = @meth_param_names[mi239].split(",")
                   ptypes239 = @meth_param_types[mi239].split(",")
-                  kk239 = 0
-                  while kk239 < arg_ids239.length
-                    at239 = infer_type(arg_ids239[kk239])
-                    if kk239 < ptypes239.length
-                      ptypes239[kk239] = unify_call_types(ptypes239[kk239], at239, arg_ids239[kk239])
-                    end
-                    kk239 = kk239 + 1
-                  end
+                  widen_ptypes_from_args(arg_ids239, pnames239, ptypes239)
                   @meth_param_types[mi239] = ptypes239.join(",")
                 end
               end
@@ -10293,6 +10454,47 @@ class Compiler
     if @nd_receiver[nid] >= 0
       collect_param_methods(@nd_receiver[nid], pname, acc)
     end
+    # Issue #314 (A): an IfNode's predicate / else-branch and a
+    # CaseNode's predicate / when-conditions used to be invisible to
+    # this walk. `def update(p); if p.title.nil?; ...; else self.title
+    # = p.title; end; end` had `p.title` only inside the predicate +
+    # else, so collect returned []; body-side type inference then
+    # left `p` at "int" and the int-class fallback (or its companion
+    # in infer_recv_method_type) silently picked an arbitrary user
+    # class.
+    if @nd_predicate[nid] >= 0
+      collect_param_methods(@nd_predicate[nid], pname, acc)
+    end
+    if @nd_subsequent[nid] >= 0
+      collect_param_methods(@nd_subsequent[nid], pname, acc)
+    end
+    if @nd_else_clause[nid] >= 0
+      collect_param_methods(@nd_else_clause[nid], pname, acc)
+    end
+    if @nd_collection[nid] >= 0
+      collect_param_methods(@nd_collection[nid], pname, acc)
+    end
+    if @nd_block[nid] >= 0
+      collect_param_methods(@nd_block[nid], pname, acc)
+    end
+    elems = parse_id_list(@nd_elements[nid])
+    k = 0
+    while k < elems.length
+      collect_param_methods(elems[k], pname, acc)
+      k = k + 1
+    end
+    parts = parse_id_list(@nd_parts[nid])
+    k = 0
+    while k < parts.length
+      collect_param_methods(parts[k], pname, acc)
+      k = k + 1
+    end
+    conds = parse_id_list(@nd_conditions[nid])
+    k = 0
+    while k < conds.length
+      collect_param_methods(conds[k], pname, acc)
+      k = k + 1
+    end
   end
 
   # Issue #58: collect every element type seen in `pname.push(elem)`
@@ -10615,7 +10817,9 @@ class Compiler
 
   # Does class `ci` provide `mname` as a reader, writer, or method?
   # Walks parent classes for inherited members.
-  def class_has_method(ci, mname)
+  # Does class `ci` define `mname` directly — instance method, attr
+  # reader, or attr writer — without walking the parent chain?
+  def class_has_method_local(ci, mname)
     readers = @cls_attr_readers[ci].split(";")
     if not_in(mname, readers) == 0
       return 1
@@ -10629,6 +10833,13 @@ class Compiler
     end
     mnames = @cls_meth_names[ci].split(";")
     if not_in(mname, mnames) == 0
+      return 1
+    end
+    return 0
+  end
+
+  def class_has_method(ci, mname)
+    if class_has_method_local(ci, mname) == 1
       return 1
     end
     if @cls_parents[ci] != ""
@@ -12674,6 +12885,41 @@ class Compiler
       if mname == "system"
         @needs_system = 1
       end
+      # Hash variants are emitted on-demand. A multi-key dig step
+      # references every variant of the key family (poly + typed),
+      # so flag them all — otherwise the generated C fails to link.
+      if mname == "dig"
+        if @nd_receiver[nid] >= 0
+          drt = infer_type(@nd_receiver[nid])
+          if is_hash_type(drt) == 1
+            args_id_d = @nd_arguments[nid]
+            arg_count_d = 0
+            if args_id_d >= 0
+              arg_count_d = get_args(args_id_d).length
+            end
+            if arg_count_d >= 2
+              @needs_rb_value = 1
+              dargs = get_args(args_id_d)
+              dki = 1
+              while dki < dargs.length
+                dkt = infer_type(dargs[dki])
+                if dkt == "symbol"
+                  @needs_sym_poly_hash = 1
+                  @needs_sym_int_hash = 1
+                  @needs_sym_str_hash = 1
+                elsif dkt == "string"
+                  @needs_str_poly_hash = 1
+                  @needs_str_int_hash = 1
+                  @needs_str_str_hash = 1
+                elsif dkt == "int"
+                  @needs_int_str_hash = 1
+                end
+                dki = dki + 1
+              end
+            end
+          end
+        end
+      end
       if mname == "keys"
         @needs_str_array = 1
         @needs_gc = 1
@@ -13238,6 +13484,16 @@ class Compiler
       if bid >= 0
         # Build local scope for this function
         push_scope
+        # Issue #314: pin @current_method_name so
+        # current_lexical_scope_name's `<Mod>_cls_<m>` peel resolves
+        # bare class refs in the body. Without this, scan_new_calls'
+        # constructor branch on `Inner.new(x)` inside `M.make` does
+        # find_class_idx("Inner") (returning -1, since the class is
+        # registered as `M_Inner`) and skips param widening — so a
+        # poly arg flowing in via the kwargs widening above never
+        # reaches the inner class's initialize ptypes.
+        saved_method_name = @current_method_name
+        @current_method_name = @meth_names[mi]
         pnames = @meth_param_names[mi].split(",")
         ptypes = @meth_param_types[mi].split(",")
         pk = 0
@@ -13258,6 +13514,7 @@ class Compiler
         end
         # Now scan for calls within this function body
         scan_new_calls(bid)
+        @current_method_name = saved_method_name
         pop_scope
       end
       mi = mi + 1
@@ -14254,6 +14511,11 @@ class Compiler
     emit_raw("static void sp_SymIntHash_delete(sp_SymIntHash*h,sp_sym k){mrb_int idx=(mrb_int)(((mrb_int)k)&h->mask);while(h->keys[idx]>=0){if(h->keys[idx]==k){h->keys[idx]=-1;h->vals[idx]=0;h->len--;mrb_int j=(idx+1)&h->mask;while(h->keys[j]>=0){mrb_int nj=(mrb_int)(((mrb_int)h->keys[j])&h->mask);if((j>idx&&(nj<=idx||nj>j))||(j<idx&&nj<=idx&&nj>j)){h->keys[idx]=h->keys[j];h->vals[idx]=h->vals[j];h->keys[j]=-1;h->vals[j]=0;idx=j;}j=(j+1)&h->mask;}{mrb_int oi=0;while(oi<=h->len){if(h->order[oi]==k){while(oi<h->len){h->order[oi]=h->order[oi+1];oi++;}break;}oi++;}}return;}idx=(idx+1)&h->mask;}}")
     emit_raw("static sp_IntArray*sp_SymIntHash_keys(sp_SymIntHash*h){sp_IntArray*a=sp_IntArray_new();for(mrb_int i=0;i<h->len;i++)sp_IntArray_push(a,(mrb_int)h->order[i]);return a;}")
     emit_raw("static sp_IntArray*sp_SymIntHash_values(sp_SymIntHash*h){sp_IntArray*a=sp_IntArray_new();for(mrb_int i=0;i<h->len;i++)sp_IntArray_push(a,sp_SymIntHash_get(h,h->order[i]));return a;}")
+    # Hash inspect — Ruby's modern shorthand `{k: v, ...}`.  All keys
+    # in a sym_int_hash are valid identifier symbols (the parser only
+    # routes literal symbol keys here), so the bare-name form always
+    # round-trips correctly.
+    emit_raw("static const char*sp_SymIntHash_inspect(sp_SymIntHash*h){sp_String*s=sp_String_new(\"{\");for(mrb_int i=0;i<h->len;i++){if(i>0)sp_String_append(s,\", \");sp_String_append(s,sp_sym_to_s(h->order[i]));sp_String_append(s,\": \");sp_String_append(s,sp_int_to_s(sp_SymIntHash_get(h,h->order[i])));}sp_String_append(s,\"}\");return s->data;}")
     # sym_array.tally — emitted alongside sp_SymIntHash because the
     # helper depends on the typedef. sym_array storage is sp_IntArray
     # (sym ids stored as mrb_int); cast each element to sp_sym for the
@@ -14937,6 +15199,131 @@ class Compiler
     end
   end
 
+  # Issue #314: classes whose instances flow into a poly-typed param
+  # slot at any call site. The boxing helper `sp_box_obj(p, ci)` takes
+  # `void *p`; a value-type-eligible class would emit
+  # `sp_box_obj(sp_<C>_new(...), ci)` (or `sp_box_obj(local, ci)`
+  # where `local` is the value-type struct), feeding a struct-by-value
+  # into a `void *` slot — a C type error. Excluding such classes
+  # from the value-type optimization keeps `<C>` heap-allocated, so
+  # the boxing argument is a stable pointer.
+  #
+  # Surfaces specifically when a kwargs widening pass (this issue's
+  # main fix) collapses two or more concrete obj-typed call sites for
+  # the same kwarg into "poly" — at which point the call site starts
+  # boxing the instance, hitting the same struct-by-void-* mismatch
+  # the ptr_array / poly-return passes already guard against.
+  def detect_poly_arg_passed_types
+    @poly_arg_passed_types = "".split(",")
+    nid = 0
+    while nid < @nd_type.length
+      if @nd_type[nid] == "CallNode"
+        # Top-level / module class method (no recv, or recv is module
+        # constant). Look up the callee in @meth_*.
+        mfn = ""
+        recv = @nd_receiver[nid]
+        mname = @nd_name[nid]
+        if recv < 0
+          mfn = mname
+        else
+          if @nd_type[recv] == "ConstantReadNode" || @nd_type[recv] == "ConstantPathNode"
+            rcn = resolve_const_ref_name(recv)
+            if rcn != "" && module_name_exists(rcn) == 1
+              mfn = rcn + "_cls_" + mname
+            end
+          end
+        end
+        if mfn != ""
+          mi = find_method_idx(mfn)
+          if mi >= 0
+            pnames = @meth_param_names[mi].split(",")
+            ptypes = @meth_param_types[mi].split(",")
+            args_id = @nd_arguments[nid]
+            if args_id >= 0
+              arg_ids = get_args(args_id)
+              record_obj_args_into_poly_params(arg_ids, pnames, ptypes)
+            end
+          end
+        end
+        # Constructor `<C>.new(args)` — params live in @cls_meth_*.
+        if mname == "new" && recv >= 0
+          cname2 = constructor_class_name(recv)
+          if cname2 != ""
+            ci2 = find_class_idx(cname2)
+            if ci2 >= 0
+              init_idx = cls_find_method_direct(ci2, "initialize")
+              if init_idx >= 0
+                all_params = @cls_meth_params[ci2].split("|")
+                all_ptypes = @cls_meth_ptypes[ci2].split("|")
+                pnames2 = "".split(",")
+                ptypes2 = "".split(",")
+                if init_idx < all_params.length
+                  pnames2 = all_params[init_idx].split(",")
+                end
+                if init_idx < all_ptypes.length
+                  ptypes2 = all_ptypes[init_idx].split(",")
+                end
+                args_id2 = @nd_arguments[nid]
+                if args_id2 >= 0
+                  record_obj_args_into_poly_params(get_args(args_id2), pnames2, ptypes2)
+                end
+              end
+            end
+          end
+        end
+      end
+      nid = nid + 1
+    end
+  end
+
+  def record_obj_args_into_poly_params(arg_ids, pnames, ptypes)
+    pos_idx = 0
+    ai = 0
+    while ai < arg_ids.length
+      aid = arg_ids[ai]
+      if @nd_type[aid] == "KeywordHashNode"
+        elems = parse_id_list(@nd_elements[aid])
+        ei = 0
+        while ei < elems.length
+          if @nd_type[elems[ei]] == "AssocNode"
+            key_id = @nd_key[elems[ei]]
+            val_id = @nd_expression[elems[ei]]
+            if key_id >= 0 && val_id >= 0 && @nd_type[key_id] == "SymbolNode"
+              kname = @nd_content[key_id]
+              if kname == ""
+                kname = @nd_name[key_id]
+              end
+              pi = 0
+              while pi < pnames.length
+                if pnames[pi] == kname && pi < ptypes.length && ptypes[pi] == "poly"
+                  at = infer_type(val_id)
+                  if is_obj_type(at) == 1
+                    if not_in(at, @poly_arg_passed_types) == 1
+                      @poly_arg_passed_types.push(at)
+                    end
+                  end
+                end
+                pi = pi + 1
+              end
+            end
+          end
+          ei = ei + 1
+        end
+      else
+        if pos_idx < ptypes.length && ptypes[pos_idx] == "poly"
+          at = infer_type(aid)
+          if is_obj_type(at) == 1
+            if not_in(at, @poly_arg_passed_types) == 1
+              @poly_arg_passed_types.push(at)
+            end
+          end
+        end
+        pos_idx = pos_idx + 1
+      end
+      ai = ai + 1
+    end
+  end
+
   def detect_ptr_array_stored_types
     # Find object types `obj_<C>` that appear as the element type of an
     # array literal. Such an array becomes a `sp_PtrArray *` whose
@@ -15260,6 +15647,7 @@ class Compiler
     detect_param_mutated_types
     detect_ptr_array_stored_types
     detect_poly_returned_types
+    detect_poly_arg_passed_types
     detect_method_taken_classes
     # Multiple passes: value type detection depends on other classes
     2.times do
@@ -15340,6 +15728,21 @@ class Compiler
                 all_val = 0
               end
               pri = pri + 1
+            end
+          end
+          # Issue #314: same exclusion for classes whose instances flow
+          # into a poly-typed param at any call site. Surfaces when
+          # kwargs widening collapses two obj types into "poly" — the
+          # call site then boxes a value-type instance, mismatching
+          # sp_box_obj's `void *` slot.
+          if all_val == 1
+            type_str314 = "obj_" + @cls_names[i]
+            pai = 0
+            while pai < @poly_arg_passed_types.length
+              if @poly_arg_passed_types[pai] == type_str314
+                all_val = 0
+              end
+              pai = pai + 1
             end
           end
           # Exclude classes whose instances are captured by a Method
@@ -19411,45 +19814,20 @@ class Compiler
   end
 
   def c_string_literal(s)
+    # Input `s` is the runtime Ruby string content (already-cooked: any
+    # backslash in `s` is a literal backslash, NOT an escape introducer).
+    # We C-escape the small set that needs it: backslash, double-quote,
+    # newline, carriage return, tab. Everything else copies through.
+    # The previous version treated `s` as if it still carried Ruby
+    # escapes, so a 2-char input "\\n" (backslash + n) wrongly collapsed
+    # to a C newline; that bug is what made `"hello\\nworld\\n".lines`
+    # emit invalid C with a literal newline inside a string literal.
     result = "\""
     i = 0
     while i < s.length
       ch = s[i]
       if ch == bsl
-        # Check for Ruby escape sequences
-        if i + 1 < s.length
-          nch = s[i + 1]
-          if nch == "n"
-            result = result + bsl_n
-            i = i + 2
-          else
-            if nch == "t"
-              result = result + bsl + "t"
-              i = i + 2
-            else
-              if nch == "r"
-                result = result + bsl + "r"
-                i = i + 2
-              else
-                if nch == bsl
-                  result = result + bsl + bsl
-                  i = i + 2
-                else
-                  if nch == "\""
-                    result = result + bsl + "\""
-                    i = i + 2
-                  else
-                    result = result + bsl + bsl
-                    i = i + 1
-                  end
-                end
-              end
-            end
-          end
-        else
-          result = result + "\\\\"
-          i = i + 1
-        end
+        result = result + bsl + bsl
       else
         if ch == "\""
           result = result + bsl + "\""
@@ -19468,8 +19846,8 @@ class Compiler
             end
           end
         end
-        i = i + 1
       end
+      i = i + 1
     end
     # Prepend 0xff marker byte so GC can identify static literals.
     # Return form: (&("\xff" "content")[1]) — same pointer value as the
@@ -20311,6 +20689,93 @@ class Compiler
       r = compile_lambda_call_expr(nid, mname, recv)
       if r != ""
         return r
+      end
+    end
+
+    # `Class === expr` — case-when membership for primitive type names.
+    # Resolve at compile time based on the arg's inferred type. Has to
+    # run before compile_operator_expr / compile_eq (both of which would
+    # mishandle the constant receiver as a regular C identifier and emit
+    # `<undeclared identifier> == arg`).
+    if mname == "===" && recv >= 0 && (@nd_type[recv] == "ConstantReadNode" || @nd_type[recv] == "ConstantPathNode")
+      rcname_threeq = resolve_const_ref_name(recv)
+      args_id_threeq = @nd_arguments[nid]
+      if args_id_threeq >= 0
+        a_threeq = get_args(args_id_threeq)
+        if a_threeq.length > 0
+          at_threeq = infer_type(a_threeq[0])
+          if rcname_threeq == "Integer"
+            return at_threeq == "int" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Float"
+            return at_threeq == "float" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Numeric"
+            return (at_threeq == "int" || at_threeq == "float") ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Comparable"
+            # Comparable is included by Integer, Float, String, Symbol.
+            return (at_threeq == "int" || at_threeq == "float" ||
+                    at_threeq == "string" || at_threeq == "mutable_str" ||
+                    at_threeq == "symbol") ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "String"
+            return at_threeq == "string" || at_threeq == "mutable_str" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Symbol"
+            return at_threeq == "symbol" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Array"
+            return is_array_type(at_threeq) == 1 ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Hash"
+            # Hash type names all end in `_hash` (sym_int_hash, str_str_hash,
+            # sym_poly_hash, etc.); poly_hash also matches the runtime form.
+            is_hash = 0
+            if at_threeq == "poly_hash"
+              is_hash = 1
+            elsif at_threeq.length > 5 && at_threeq[at_threeq.length - 5, 5] == "_hash"
+              is_hash = 1
+            end
+            return is_hash == 1 ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Range"
+            return at_threeq == "range" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "TrueClass"
+            # TrueClass === arg matches only the literal `true` value.
+            # Compile-time decide for TrueNode/FalseNode literals; emit a
+            # runtime check for other bool-typed values; FALSE for non-bool.
+            if @nd_type[a_threeq[0]] == "TrueNode"
+              return "TRUE"
+            end
+            if @nd_type[a_threeq[0]] == "FalseNode"
+              return "FALSE"
+            end
+            if at_threeq == "bool"
+              return "((" + compile_expr(a_threeq[0]) + ") == TRUE)"
+            end
+            return "FALSE"
+          end
+          if rcname_threeq == "FalseClass"
+            if @nd_type[a_threeq[0]] == "FalseNode"
+              return "TRUE"
+            end
+            if @nd_type[a_threeq[0]] == "TrueNode"
+              return "FALSE"
+            end
+            if at_threeq == "bool"
+              return "((" + compile_expr(a_threeq[0]) + ") == FALSE)"
+            end
+            return "FALSE"
+          end
+          if rcname_threeq == "NilClass"
+            return at_threeq == "nil" ? "TRUE" : "FALSE"
+          end
+          if rcname_threeq == "Object" || rcname_threeq == "Kernel" || rcname_threeq == "BasicObject"
+            return "TRUE"
+          end
+        end
       end
     end
 
@@ -21561,6 +22026,17 @@ class Compiler
       if lt == "mutable_str"
         @needs_mutable_str = 1
         rc = compile_expr_gc_rooted(recv)
+        # Issue #313: unbox a poly-typed arg to const char * before
+        # sp_String_append (which takes const char *). sp_poly_to_s
+        # handles every tag — string passes through, others coerce.
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          arg_ids = get_args(args_id)
+          if arg_ids.length > 0 && infer_type(arg_ids[0]) == "poly"
+            val = "sp_poly_to_s(" + compile_expr(arg_ids[0]) + ")"
+            return "(sp_String_append(" + rc + ", " + val + "), " + rc + ")"
+          end
+        end
         val = compile_arg0(nid)
         return "(sp_String_append(" + rc + ", " + val + "), " + rc + ")"
       end
@@ -21594,6 +22070,12 @@ class Compiler
         @needs_ptr_array = 1
         rc = compile_expr_gc_rooted(recv)
         return "(sp_PtrArray_push(" + rc + ", " + compile_arg0(nid) + "), " + rc + ")"
+      end
+      if lt == "poly_array"
+        @needs_rb_value = 1
+        @needs_gc = 1
+        rc = compile_expr_gc_rooted(recv)
+        return "(sp_PolyArray_push(" + rc + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + "), " + rc + ")"
       end
       if lt == "poly"
         @needs_rb_value = 1
@@ -21937,6 +22419,38 @@ class Compiler
   end
 
   def compile_string_method_expr(nid, mname, rc)
+    # is_a? / kind_of? / instance_of? for primitive String.  Decide at
+    # compile time based on Ruby's class hierarchy (String < Comparable
+    # < Object).  Anything outside that chain is FALSE.
+    if mname == "is_a?" || mname == "kind_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "String" || arg_name == "Comparable" ||
+             arg_name == "Object" || arg_name == "Kernel" || arg_name == "BasicObject"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
+    if mname == "instance_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "String"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
     # String#each_byte returns the receiver per CRuby. The statement-level
     # handler at compile_block_iteration_stmt emits the loop for `do …
     # end` / `{ … }` with no captured value; the expression-level form
@@ -22108,7 +22622,7 @@ class Compiler
     end
     if mname == "lines"
       @needs_str_array = 1
-      return "sp_str_split(" + rc + ", \"\\n\")"
+      return "sp_str_lines(" + rc + ")"
     end
     if mname == "scan"
       if @nd_block[nid] < 0
@@ -22464,6 +22978,35 @@ class Compiler
 
   # Symbol methods. rc is a sp_sym expression.
   def compile_symbol_method_expr(nid, mname, rc)
+    if mname == "is_a?" || mname == "kind_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Symbol" || arg_name == "Comparable" ||
+             arg_name == "Object" || arg_name == "Kernel" || arg_name == "BasicObject"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
+    if mname == "instance_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Symbol"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
     if mname == "to_s" || mname == "id2name" || mname == "name"
       return "sp_sym_to_s(" + rc + ")"
     end
@@ -22535,6 +23078,41 @@ class Compiler
   end
 
   def compile_int_method_expr(nid, mname, rc)
+    # is_a? / kind_of? on a primitive int: resolve at compile time.  The
+    # arg is a class constant (Integer / Numeric / Comparable / etc.);
+    # answer based on Ruby's class hierarchy.  Anything not in the int
+    # ancestor chain is FALSE.
+    if mname == "is_a?" || mname == "kind_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Integer" || arg_name == "Numeric" ||
+             arg_name == "Comparable" || arg_name == "Object" ||
+             arg_name == "Kernel" || arg_name == "BasicObject"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
+    # instance_of? is is_a? without superclass / mixin matching.
+    if mname == "instance_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Integer"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
     if mname == "to_s"
       if @nd_arguments[nid] >= 0
         aargs = get_args(@nd_arguments[nid])
@@ -22662,6 +23240,36 @@ class Compiler
   end
 
   def compile_float_method_expr(nid, mname, rc)
+    if mname == "is_a?" || mname == "kind_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Float" || arg_name == "Numeric" ||
+             arg_name == "Comparable" || arg_name == "Object" ||
+             arg_name == "Kernel" || arg_name == "BasicObject"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
+    if mname == "instance_of?"
+      args_id = @nd_arguments[nid]
+      if args_id >= 0
+        a = get_args(args_id)
+        if a.length > 0
+          arg_name = @nd_name[a[0]]
+          if arg_name == "Float"
+            return "TRUE"
+          end
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
     if mname == "itself"
       return rc
     end
@@ -23596,6 +24204,9 @@ class Compiler
 
   def compile_hash_method_expr(nid, mname, rc, recv_type)
     # Hash methods
+    if mname == "dig"
+      return compile_hash_dig(nid, rc, recv_type)
+    end
     if recv_type == "sym_int_hash"
       if mname == "[]"
         args_id0 = @nd_arguments[nid]
@@ -23648,6 +24259,34 @@ class Compiler
       if mname == "values"
         @needs_int_array = 1
         return "sp_SymIntHash_values(" + rc + ")"
+      end
+      # transform_values { |v| ... } — same key set, block-transformed
+      # int values.  Keeps the result a sym_int_hash; the block's last
+      # expression is set as the new value (truncated to mrb_int by
+      # sp_SymIntHash_set's signature when the block returns int).
+      if mname == "transform_values"
+        if @nd_block[nid] >= 0
+          blk = @nd_block[nid]
+          bp = get_block_param(nid, 0)
+          tmp = new_temp
+          emit("  sp_SymIntHash *" + tmp + " = sp_SymIntHash_new();")
+          emit("  for (mrb_int _i = 0; _i < " + rc + "->len; _i++) {")
+          emit("    mrb_int lv_" + bp + " = sp_SymIntHash_get(" + rc + ", " + rc + "->order[_i]);")
+          push_scope
+          declare_var(bp, "int")
+          bbody = @nd_body[blk]
+          bexpr = "0"
+          if bbody >= 0
+            bs = get_stmts(bbody)
+            if bs.length > 0
+              bexpr = compile_expr(bs.last)
+            end
+          end
+          emit("    sp_SymIntHash_set(" + tmp + ", " + rc + "->order[_i], " + bexpr + ");")
+          pop_scope
+          emit("  }")
+          return tmp
+        end
       end
     end
     if recv_type == "sym_str_hash"
@@ -24005,6 +24644,130 @@ class Compiler
     ""
   end
 
+  # Multi-key Hash#dig walks across poly slots: each step dispatches
+  # on acc.cls_id to pick a concrete-hash variant (cls_ids stamped in
+  # box_value_to_poly via cls_id_for_hash_type). A cls_id that matches
+  # no known variant collapses the walk to nil, covering both "key
+  # missing mid-walk" and "value at this depth isn't a hash".
+  def compile_hash_dig(nid, rc, recv_type)
+    args_id = @nd_arguments[nid]
+    aargs = []
+    if args_id >= 0
+      aargs = get_args(args_id)
+    end
+    if aargs.length == 0
+      @needs_rb_value = 1
+      return "sp_box_nil()"
+    end
+
+    # `"".split(",")` builds an empty str_array — bare `[]` would be
+    # inferred as int_array under spinel's self-host rules and can't
+    # hold the string temps below.
+    key_tmps = "".split(",")
+    key_types = "".split(",")
+    ki = 0
+    while ki < aargs.length
+      kt = infer_type(aargs[ki])
+      tmp = new_temp
+      if kt == "symbol"
+        emit("  sp_sym " + tmp + " = " + compile_expr(aargs[ki]) + ";")
+      elsif kt == "string"
+        emit("  const char *" + tmp + " = " + compile_expr_as_string(aargs[ki]) + ";")
+      elsif kt == "int"
+        emit("  mrb_int " + tmp + " = " + compile_expr(aargs[ki]) + ";")
+      else
+        emit("  mrb_int " + tmp + " = 0; (void)" + tmp + ";")
+      end
+      key_tmps.push(tmp)
+      key_types.push(kt)
+      ki = ki + 1
+    end
+
+    # First-key static mismatch: short-circuit before the typed `_get`
+    # so we don't fabricate a sentinel 0/"" leaf that would round-trip
+    # through boxing as a real boxed 0/"".
+    if hash_key_matches_recv(recv_type, key_types[0]) == 0
+      @needs_rb_value = 1
+      return "sp_box_nil()"
+    end
+
+    if aargs.length == 1
+      return hash_get_expr(recv_type, rc, key_tmps[0])
+    end
+
+    @needs_rb_value = 1
+    acc = new_temp
+    emit("  sp_RbVal " + acc + ";")
+    first_get = hash_get_expr(recv_type, rc, key_tmps[0])
+    emit("  " + acc + " = " + box_non_nullable_value_to_poly(hash_leaf_type(recv_type), first_get) + ";")
+
+    si = 1
+    while si < aargs.length
+      emit_dig_step(acc, key_tmps[si], key_types[si])
+      si = si + 1
+    end
+    acc
+  end
+
+  # Caller must pass `key_expr` typed for recv_type's key family —
+  # compile_hash_dig validates this with hash_key_matches_recv first.
+  def hash_get_expr(recv_type, rc, key_expr)
+    if recv_type == "sym_int_hash"
+      return "sp_SymIntHash_get((sp_SymIntHash *)(" + rc + "), " + key_expr + ")"
+    end
+    if recv_type == "sym_str_hash"
+      return "sp_SymStrHash_get((sp_SymStrHash *)(" + rc + "), " + key_expr + ")"
+    end
+    if recv_type == "sym_poly_hash"
+      @needs_rb_value = 1
+      return "sp_SymPolyHash_get((sp_SymPolyHash *)(" + rc + "), " + key_expr + ")"
+    end
+    if recv_type == "str_poly_hash"
+      @needs_rb_value = 1
+      return "sp_StrPolyHash_get(" + rc + ", " + key_expr + ")"
+    end
+    if recv_type == "str_int_hash"
+      return "sp_StrIntHash_get(" + rc + ", " + key_expr + ")"
+    end
+    if recv_type == "str_str_hash"
+      return "sp_StrStrHash_get(" + rc + ", " + key_expr + ")"
+    end
+    if recv_type == "int_str_hash"
+      return "sp_IntStrHash_get(" + rc + ", " + key_expr + ")"
+    end
+    "0"
+  end
+
+  # Non-poly inner hashes need a has_key guard: their typed `_get`
+  # returns 0/"" on miss, which sp_box_int/sp_box_str would otherwise
+  # round-trip as a genuine 0/"" leaf indistinguishable from a real
+  # value. Poly inner hashes don't need the guard — their `_get`
+  # already returns sp_box_nil() on miss.
+  def emit_dig_step(acc, key_expr, key_type)
+    emit("  if (" + acc + ".tag != SP_TAG_OBJ) { " + acc + " = sp_box_nil(); } else {")
+    if key_type == "symbol"
+      emit_dig_arm_poly(acc, key_expr, "SP_BUILTIN_SYM_POLY_HASH", "sp_SymPolyHash")
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_SYM_INT_HASH", "sp_SymIntHash", "sp_box_int")
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_SYM_STR_HASH", "sp_SymStrHash", "sp_box_str")
+    elsif key_type == "string"
+      emit_dig_arm_poly(acc, key_expr, "SP_BUILTIN_STR_POLY_HASH", "sp_StrPolyHash")
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_STR_INT_HASH", "sp_StrIntHash", "sp_box_int")
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_STR_STR_HASH", "sp_StrStrHash", "sp_box_str")
+    elsif key_type == "int"
+      emit_dig_arm_typed(acc, key_expr, "SP_BUILTIN_INT_STR_HASH", "sp_IntStrHash", "sp_box_str")
+    end
+    emit("    " + acc + " = sp_box_nil();")
+    emit("  }")
+  end
+
+  def emit_dig_arm_poly(acc, key_expr, cls_id, cstruct)
+    emit("    if (" + acc + ".cls_id == " + cls_id + ") { " + acc + " = " + cstruct + "_get((" + cstruct + " *)" + acc + ".v.p, " + key_expr + "); } else")
+  end
+
+  def emit_dig_arm_typed(acc, key_expr, cls_id, cstruct, box_fn)
+    emit("    if (" + acc + ".cls_id == " + cls_id + ") { " + cstruct + " *_dh = (" + cstruct + " *)" + acc + ".v.p; " + acc + " = " + cstruct + "_has_key(_dh, " + key_expr + ") ? " + box_fn + "(" + cstruct + "_get(_dh, " + key_expr + ")) : sp_box_nil(); } else")
+  end
+
   def compile_enumerable_expr(nid, mname)
     # map as expression
     if mname == "map"
@@ -24072,6 +24835,31 @@ class Compiler
   def compile_constant_recv_expr(nid, mname, recv, rc)
     rcname = constructor_class_name(recv)
     if rcname != ""
+      # Foo.method_defined?(:sym[, inherit=true]) — compile-time decide.
+      # Default arm walks the parent chain via class_has_method (covers
+      # instance methods, attr readers/writers, ancestors).  When the
+      # second arg is the literal `false`, restrict the lookup to the
+      # receiver's own methods (no parent walk) via class_has_method_local.
+      if mname == "method_defined?"
+        ci_md = find_class_idx(rcname)
+        if ci_md >= 0
+          args_id_md = @nd_arguments[nid]
+          if args_id_md >= 0
+            a_md = get_args(args_id_md)
+            if a_md.length > 0
+              if @nd_type[a_md[0]] == "SymbolNode" || @nd_type[a_md[0]] == "StringNode"
+                lit_name = @nd_content[a_md[0]]
+                inherit_md = 1
+                if a_md.length >= 2 && @nd_type[a_md[1]] == "FalseNode"
+                  inherit_md = 0
+                end
+                hit = inherit_md == 1 ? class_has_method(ci_md, lit_name) : class_has_method_local(ci_md, lit_name)
+                return hit == 1 ? "TRUE" : "FALSE"
+              end
+            end
+          end
+        end
+      end
       # ARGV methods
       if rcname == "ARGV"
         if mname == "length"
@@ -24152,6 +24940,17 @@ class Compiler
               return "hypot(" + compile_expr(arg_ids[0]) + ", " + compile_expr(arg_ids[1]) + ")"
             end
           end
+        end
+      end
+      # Integer class methods (Ruby 2.5+)
+      if rcname == "Integer"
+        if mname == "sqrt"
+          # Integer.sqrt(n) is the integer square root, distinct from
+          # Math.sqrt's float result. Use sp_int_sqrt (Newton's method,
+          # exact for the full mrb_int range) instead of casting through
+          # double — double has only 53 bits of mantissa so values above
+          # ~2^53 round and produce off-by-one results.
+          return "sp_int_sqrt(" + compile_arg0(nid) + ")"
         end
       end
       # File operations
@@ -24678,6 +25477,21 @@ class Compiler
     if mname == "to_s"
       return "sp_poly_to_s(" + rc + ")"
     end
+    if mname == "to_i"
+      # Unbox the poly value's int payload. For SP_TAG_INT it's the
+      # raw `v.i`. For SP_TAG_OBJ branches the runtime values are
+      # always pointers — `.to_i` on a class that doesn't define
+      # `to_i` is the obj-id in Ruby; we approximate as 0 since
+      # spinel doesn't expose a stable obj-id and the only practical
+      # use is unboxing a poly-with-int payload (e.g. the result of
+      # `arr[i][j]` over a heterogeneous IntArray + Method array,
+      # whose dispatch arms all box back to SP_TAG_INT).
+      tmp = new_temp
+      recv_tmp = new_temp
+      emit("  sp_RbVal " + recv_tmp + " = " + rc + ";")
+      emit("  mrb_int " + tmp + " = (" + recv_tmp + ".tag == SP_TAG_INT) ? " + recv_tmp + ".v.i : 0;")
+      return tmp
+    end
     # For object method calls, dispatch based on cls_id. Two namespaces
     # of cls_id share SP_TAG_OBJ:
     #   - non-negative: index into @cls_names (user-defined classes)
@@ -25037,6 +25851,12 @@ class Compiler
         ci = find_class_idx(cname)
         return "sp_box_nullable_obj(" + val + ", " + ci.to_s + ")"
       end
+      # Stamp hash cls_id so Hash#dig can recover the concrete type;
+      # falling through to cls_id=0 would make dig collapse to nil.
+      hcid = cls_id_for_hash_type(at)
+      if hcid != ""
+        return "sp_box_nullable_obj((void *)(" + val + "), " + hcid + ")"
+      end
       if type_is_pointer(at) == 1
         return "sp_box_nullable_obj((void *)(" + val + "), 0)"
       end
@@ -25103,7 +25923,11 @@ class Compiler
       ci = find_class_idx(cname)
       return "sp_box_obj(" + val + ", " + ci.to_s + ")"
     end
-    # Other pointer types (hashes, mutable strings, etc.) — box with a
+    hcid = cls_id_for_hash_type(at)
+    if hcid != ""
+      return "sp_box_obj((void *)(" + val + "), " + hcid + ")"
+    end
+    # Other pointer types (mutable strings, etc.) — box with a
     # neutral cls_id of 0 rather than truncating the pointer to int.
     if type_is_pointer(at) == 1
       return "sp_box_obj((void *)(" + val + "), 0)"
@@ -25426,7 +26250,7 @@ class Compiler
   # single SplatNode in positional args. The conceptual positional list
   # is (prefix... ++ splat_array ++ suffix...); fixed params eat from the
   # left; the rest param (if any) gets the remainder.
-  def compile_call_args_splat(nid, mi, pnames, ptypes, defaults, kw_names, kw_vals, positional_ids, splat_idx, rest_param_idx)
+  def compile_call_args_splat(nid, mi, pnames, ptypes, defaults, kw_names, kw_vals, kw_arg_ids, positional_ids, splat_idx, rest_param_idx)
     splat_node = positional_ids[splat_idx]
     splat_src_id = @nd_expression[splat_node]
     prefix_count = splat_idx
@@ -25475,7 +26299,13 @@ class Compiler
         if kw_names[ki] == pnames[k]
           kw_found = 1
           if k < ptypes.length && ptypes[k] == "poly"
-            result = result + "sp_box_str(" + kw_vals[ki] + ")"
+            # Issue #314: pick the box helper from the arg's actual
+            # source type via box_expr_to_poly. The pre-fix sp_box_str
+            # hardcoding mistyped any non-string source (e.g. an
+            # `obj_<C>` instance) as SP_TAG_STR — invalid C and the
+            # boxed value disagrees with sp_RbVal's tag/cls_id contract
+            # at runtime.
+            result = result + box_expr_to_poly(kw_arg_ids[ki])
           else
             result = result + kw_vals[ki]
           end
@@ -25628,9 +26458,14 @@ class Compiler
       rest_param_idx = -1
     end
 
-    # Check if args contain a KeywordHashNode - extract kw pairs
+    # Check if args contain a KeywordHashNode - extract kw pairs.
+    # Track kw_arg_ids parallel to kw_vals so the poly-boxing branch
+    # below (Issue #314) can pick the right box helper from the arg's
+    # actual source type via box_expr_to_poly, rather than hardcoding
+    # sp_box_str.
     kw_names = "".split(",")
     kw_vals = "".split(",")
+    kw_arg_ids = []
     positional_ids = []
     splat_idx = -1
     splat_count_local = 0
@@ -25649,6 +26484,7 @@ class Compiler
               end
               kw_names.push(kname)
               kw_vals.push(compile_expr(@nd_expression[elems[ek]]))
+              kw_arg_ids.push(@nd_expression[elems[ek]])
             end
           end
           ek = ek + 1
@@ -25666,7 +26502,7 @@ class Compiler
     end
 
     if splat_count_local == 1
-      return compile_call_args_splat(nid, mi, pnames, ptypes, defaults, kw_names, kw_vals, positional_ids, splat_idx, rest_param_idx)
+      return compile_call_args_splat(nid, mi, pnames, ptypes, defaults, kw_names, kw_vals, kw_arg_ids, positional_ids, splat_idx, rest_param_idx)
     end
 
     result = ""
@@ -25684,8 +26520,14 @@ class Compiler
           # Check if param is poly
           if k < ptypes.length
             if ptypes[k] == "poly"
-              # Need to box - kw_vals[ki] is already compiled
-              result = result + "sp_box_str(" + kw_vals[ki] + ")"
+              # Issue #314: pick the box helper from the arg's actual
+              # source type via box_expr_to_poly. The pre-fix sp_box_str
+              # hardcoding mistyped any non-string source — and a kwargs
+              # call site with a poly-widened param (e.g. `model:` after
+              # the call-site widening pass folds Article+Comment into
+              # poly) is exactly the path that flows non-string objs
+              # through here.
+              result = result + box_expr_to_poly(kw_arg_ids[ki])
             else
               result = result + kw_vals[ki]
             end
@@ -28651,7 +29493,15 @@ class Compiler
                 if at == "mutable_str"
                   emit("  sp_String_append(" + rc + ", " + val + "->data);")
                 else
-                  emit("  sp_String_append(" + rc + ", " + val + ");")
+                  if at == "poly"
+                    # Issue #313: a poly-typed source (e.g. a module
+                    # method returning sp_RbVal from a SymPolyHash
+                    # read) needs runtime unbox to const char * before
+                    # sp_String_append. sp_poly_to_s handles every tag.
+                    emit("  sp_String_append(" + rc + ", sp_poly_to_s(" + val + "));")
+                  else
+                    emit("  sp_String_append(" + rc + ", " + val + ");")
+                  end
                 end
               end
             end
@@ -28711,6 +29561,22 @@ class Compiler
           rc = compile_expr_gc_rooted(recv)
           emit("  sp_PtrArray_push(" + rc + ", " + compile_arg0(nid) + ");")
           return 1
+        end
+        if rt == "poly_array"
+          rc = compile_expr_gc_rooted(recv)
+          args_id3 = @nd_arguments[nid]
+          if args_id3 >= 0
+            aa = get_args(args_id3)
+            if aa.length > 0
+              vt = infer_type(aa[0])
+              vexpr = compile_expr(aa[0])
+              if vt != "poly"
+                vexpr = box_value_to_poly(vt, vexpr)
+              end
+              emit("  sp_PolyArray_push(" + rc + ", " + vexpr + ");")
+              return 1
+            end
+          end
         end
       end
     end
@@ -31174,6 +32040,24 @@ class Compiler
     if at == "sym_array_ptr_array"
       @needs_int_array = 1
       return "sp_SymArrayPtrArray_inspect(" + val + ")"
+    end
+    # Tuples produced by methods that return Ruby Arrays of fixed
+    # arity (Integer#divmod, Array#minmax, etc.).  Without an inspect
+    # path here, `p arr.minmax` would fall through to printf("%lld",...)
+    # and emit the struct pointer.  Format as Ruby's "[a, b]" so the
+    # output round-trips with CRuby.
+    if at == "tuple:int,int"
+      return "sp_sprintf(\"[%lld, %lld]\", (long long)" + val + "->_0, (long long)" + val + "->_1)"
+    end
+    if at == "tuple:int,float"
+      return "sp_sprintf(\"[%lld, %s]\", (long long)" + val + "->_0, sp_float_inspect(" + val + "->_1))"
+    end
+    if at == "tuple:float,float"
+      return "sp_sprintf(\"[%s, %s]\", sp_float_inspect(" + val + "->_0), sp_float_inspect(" + val + "->_1))"
+    end
+    if at == "sym_int_hash"
+      @needs_sym_int_hash = 1
+      return "sp_SymIntHash_inspect(" + val + ")"
     end
     ""
   end
