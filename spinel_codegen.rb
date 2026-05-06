@@ -19426,45 +19426,20 @@ class Compiler
   end
 
   def c_string_literal(s)
+    # Input `s` is the runtime Ruby string content (already-cooked: any
+    # backslash in `s` is a literal backslash, NOT an escape introducer).
+    # We C-escape the small set that needs it: backslash, double-quote,
+    # newline, carriage return, tab. Everything else copies through.
+    # The previous version treated `s` as if it still carried Ruby
+    # escapes, so a 2-char input "\\n" (backslash + n) wrongly collapsed
+    # to a C newline; that bug is what made `"hello\\nworld\\n".lines`
+    # emit invalid C with a literal newline inside a string literal.
     result = "\""
     i = 0
     while i < s.length
       ch = s[i]
       if ch == bsl
-        # Check for Ruby escape sequences
-        if i + 1 < s.length
-          nch = s[i + 1]
-          if nch == "n"
-            result = result + bsl_n
-            i = i + 2
-          else
-            if nch == "t"
-              result = result + bsl + "t"
-              i = i + 2
-            else
-              if nch == "r"
-                result = result + bsl + "r"
-                i = i + 2
-              else
-                if nch == bsl
-                  result = result + bsl + bsl
-                  i = i + 2
-                else
-                  if nch == "\""
-                    result = result + bsl + "\""
-                    i = i + 2
-                  else
-                    result = result + bsl + bsl
-                    i = i + 1
-                  end
-                end
-              end
-            end
-          end
-        else
-          result = result + "\\\\"
-          i = i + 1
-        end
+        result = result + bsl + bsl
       else
         if ch == "\""
           result = result + bsl + "\""
@@ -19483,8 +19458,8 @@ class Compiler
             end
           end
         end
-        i = i + 1
       end
+      i = i + 1
     end
     # Prepend 0xff marker byte so GC can identify static literals.
     # Return form: (&("\xff" "content")[1]) — same pointer value as the
