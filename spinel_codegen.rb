@@ -22044,6 +22044,12 @@ class Compiler
         rc = compile_expr_gc_rooted(recv)
         return "(sp_PtrArray_push(" + rc + ", " + compile_arg0(nid) + "), " + rc + ")"
       end
+      if lt == "poly_array"
+        @needs_rb_value = 1
+        @needs_gc = 1
+        rc = compile_expr_gc_rooted(recv)
+        return "(sp_PolyArray_push(" + rc + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + "), " + rc + ")"
+      end
       if lt == "poly"
         @needs_rb_value = 1
         return "sp_poly_shl(" + compile_expr(recv) + ", " + box_expr_to_poly(get_args(@nd_arguments[nid])[0]) + ")"
@@ -29309,6 +29315,22 @@ class Compiler
           rc = compile_expr_gc_rooted(recv)
           emit("  sp_PtrArray_push(" + rc + ", " + compile_arg0(nid) + ");")
           return 1
+        end
+        if rt == "poly_array"
+          rc = compile_expr_gc_rooted(recv)
+          args_id3 = @nd_arguments[nid]
+          if args_id3 >= 0
+            aa = get_args(args_id3)
+            if aa.length > 0
+              vt = infer_type(aa[0])
+              vexpr = compile_expr(aa[0])
+              if vt != "poly"
+                vexpr = box_value_to_poly(vt, vexpr)
+              end
+              emit("  sp_PolyArray_push(" + rc + ", " + vexpr + ");")
+              return 1
+            end
+          end
         end
       end
     end
