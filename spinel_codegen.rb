@@ -28815,15 +28815,32 @@ class Compiler
         @hoisted_strlen_var = len_tmp
       end
     end
-    cond = compile_cond_expr(@nd_predicate[nid])
-    emit("  while (" + cond + ") {")
-    @indent = @indent + 1
-    redo_label = push_redo_label
-    emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[nid])
-    pop_redo_label
-    @indent = @indent - 1
-    emit("  }")
+    # Prism PM_LOOP_FLAGS_BEGIN_MODIFIER (bit 0): `begin..end while cond`
+    # is a post-test (do-while) loop — body runs at least once. Without
+    # this, optcarrots `poke_4014` slow-path DMA never runs because
+    # `data <<= 8` makes `data & 0xff == 0` initially, so the pre-test
+    # while condition is false and the body is skipped.
+    if (@nd_flags[nid] & 4) != 0
+      emit("  do {")
+      @indent = @indent + 1
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
+      compile_stmts_body(@nd_body[nid])
+      pop_redo_label
+      @indent = @indent - 1
+      cond = compile_cond_expr(@nd_predicate[nid])
+      emit("  } while (" + cond + ");")
+    else
+      cond = compile_cond_expr(@nd_predicate[nid])
+      emit("  while (" + cond + ") {")
+      @indent = @indent + 1
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
+      compile_stmts_body(@nd_body[nid])
+      pop_redo_label
+      @indent = @indent - 1
+      emit("  }")
+    end
     @hoisted_strlen_var = saved_var
     @hoisted_strlen_recv = saved_recv
     @in_loop = old
@@ -28832,15 +28849,27 @@ class Compiler
   def compile_until_stmt(nid)
     old = @in_loop
     @in_loop = 1
-    cond = compile_cond_expr(@nd_predicate[nid])
-    emit("  while (!(" + cond + ")) {")
-    @indent = @indent + 1
-    redo_label = push_redo_label
-    emit_redo_label(redo_label)
-    compile_stmts_body(@nd_body[nid])
-    pop_redo_label
-    @indent = @indent - 1
-    emit("  }")
+    if (@nd_flags[nid] & 4) != 0
+      emit("  do {")
+      @indent = @indent + 1
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
+      compile_stmts_body(@nd_body[nid])
+      pop_redo_label
+      @indent = @indent - 1
+      cond = compile_cond_expr(@nd_predicate[nid])
+      emit("  } while (!(" + cond + "));")
+    else
+      cond = compile_cond_expr(@nd_predicate[nid])
+      emit("  while (!(" + cond + ")) {")
+      @indent = @indent + 1
+      redo_label = push_redo_label
+      emit_redo_label(redo_label)
+      compile_stmts_body(@nd_body[nid])
+      pop_redo_label
+      @indent = @indent - 1
+      emit("  }")
+    end
     @in_loop = old
   end
 

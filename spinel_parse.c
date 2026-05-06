@@ -598,6 +598,10 @@ static int flatten(pm_node_t *node) {
     N("WhileNode");
     R("predicate", n->predicate);
     R("statements", n->statements);
+    /* PM_LOOP_FLAGS_BEGIN_MODIFIER = 4 (bit 2): begin..end while form,
+       which is a post-test loop (body runs at least once). The codegen
+       reads bit 2 to decide between `while (cond) {}` and `do {} while (cond);`. */
+    I("flags", n->base.flags);
     break;
   }
   case PM_UNTIL_NODE: {
@@ -605,6 +609,7 @@ static int flatten(pm_node_t *node) {
     N("UntilNode");
     R("predicate", n->predicate);
     R("statements", n->statements);
+    I("flags", n->base.flags);
     break;
   }
   case PM_FOR_NODE: {
