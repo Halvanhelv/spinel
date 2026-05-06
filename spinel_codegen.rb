@@ -3106,7 +3106,7 @@ class Compiler
     if mname == "is_a?" || mname == "kind_of?" || mname == "instance_of?"
       return "bool"
     end
-    if mname == "respond_to?"
+    if mname == "respond_to?" || mname == "method_defined?"
       return "bool"
     end
     if mname == "chr"
@@ -10817,7 +10817,9 @@ class Compiler
 
   # Does class `ci` provide `mname` as a reader, writer, or method?
   # Walks parent classes for inherited members.
-  def class_has_method(ci, mname)
+  # Does class `ci` define `mname` directly — instance method, attr
+  # reader, or attr writer — without walking the parent chain?
+  def class_has_method_local(ci, mname)
     readers = @cls_attr_readers[ci].split(";")
     if not_in(mname, readers) == 0
       return 1
@@ -10831,6 +10833,13 @@ class Compiler
     end
     mnames = @cls_meth_names[ci].split(";")
     if not_in(mname, mnames) == 0
+      return 1
+    end
+    return 0
+  end
+
+  def class_has_method(ci, mname)
+    if class_has_method_local(ci, mname) == 1
       return 1
     end
     if @cls_parents[ci] != ""
@@ -24850,6 +24859,31 @@ class Compiler
   def compile_constant_recv_expr(nid, mname, recv, rc)
     rcname = constructor_class_name(recv)
     if rcname != ""
+      # Foo.method_defined?(:sym[, inherit=true]) — compile-time decide.
+      # Default arm walks the parent chain via class_has_method (covers
+      # instance methods, attr readers/writers, ancestors).  When the
+      # second arg is the literal `false`, restrict the lookup to the
+      # receiver's own methods (no parent walk) via class_has_method_local.
+      if mname == "method_defined?"
+        ci_md = find_class_idx(rcname)
+        if ci_md >= 0
+          args_id_md = @nd_arguments[nid]
+          if args_id_md >= 0
+            a_md = get_args(args_id_md)
+            if a_md.length > 0
+              if @nd_type[a_md[0]] == "SymbolNode" || @nd_type[a_md[0]] == "StringNode"
+                lit_name = @nd_content[a_md[0]]
+                inherit_md = 1
+                if a_md.length >= 2 && @nd_type[a_md[1]] == "FalseNode"
+                  inherit_md = 0
+                end
+                hit = inherit_md == 1 ? class_has_method(ci_md, lit_name) : class_has_method_local(ci_md, lit_name)
+                return hit == 1 ? "TRUE" : "FALSE"
+              end
+            end
+          end
+        end
+      end
       # ARGV methods
       if rcname == "ARGV"
         if mname == "length"
